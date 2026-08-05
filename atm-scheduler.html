@@ -1,0 +1,1220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Around Town Movers — Scheduler</title>
+<style>
+  :root{
+    --navy:#152a4e; --navy2:#1e3a66; --orange:#ff6b35; --orange-dk:#e0551f;
+    --bg:#f4f6fa; --card:#ffffff; --border:#e1e6ef; --text:#1c2536; --muted:#6b7688;
+    --green:#2e9e5b; --amber:#d69b1f; --red:#d0453c; --blue:#3672d9;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);}
+  header{background:var(--navy);color:#fff;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;position:sticky;top:0;z-index:50;}
+  header .brand{display:flex;align-items:center;gap:10px;}
+  header .brand .logo{background:var(--orange);width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;}
+  header .brand h1{font-size:16px;margin:0;font-weight:700;letter-spacing:.2px;}
+  header .brand span{display:block;font-size:11px;color:#b7c4dd;font-weight:400;}
+  .role-switch{display:flex;align-items:center;gap:8px;font-size:12px;color:#cdd8ec;flex-wrap:wrap;}
+  .role-switch select{background:#22375f;color:#fff;border:1px solid #33507f;border-radius:6px;padding:6px 8px;font-size:12px;}
+  nav{display:flex;gap:4px;background:var(--navy2);padding:0 16px;overflow-x:auto;position:sticky;top:58px;z-index:49;}
+  nav button{background:transparent;border:none;color:#c6d2e8;padding:12px 14px;font-size:13px;cursor:pointer;border-bottom:3px solid transparent;white-space:nowrap;font-weight:600;}
+  nav button.active{color:#fff;border-bottom-color:var(--orange);}
+  nav button:disabled{opacity:.35;cursor:not-allowed;}
+  main{padding:16px;max-width:1400px;margin:0 auto;}
+  .hint{background:#fff4ec;border:1px solid #ffd9c2;color:#8a4a26;padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:14px;}
+  h2.section-title{font-size:15px;margin:0 0 12px;color:var(--navy);}
+  .toolbar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px;}
+  .toolbar .datepick{display:flex;align-items:center;gap:8px;font-size:13px;}
+  .toolbar input[type=date]{padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px;}
+  .btn{background:var(--orange);color:#fff;border:none;padding:8px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;}
+  .btn.secondary{background:#fff;color:var(--navy);border:1px solid var(--border);}
+  .btn.secondary.active{background:var(--navy);color:#fff;border-color:var(--navy);}
+  .btn:hover{filter:brightness(1.05);}
+  .status-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px;}
+  .status-available .status-dot{background:var(--green);}
+  .status-onjob .status-dot{background:var(--amber);}
+  .status-maintenance .status-dot{background:var(--red);}
+
+  .board-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .view-toggle{display:flex;gap:4px;background:#eef1f8;border-radius:8px;padding:3px;}
+  .view-toggle .btn.secondary{border:none;background:transparent;padding:6px 12px;}
+  .view-toggle .btn.secondary.active{background:#fff;box-shadow:0 1px 2px rgba(20,30,60,.12);}
+  .monthpick{display:flex;align-items:center;gap:10px;font-size:13px;}
+  .monthpick .btn.secondary{padding:5px 10px;}
+
+  /* CONFLICTS */
+  .conflict-banner{background:#fdecea;border:1px solid #f2b6b0;color:#8a1f18;padding:10px 12px;border-radius:8px;font-size:12px;margin-bottom:12px;}
+  .conflict-banner .cb-title{font-weight:700;margin-bottom:6px;display:flex;align-items:center;gap:6px;font-size:13px;}
+  .conflict-banner ul{margin:0;padding-left:18px;}
+  .conflict-banner li{margin-bottom:4px;}
+  .job-block.conflict,.month-chip.conflict,.chip.conflict,.week-bar.conflict{box-shadow:0 0 0 2px var(--red);}
+  .conflict-flag{color:var(--red);font-weight:700;margin-left:4px;font-size:11px;}
+  .assign-row.conflict{border-color:var(--red);background:#fff6f5;}
+  .aj-conflict-tag{display:inline-block;background:var(--red);color:#fff;font-size:9px;padding:2px 6px;border-radius:10px;margin-left:6px;font-weight:700;vertical-align:middle;}
+  .crew-job.conflict{border-color:var(--red);}
+  .crew-job .cj-conflict{color:var(--red);font-size:11px;font-weight:700;margin-top:8px;}
+
+  /* MULTI-TRUCK JOBS */
+  .needs-badge{font-size:9px;padding:2px 6px;border-radius:10px;font-weight:700;margin-left:4px;background:#fff3cd;color:#8a6414;white-space:nowrap;}
+  .needs-badge.ok{background:#e3f6e8;color:#1f6b3a;}
+  .needs-badge.over{background:#eef1f8;color:var(--muted);}
+  .jb-remove{position:absolute;top:2px;right:2px;width:14px;height:14px;line-height:12px;text-align:center;border-radius:50%;background:rgba(255,255,255,.85);color:var(--red);font-size:11px;font-weight:800;cursor:pointer;border:1px solid var(--red);padding:0;}
+  .truck-checklist{display:flex;gap:8px;flex-wrap:wrap;}
+  .truck-checklist label{display:flex;align-items:center;gap:4px;font-size:11px;background:#f4f6fa;border:1px solid var(--border);border-radius:6px;padding:4px 7px;}
+  .needed-input{width:34px;text-align:center;}
+
+  /* DRIVER COLOR LEGEND */
+  .driver-legend{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px;font-size:11px;color:var(--muted);align-items:center;}
+  .driver-legend .dl-label{font-weight:700;text-transform:uppercase;font-size:10px;color:var(--muted);}
+  .driver-legend .dl-item{display:flex;align-items:center;gap:5px;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:3px 9px 3px 6px;}
+  .driver-legend .dl-swatch{width:10px;height:10px;border-radius:50%;display:inline-block;}
+
+  /* BOARD — DAY VIEW: trucks as rows on a today timeline */
+  .board-wrap{background:var(--card);border:1px solid var(--border);border-radius:10px;overflow-x:auto;}
+  .unassigned-tray{display:flex;gap:8px;overflow-x:auto;padding:10px 12px 14px;margin-bottom:2px;border-bottom:2px dashed var(--border);align-items:center;min-width:920px;}
+  .unassigned-tray.dragover{background:#fff1e8;}
+  .unassigned-tray .tray-label{font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;white-space:nowrap;padding-right:6px;}
+  .chip{background:#fff;border:1px solid var(--border);border-left:4px solid var(--blue);border-radius:8px;padding:7px 10px;font-size:11px;min-width:160px;cursor:grab;box-shadow:0 1px 2px rgba(20,30,60,.05);}
+  .chip.ld{border-left-color:var(--orange);}
+  .chip b{display:block;color:var(--navy);font-size:12px;}
+  .chip:active{cursor:grabbing;}
+
+  .timeline{min-width:920px;}
+  .timeline-header{display:flex;border-bottom:1px solid var(--border);}
+  .timeline-header .truck-col-spacer{width:190px;flex:0 0 auto;}
+  .timeline-header .hours{flex:1;display:flex;}
+  .timeline-header .hour{flex:1;font-size:10px;color:var(--muted);text-align:left;padding:8px 0 8px 4px;border-left:1px solid var(--border);}
+
+  .truck-row{display:flex;border-bottom:1px solid var(--border);}
+  .truck-row:last-child{border-bottom:none;}
+  .truck-row .truck-info{width:190px;flex:0 0 auto;padding:12px;border-right:1px solid var(--border);}
+  .truck-info .tname{font-weight:700;font-size:13px;color:var(--navy);display:flex;align-items:center;}
+  .truck-info .meta{font-size:11px;color:var(--muted);margin-top:3px;}
+  .truck-row .track{flex:1;position:relative;min-height:64px;background-image:repeating-linear-gradient(to right, var(--border) 0, var(--border) 1px, transparent 1px, transparent calc(100%/12));}
+  .track.dragover{background-color:#fff1e8;}
+  .now-line{position:absolute;top:0;bottom:0;width:2px;background:var(--red);z-index:2;}
+  .now-line::after{content:'now';position:absolute;top:-13px;left:-13px;font-size:9px;color:var(--red);font-weight:700;}
+
+  .job-block{position:absolute;top:8px;bottom:8px;border-radius:6px;background:#e7effc;border:2px solid var(--blue);border-left:4px solid var(--blue);padding:5px 7px;font-size:10px;overflow:hidden;cursor:grab;box-shadow:0 1px 2px rgba(20,30,60,.08);}
+  .job-block.ld{background:#fff3ea;border-color:var(--orange);border-left-color:var(--orange);}
+  .job-block:hover{z-index:999 !important;}
+  .job-block:active{cursor:grabbing;}
+  .job-block b{display:block;color:var(--navy);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .job-block .jb-time{color:var(--muted);font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+
+  /* BOARD — MONTH VIEW (Google Calendar style multi-day bars) */
+  .month-board{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px;overflow-x:auto;}
+  .month-weekdays{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;min-width:840px;margin-bottom:6px;}
+  .month-weekdays div{font-size:11px;font-weight:700;color:var(--muted);text-align:center;text-transform:uppercase;}
+  .month-weeks-wrap{display:flex;flex-direction:column;gap:6px;min-width:840px;}
+  .month-week{position:relative;}
+  .month-week-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;}
+  .month-day{background:#fbfbfd;border:1px solid var(--border);border-radius:8px;padding:5px 6px;}
+  .month-day.pad{background:#f6f7fa;}
+  .month-day.pad .day-num{color:#c3c9d6;}
+  .month-day.today{border-color:var(--orange);border-width:2px;}
+  .month-day.dragover{background:#fff1e8;}
+  .month-day .day-num{font-size:11px;font-weight:700;color:var(--muted);height:14px;line-height:14px;margin-bottom:4px;}
+  .month-day.today .day-num{color:var(--orange-dk);}
+  .bar-spacer{pointer-events:none;}
+  .day-events{display:flex;flex-direction:column;gap:3px;}
+  .month-chip{font-size:10px;padding:3px 5px;border-radius:5px;background:#e7effc;border-left:3px solid var(--blue);cursor:grab;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .month-chip.unassigned{background:#f0f1f5;border-left-color:var(--muted);}
+  .month-chip.mine{box-shadow:0 0 0 2px var(--green);}
+
+  .week-bars{position:absolute;top:0;left:0;right:0;display:grid;grid-template-columns:repeat(7,1fr);gap:6px;grid-auto-rows:17px;row-gap:3px;pointer-events:none;z-index:3;}
+  .week-bar{background:#fff3ea;border:2px solid var(--orange);border-radius:5px;font-size:10px;padding:1px 7px;color:var(--navy);font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:grab;pointer-events:auto;display:flex;align-items:center;}
+  .week-bar.mine{box-shadow:0 0 0 2px var(--green) inset;}
+  .week-bar:hover{z-index:999 !important;}
+  .week-bar.overlay-chip{background:#ffe0de;border-color:var(--red) !important;color:#8a1f18;}
+  .week-bar.understaffed{border-style:dashed;}
+
+  /* LD PLANNER */
+  .ld-list{display:flex;flex-direction:column;gap:10px;}
+  .ld-row{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr auto;gap:14px;align-items:center;}
+  .ld-route{font-weight:700;color:var(--navy);font-size:13px;}
+  .ld-route .sub{font-weight:400;color:var(--muted);font-size:11px;margin-top:2px;}
+  .ld-field label{display:block;font-size:10px;text-transform:uppercase;color:var(--muted);letter-spacing:.4px;margin-bottom:2px;}
+  .ld-field div{font-size:13px;font-weight:600;}
+  .pipeline{display:flex;gap:4px;}
+  .pipe-step{font-size:10px;padding:3px 7px;border-radius:5px;background:#eef1f8;color:var(--muted);font-weight:600;}
+  .pipe-step.done{background:var(--green);color:#fff;}
+  .pipe-step.current{background:var(--orange);color:#fff;}
+
+  /* ADMIN */
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  .admin-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:12px;}
+  .admin-card .row{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;}
+  .admin-card .row:last-child{margin-bottom:0;}
+  .admin-card h3{margin:0 0 10px;font-size:14px;color:var(--navy);}
+  .admin-card.add-form{border:1px dashed var(--orange);background:#fff8f4;}
+
+  /* SMARTMOVING SYNC */
+  .sync-panel{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:18px;}
+  .sync-panel h3{margin:0 0 4px;font-size:14px;color:var(--navy);}
+  .sync-panel .sync-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;}
+  .sync-panel input[type=text]{padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;min-width:220px;}
+  .sync-panel .sync-msg{font-size:12px;margin-top:8px;color:var(--muted);}
+  .sync-panel .sync-msg.err{color:var(--red);}
+  .sync-panel .sync-msg.ok{color:var(--green);}
+  .oneway-note{background:#eef4ff;border:1px solid #c7d9fb;color:#274c8a;padding:8px 12px;border-radius:8px;font-size:11px;margin-top:10px;}
+  .sm-badge{display:inline-block;background:#eef4ff;color:#274c8a;border:1px solid #c7d9fb;font-size:9px;font-weight:700;padding:1px 6px;border-radius:9px;margin-left:5px;vertical-align:middle;}
+  select, input[type=text]{padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;}
+  .field-label{font-size:11px;color:var(--muted);min-width:90px;}
+  .assign-row{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;}
+  .assign-row .aj-title{font-weight:700;color:var(--navy);font-size:13px;}
+  .assign-row .aj-meta{font-size:11px;color:var(--muted);margin-top:2px;}
+
+  /* CREW MOBILE VIEW */
+  .crew-wrap{max-width:480px;margin:0 auto;}
+  .crew-truck-header{background:var(--navy);color:#fff;border-radius:12px;padding:16px;margin-bottom:14px;}
+  .crew-truck-header .t-name{font-size:16px;font-weight:800;}
+  .crew-truck-header .t-driver{font-size:12px;color:#c6d2e8;margin-top:4px;}
+  .crew-job{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px;}
+  .crew-job .cj-date{font-size:11px;color:var(--orange-dk);font-weight:700;text-transform:uppercase;margin-bottom:6px;}
+  .crew-job .cj-customer{font-size:15px;font-weight:700;color:var(--navy);}
+  .crew-job .cj-addr{font-size:13px;color:var(--text);margin-top:8px;line-height:1.5;}
+  .crew-job .cj-addr .lbl{color:var(--muted);font-size:11px;text-transform:uppercase;display:block;}
+  .crew-job .cj-footer{display:flex;justify-content:space-between;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);}
+  .empty{color:var(--muted);font-size:12px;text-align:center;padding:30px 0;}
+
+  @media (max-width:720px){
+    .grid-2{grid-template-columns:1fr;}
+    header .brand h1{font-size:14px;}
+    .ld-row{grid-template-columns:1fr;}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="logo">ATM</div>
+    <div>
+      <h1>Around Town Movers</h1>
+      <span>Scheduler — Prototype (sample data)</span>
+    </div>
+  </div>
+  <div class="role-switch">
+    Viewing as
+    <select id="roleSelect">
+      <option value="admin">Admin</option>
+      <option value="dispatcher">Dispatcher</option>
+      <option value="crew">Crew / Driver</option>
+    </select>
+    <select id="crewTruckSelect" style="display:none;"></select>
+  </div>
+</header>
+
+<nav id="tabNav">
+  <button data-tab="board" class="active">Truck Board</button>
+  <button data-tab="ld">Long Distance Planner</button>
+  <button data-tab="admin">Trucks &amp; Drivers</button>
+</nav>
+
+<main>
+  <div class="hint" id="roleHint"></div>
+
+  <!-- BOARD TAB -->
+  <section id="tab-board">
+    <div class="toolbar">
+      <h2 class="section-title" id="boardTitle">Drag a job onto a truck's row to assign it</h2>
+      <div class="board-controls">
+        <div class="view-toggle">
+          <button class="btn secondary active" id="dayModeBtn">Day</button>
+          <button class="btn secondary" id="monthModeBtn">Month</button>
+        </div>
+        <div class="datepick" id="dayControls">
+          <span>Date:</span>
+          <input type="date" id="boardDate" value="2026-08-05">
+          <button class="btn secondary" id="refreshBoard">Today</button>
+        </div>
+        <div class="monthpick" id="monthControls" style="display:none;">
+          <button class="btn secondary" id="prevMonth">‹</button>
+          <span id="monthLabel"></span>
+          <button class="btn secondary" id="nextMonth">›</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="conflictBanner"></div>
+    <div id="driverLegend" class="driver-legend"></div>
+
+    <div class="board-wrap" id="dayBoardWrap">
+      <div class="unassigned-tray" id="unassignedTray"></div>
+      <div class="timeline" id="timeline"></div>
+    </div>
+
+    <div class="month-board" id="monthBoardWrap" style="display:none;">
+      <div class="month-weekdays">
+        <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+      </div>
+      <div class="month-weeks-wrap" id="monthGrid"></div>
+    </div>
+  </section>
+
+  <!-- LD PLANNER TAB -->
+  <section id="tab-ld" style="display:none;">
+    <div class="toolbar">
+      <h2 class="section-title">Long Distance Jobs — route, transit &amp; crew</h2>
+    </div>
+    <div class="ld-list" id="ldList"></div>
+  </section>
+
+  <!-- ADMIN TAB -->
+  <section id="tab-admin" style="display:none;">
+    <div class="sync-panel" id="syncPanel"></div>
+
+    <div class="toolbar">
+      <h2 class="section-title">Trucks &amp; Drivers</h2>
+      <div style="display:flex;gap:8px;">
+        <button class="btn" id="addTruckBtn">+ Add Truck</button>
+        <button class="btn" id="addDriverBtn">+ Add Driver</button>
+      </div>
+    </div>
+    <div class="grid-2">
+      <div>
+        <h2 class="section-title">Trucks</h2>
+        <div id="truckAdminList"></div>
+      </div>
+      <div>
+        <h2 class="section-title">Drivers</h2>
+        <div id="driverAdminList"></div>
+      </div>
+    </div>
+
+    <h2 class="section-title" style="margin-top:22px;">Job Assignments — assign a truck &amp; driver to each job</h2>
+    <div id="jobAssignList"></div>
+  </section>
+
+  <!-- CREW TAB (mobile) -->
+  <section id="tab-crew" style="display:none;">
+    <div class="crew-wrap" id="crewWrap"></div>
+  </section>
+</main>
+
+<script>
+/* ---------- MOCK DATA (shaped like SmartMoving job records) ---------- */
+/* Long-distance jobs are multi-day: `date` = pickup/load day, `endDate` = last transit/delivery day. */
+let trucks = [
+  {id:'T1', name:'Truck 1', size:'26ft Box', capacity:'12,000 lbs', status:'available', driverId:'D1', homeBase:'Denver, CO'},
+  {id:'T2', name:'Truck 2', size:'26ft Box', capacity:'12,000 lbs', status:'onjob', driverId:'D2', homeBase:'Denver, CO'},
+  {id:'T3', name:'Truck 3', size:'53ft Trailer (LD)', capacity:'26,000 lbs', status:'available', driverId:'D3', homeBase:'Denver, CO'},
+  {id:'T4', name:'Truck 4', size:'16ft Box', capacity:'6,000 lbs', status:'maintenance', driverId:'D4', homeBase:'Denver, CO'},
+  {id:'T5', name:'Truck 5', size:'53ft Trailer (LD)', capacity:'26,000 lbs', status:'available', driverId:'D5', homeBase:'Denver, CO'},
+];
+
+let drivers = [
+  {id:'D1', name:'Mike Reynolds', phone:'(303) 555-0114', cdl:'Class A', truckId:'T1'},
+  {id:'D2', name:'Alex Chen', phone:'(303) 555-0122', cdl:'Class A', truckId:'T2'},
+  {id:'D3', name:'Jordan Blake', phone:'(303) 555-0133', cdl:'Class A + LD Endorsed', truckId:'T3'},
+  {id:'D4', name:'Sam Patel', phone:'(303) 555-0147', cdl:'Class B', truckId:'T4'},
+  {id:'D5', name:'Casey Nunez', phone:'(303) 555-0158', cdl:'Class A + LD Endorsed', truckId:'T5'},
+];
+
+/* `truckIds` is an array — most local jobs use one truck, but a long-distance job can need
+   several (`trucksNeeded`, pulled from SmartMoving's job record) when the shipment is too
+   large for a single trailer. */
+let jobs = [
+  {id:'J-10231', customer:'Sarah Thompson', type:'local', date:'2026-08-05', endDate:'2026-08-05', startTime:'08:00', duration:3, origin:'1420 Larimer St, Denver, CO', destination:'880 Pearl St, Boulder, CO', crewSize:3, truckIds:['T1'], trucksNeeded:1, status:'scheduled', miles:32},
+  {id:'J-10232', customer:'The Whitfield Family', type:'local', date:'2026-08-05', endDate:'2026-08-05', startTime:'09:30', duration:2.5, origin:'2200 Colfax Ave, Denver, CO', destination:'50 S Steele St, Denver, CO', crewSize:2, truckIds:['T2'], trucksNeeded:1, status:'in_progress', miles:8},
+  {id:'J-10233', customer:'Devon Marsh', type:'local', date:'2026-08-05', endDate:'2026-08-05', startTime:'13:00', duration:2, origin:'900 Auraria Pkwy, Denver, CO', destination:'12 Golden Gate Cyn, Golden, CO', crewSize:2, truckIds:[], trucksNeeded:1, status:'scheduled', miles:19},
+  {id:'J-10235', customer:'Grace Lin', type:'local', date:'2026-08-05', endDate:'2026-08-05', startTime:'15:30', duration:2, origin:'3300 E Colfax Ave, Denver, CO', destination:'700 Kalamath St, Denver, CO', crewSize:2, truckIds:[], trucksNeeded:1, status:'scheduled', miles:6},
+  {id:'J-10234', customer:'Priya Nair', type:'local', date:'2026-08-06', endDate:'2026-08-06', startTime:'09:00', duration:3, origin:'400 W 48th Ave, Denver, CO', destination:'77 S Union Blvd, Lakewood, CO', crewSize:3, truckIds:[], trucksNeeded:1, status:'scheduled', miles:14},
+  {id:'J-10236', customer:'Tom Alvarez', type:'local', date:'2026-08-11', endDate:'2026-08-11', startTime:'08:30', duration:3, origin:'1660 Wynkoop St, Denver, CO', destination:'6900 Layton Ave, Denver, CO', crewSize:2, truckIds:['T1'], trucksNeeded:1, status:'scheduled', miles:11},
+  {id:'J-10237', customer:'Nia Coleman', type:'local', date:'2026-08-14', endDate:'2026-08-14', startTime:'10:00', duration:2.5, origin:'2001 York St, Denver, CO', destination:'1000 Chapman Dr, Louisville, CO', crewSize:3, truckIds:['T2'], trucksNeeded:1, status:'scheduled', miles:23},
+  {id:'J-10238', customer:'Ortiz Household', type:'local', date:'2026-08-20', endDate:'2026-08-20', startTime:'09:00', duration:3, origin:'4650 Leetsdale Dr, Denver, CO', destination:'150 W Prospect Rd, Fort Collins, CO', crewSize:3, truckIds:[], trucksNeeded:1, status:'scheduled', miles:66},
+  {id:'J-10244', customer:'Nguyen Family', type:'local', date:'2026-08-06', endDate:'2026-08-06', startTime:'10:00', duration:2, origin:'1900 Grant St, Denver, CO', destination:'8000 E Girard Ave, Denver, CO', crewSize:2, truckIds:['T3'], trucksNeeded:1, status:'scheduled', miles:10},
+
+  {id:'J-10240', customer:'Harold & Anne Kessler', type:'long_distance', date:'2026-08-05', endDate:'2026-08-08', origin:'Denver, CO', destination:'Phoenix, AZ', crewSize:4, truckIds:['T3'], trucksNeeded:2, status:'loading', miles:862, transitDays:2, stage:'loading'},
+  {id:'J-10241', customer:'Reyes Household', type:'long_distance', date:'2026-08-06', endDate:'2026-08-09', origin:'Denver, CO', destination:'Austin, TX', crewSize:3, truckIds:['T5'], trucksNeeded:1, status:'scheduled', miles:925, transitDays:2, stage:'scheduled'},
+  {id:'J-10242', customer:'Ben Okafor', type:'long_distance', date:'2026-08-04', endDate:'2026-08-07', origin:'Denver, CO', destination:'Portland, OR', crewSize:3, truckIds:[], trucksNeeded:2, status:'in_transit', miles:1245, transitDays:3, stage:'in_transit'},
+  {id:'J-10243', customer:'Marcus Webb', type:'long_distance', date:'2026-08-18', endDate:'2026-08-21', origin:'Denver, CO', destination:'Chicago, IL', crewSize:3, truckIds:[], trucksNeeded:1, status:'scheduled', miles:996, transitDays:2, stage:'scheduled'},
+];
+
+const roleLabels = {
+  admin: "Admin — full access to trucks, drivers, availability, and jobs.",
+  dispatcher: "Dispatcher — can assign/move jobs on the board and LD planner. Truck & driver records are locked.",
+  crew: "Crew / Driver — read-only view of the truck board and your own jobs, optimized for mobile. No editing."
+};
+
+const DRIVER_COLORS = ['#7c3aed','#0891b2','#be185d','#4338ca','#0f766e','#a16207','#525252','#9333ea'];
+
+let currentRole = 'admin';
+let currentCrewTruck = 'T1';
+let boardMode = 'day'; // 'day' | 'month'
+let monthCursor = new Date(2026, 7, 1); // August 2026
+let showAddTruckForm = false;
+let showAddDriverForm = false;
+let currentConflictIds = new Set();
+let currentConflicts = [];
+const TIMELINE_START = 7;   // 7am
+const TIMELINE_END = 19;    // 7pm
+const DAY_NUM_H = 23;        // reserved space (px) for the date number in month view, so bars never cover it
+
+/* ---------- DATE HELPERS ---------- */
+function jobEnd(j){ return j.endDate || j.date; }
+function jobActiveOn(j, dateStr){ return dateStr >= j.date && dateStr <= jobEnd(j); }
+function daysBetween(a,b){ return Math.round((new Date(b+'T00:00:00') - new Date(a+'T00:00:00'))/86400000); }
+function addDays(dateStr, n){ const dt = new Date(dateStr+'T00:00:00'); dt.setDate(dt.getDate()+n); return dt.toISOString().slice(0,10); }
+function fmtRange(j){ const end=jobEnd(j); return end===j.date ? j.date : `${j.date} → ${end}`; }
+
+/* ---------- DRIVER COLORS ---------- */
+function driverColor(driverId){
+  if(!driverId) return null;
+  const idx = drivers.findIndex(d=>d.id===driverId);
+  if(idx<0) return null;
+  return DRIVER_COLORS[idx % DRIVER_COLORS.length];
+}
+function jobTruckIds(j){ return j.truckIds || []; }
+function jobTrucksNeeded(j){ return j.trucksNeeded || 1; }
+function jobTrucks(j){ return jobTruckIds(j).map(id=>trucks.find(t=>t.id===id)).filter(Boolean); }
+function truckShortLabel(t){ return t.name.replace('Truck ','T'); }
+function jobTruckLabel(j){
+  const ts = jobTrucks(j);
+  return ts.length ? ts.map(truckShortLabel).join('+') : 'Unassigned';
+}
+function truckBadge(j){
+  const needed = jobTrucksNeeded(j);
+  if(needed<=1) return '';
+  const have = jobTruckIds(j).length;
+  const short = needed - have;
+  if(short>0) return `<span class="needs-badge">⚠ needs ${short} more truck${short>1?'s':''}</span>`;
+  if(have>needed) return `<span class="needs-badge over">${have}/${needed} trucks</span>`;
+  return `<span class="needs-badge ok">${have}/${needed} trucks ✓</span>`;
+}
+function smBadge(j){ return j.source==='smartmoving' ? '<span class="sm-badge" title="Imported from SmartMoving">SM</span>' : ''; }
+function getJobDriverColor(j){
+  const truck = jobTrucks(j)[0];
+  if(!truck || !truck.driverId) return null;
+  return driverColor(truck.driverId);
+}
+function renderDriverLegend(){
+  const el = document.getElementById('driverLegend');
+  if(!el) return;
+  el.innerHTML = '<span class="dl-label">Drivers</span>' + drivers.map(d=>{
+    const truck = trucks.find(t=>t.driverId===d.id);
+    return `<span class="dl-item"><span class="dl-swatch" style="background:${driverColor(d.id)}"></span>${d.name}${truck ? ' · '+truck.name : ''}</span>`;
+  }).join('');
+}
+
+/* ---------- CONFLICT DETECTION ---------- */
+function getConflicts(){
+  const conflicts = [];
+  const byTruck = {};
+  jobs.forEach(j=>{ jobTruckIds(j).forEach(truckId=>{ (byTruck[truckId] = byTruck[truckId] || []).push(j); }); });
+  Object.keys(byTruck).forEach(truckId=>{
+    const list = byTruck[truckId];
+    for(let i=0;i<list.length;i++){
+      for(let k=i+1;k<list.length;k++){
+        const a=list[i], b=list[k];
+        const aS=a.date, aE=jobEnd(a), bS=b.date, bE=jobEnd(b);
+        if(!(aS<=bE && bS<=aE)) continue;
+        if(a.type!=='long_distance' && b.type!=='long_distance' && aS===aE && bS===bE && aS===bS){
+          const as=timeToHour(a.startTime)??0, ae=as+(a.duration||2);
+          const bs=timeToHour(b.startTime)??0, be=bs+(b.duration||2);
+          if(!(as<be && bs<ae)) continue;
+        }
+        conflicts.push({truckId, a, b});
+      }
+    }
+  });
+  return conflicts;
+}
+function refreshConflicts(){
+  currentConflicts = getConflicts();
+  currentConflictIds = new Set(currentConflicts.flatMap(c=>[c.a.id, c.b.id]));
+  renderConflictBanner();
+}
+function renderConflictBanner(){
+  const el = document.getElementById('conflictBanner');
+  if(!el) return;
+  if(!currentConflicts.length){ el.innerHTML=''; return; }
+  el.innerHTML = `<div class="conflict-banner">
+    <div class="cb-title">⚠ ${currentConflicts.length} scheduling conflict${currentConflicts.length>1?'s':''} detected</div>
+    <ul>
+      ${currentConflicts.map(c=>{
+        const t = trucks.find(t=>t.id===c.truckId);
+        const driver = t ? drivers.find(d=>d.id===t.driverId) : null;
+        return `<li><b>${t?t.name:c.truckId}</b>${driver? ' — '+driver.name : ''}: <b>${c.a.customer}</b> (${c.a.id}, ${fmtRange(c.a)}) overlaps with <b>${c.b.customer}</b> (${c.b.id}, ${fmtRange(c.b)})</li>`;
+      }).join('')}
+    </ul>
+  </div>`;
+}
+
+/* ---------- SMARTMOVING SYNC (one-way: pull only) ----------
+   The scheduler pulls jobs that need dispatching FROM SmartMoving via the local sync backend
+   (see /server). SmartMoving's public API has no endpoint to write job date/time back, so any
+   date/truck/time edits made here stay local — dispatchers still need to mirror schedule
+   changes into SmartMoving by hand until SmartMoving exposes a write endpoint. */
+const SYNC_URL_KEY = 'atmSyncBackendUrl';
+function getSyncBackendUrl(){ return localStorage.getItem(SYNC_URL_KEY) || 'http://localhost:8787'; }
+let syncStatus = { loading:false, lastSyncedAt:null, message:'', error:null };
+
+function saveSyncBackendUrl(){
+  const val = document.getElementById('syncUrlInput').value.trim();
+  if(val) localStorage.setItem(SYNC_URL_KEY, val.replace(/\/$/,''));
+  renderSyncPanel();
+}
+
+async function importFromSmartMoving(){
+  const base = getSyncBackendUrl();
+  syncStatus = { ...syncStatus, loading:true, message:'', error:null };
+  renderSyncPanel();
+  try{
+    const res = await fetch(`${base}/api/schedulable-jobs`);
+    if(!res.ok) throw new Error(`Backend responded with status ${res.status}`);
+    const data = await res.json();
+    let added=0, updated=0;
+    (data.jobs || []).forEach(smJob=>{
+      const existing = jobs.find(j=>j.smartMovingJobId && j.smartMovingJobId===smJob.smartMovingJobId);
+      if(existing){
+        // Only overwrite the fields SmartMoving owns — never touch truckIds/trucksNeeded/status,
+        // since those hold the dispatcher's local assignment work.
+        Object.assign(existing, {
+          customer: smJob.customer, type: smJob.type, date: smJob.date, endDate: smJob.endDate,
+          startTime: smJob.startTime, duration: smJob.duration, origin: smJob.origin,
+          destination: smJob.destination, crewSize: smJob.crewSize,
+          smartMovingOpportunityId: smJob.smartMovingOpportunityId, smartMovingStatus: smJob.smartMovingStatus,
+          source: 'smartmoving',
+        });
+        updated++;
+      } else {
+        jobs.push(smJob);
+        added++;
+      }
+    });
+    const errNote = (data.errors && data.errors.length) ? ` ${data.errors.length} job${data.errors.length>1?'s':''} couldn't be read — see console.` : '';
+    if(data.errors && data.errors.length) console.warn('SmartMoving sync errors:', data.errors);
+    syncStatus = { loading:false, lastSyncedAt:new Date(), message:`Imported ${added} new job${added!==1?'s':''}, updated ${updated} existing.${errNote}`, error:null };
+    refreshConflicts();
+    renderBoard();
+    if(currentRole==='admin') renderJobAssignments();
+    renderLD();
+  } catch(err){
+    syncStatus = { loading:false, lastSyncedAt:syncStatus.lastSyncedAt, message:'', error:`Sync failed: ${err.message}. Is the backend running at ${base}? (cd server && npm start)` };
+  }
+  renderSyncPanel();
+}
+
+function renderSyncPanel(){
+  const el = document.getElementById('syncPanel');
+  if(!el) return;
+  const last = syncStatus.lastSyncedAt ? syncStatus.lastSyncedAt.toLocaleString() : 'never';
+  el.innerHTML = `
+    <h3>SmartMoving Sync</h3>
+    <div style="font-size:12px;color:var(--muted);">Pulls jobs that need dispatching from SmartMoving. Last synced: ${last}.</div>
+    <div class="sync-row">
+      <span class="field-label">Backend URL</span>
+      <input type="text" id="syncUrlInput" value="${getSyncBackendUrl()}" onchange="saveSyncBackendUrl()">
+      <button class="btn" onclick="importFromSmartMoving()" ${syncStatus.loading?'disabled':''}>${syncStatus.loading?'Importing…':'Import from SmartMoving'}</button>
+    </div>
+    ${syncStatus.message ? `<div class="sync-msg ok">${syncStatus.message}</div>` : ''}
+    ${syncStatus.error ? `<div class="sync-msg err">${syncStatus.error}</div>` : ''}
+    <div class="oneway-note">⚠ One-way sync: this pulls jobs FROM SmartMoving only. Truck/driver assignments and any date or time edits made in this scheduler are <b>not</b> pushed back to SmartMoving — SmartMoving's API doesn't support that yet. Update SmartMoving manually to keep both systems in sync. Jobs imported from SmartMoving are marked <span class="sm-badge">SM</span>.</div>
+    <div class="oneway-note" style="background:#fff4ec;border-color:#ffd9c2;color:#8a4a26;">⚠ The backend now listens for SmartMoving webhooks (job/opportunity created or booked) so jobs booked directly — not just ones that started as a lead — get picked up, with a periodic poll as backup. This closes the gap where directly-booked jobs could be missed, but still needs a live test against your real account before you rely on it for dispatch — see <code>server/README.md</code>.</div>
+  `;
+}
+
+/* ---------- TAB / ROLE CONTROL ---------- */
+function setTab(tab){
+  document.querySelectorAll('main > section').forEach(s=>s.style.display='none');
+  document.getElementById('tab-'+tab).style.display='block';
+  document.querySelectorAll('#tabNav button').forEach(b=>b.classList.toggle('active', b.dataset.tab===tab));
+  if(tab==='board') renderBoard();
+}
+
+document.getElementById('roleSelect').addEventListener('change', e=>{
+  currentRole = e.target.value;
+  applyRole();
+});
+document.getElementById('crewTruckSelect').addEventListener('change', e=>{
+  currentCrewTruck = e.target.value;
+  renderCrew();
+});
+
+function applyRole(){
+  document.getElementById('roleHint').textContent = roleLabels[currentRole];
+  document.getElementById('boardTitle').textContent = currentRole==='crew'
+    ? "Company truck board — view only"
+    : "Drag a job onto a truck's row (day view) or a date (month view) to assign it";
+  const crewSelect = document.getElementById('crewTruckSelect');
+  const nav = document.getElementById('tabNav');
+
+  if(currentRole==='crew'){
+    nav.innerHTML = '<button data-tab="crew">My Jobs</button><button data-tab="board">Truck Board</button>';
+    crewSelect.style.display='inline-block';
+    populateCrewTruckSelect();
+    document.querySelectorAll('#tabNav button').forEach(b=>b.addEventListener('click', ()=> setTab(b.dataset.tab)));
+    setTab('crew');
+    renderCrew();
+  } else {
+    nav.innerHTML = '<button data-tab="board">Truck Board</button><button data-tab="ld">Long Distance Planner</button>' +
+      (currentRole==='admin' ? '<button data-tab="admin">Trucks &amp; Drivers</button>' : '');
+    crewSelect.style.display='none';
+    document.querySelectorAll('#tabNav button').forEach(b=>b.addEventListener('click', ()=> setTab(b.dataset.tab)));
+    setTab('board');
+    renderBoard();
+    renderLD();
+    if(currentRole==='admin') renderAdmin();
+  }
+}
+
+function populateCrewTruckSelect(){
+  const sel = document.getElementById('crewTruckSelect');
+  sel.innerHTML = trucks.map(t=>`<option value="${t.id}">${t.name} — ${t.size}</option>`).join('');
+  sel.value = currentCrewTruck;
+}
+
+/* ---------- BOARD: Day / Month toggle ---------- */
+function statusClass(s){ return s==='available' ? 'status-available' : s==='onjob' ? 'status-onjob' : 'status-maintenance'; }
+function statusLabel(s){ return s==='available' ? 'Available' : s==='onjob' ? 'On Job' : 'Maintenance'; }
+
+function timeToHour(t){
+  if(!t) return null;
+  const [h,m] = t.split(':').map(Number);
+  return h + m/60;
+}
+function hourToLabel(h){
+  const hr = Math.floor(h);
+  const ampm = hr>=12 ? 'PM' : 'AM';
+  let disp = hr % 12; if(disp===0) disp = 12;
+  const mins = Math.round((h-hr)*60);
+  return mins ? `${disp}:${String(mins).padStart(2,'0')}${ampm}` : `${disp}${ampm}`;
+}
+
+function switchBoardMode(mode){
+  boardMode = mode;
+  document.getElementById('dayModeBtn').classList.toggle('active', mode==='day');
+  document.getElementById('monthModeBtn').classList.toggle('active', mode==='month');
+  document.getElementById('dayControls').style.display = mode==='day' ? 'flex' : 'none';
+  document.getElementById('monthControls').style.display = mode==='month' ? 'flex' : 'none';
+  document.getElementById('dayBoardWrap').style.display = mode==='day' ? 'block' : 'none';
+  document.getElementById('monthBoardWrap').style.display = mode==='month' ? 'block' : 'none';
+  renderBoard();
+}
+document.getElementById('dayModeBtn').addEventListener('click', ()=> switchBoardMode('day'));
+document.getElementById('monthModeBtn').addEventListener('click', ()=> switchBoardMode('month'));
+document.getElementById('prevMonth').addEventListener('click', ()=>{ monthCursor.setMonth(monthCursor.getMonth()-1); renderBoard(); });
+document.getElementById('nextMonth').addEventListener('click', ()=>{ monthCursor.setMonth(monthCursor.getMonth()+1); renderBoard(); });
+
+function renderBoard(){
+  refreshConflicts();
+  renderDriverLegend();
+  if(boardMode==='month'){ renderMonthBoard(); return; }
+  const date = document.getElementById('boardDate').value;
+  renderUnassignedTray(date);
+  renderTimeline(date);
+}
+
+/* ---------- DAY VIEW ---------- */
+function chipHTML(j){
+  const when = j.type==='long_distance' ? `Long Distance (${fmtRange(j)})` : (j.startTime ? hourToLabel(timeToHour(j.startTime)) : '');
+  const conflict = currentConflictIds.has(j.id) ? ' conflict' : '';
+  return `<div class="chip ${j.type==='long_distance'?'ld':''}${conflict}" data-job="${j.id}"><b>${j.customer}${conflict?' <span class="conflict-flag">⚠</span>':''}${smBadge(j)}</b>${j.id} · ${when} ${truckBadge(j)}</div>`;
+}
+
+function renderUnassignedTray(date){
+  const tray = document.getElementById('unassignedTray');
+  const unassigned = jobs.filter(j=>jobTruckIds(j).length===0 && jobActiveOn(j, date));
+  tray.innerHTML = '<span class="tray-label">Unassigned</span>' +
+    (unassigned.length ? unassigned.map(j=>chipHTML(j)).join('') : '<span class="empty" style="padding:0;">All jobs assigned</span>');
+
+  tray.querySelectorAll('.chip').forEach(el=>{
+    el.draggable = currentRole !== 'crew';
+    el.addEventListener('dragstart', e=> e.dataTransfer.setData('text/plain', el.dataset.job));
+  });
+
+  if(currentRole !== 'crew'){
+    tray.ondragover = e=>{ e.preventDefault(); tray.classList.add('dragover'); };
+    tray.ondragleave = ()=> tray.classList.remove('dragover');
+    tray.ondrop = e=>{
+      e.preventDefault();
+      tray.classList.remove('dragover');
+      const jobId = e.dataTransfer.getData('text/plain');
+      const job = jobs.find(j=>j.id===jobId);
+      if(job){ job.truckIds = []; renderBoard(); }
+    };
+  } else {
+    tray.ondragover = tray.ondrop = null;
+  }
+}
+
+function jobDurationHours(j){
+  if(j.type==='long_distance'){
+    return (daysBetween(j.date, jobEnd(j)) + 1) * 24; // multi-day LD job expressed in hours
+  }
+  return j.duration || 2;
+}
+function stackZIndex(j){
+  // Shorter jobs stack ABOVE longer jobs so an overlap is always visible on top of the job it conflicts with.
+  return Math.max(1, 500 - Math.round(jobDurationHours(j)));
+}
+
+function jobBlockHTML(j, date, truckIdCtx){
+  const conflict = currentConflictIds.has(j.id) ? ' conflict' : '';
+  const color = getJobDriverColor(j);
+  const colorStyle = color ? `border-color:${color};border-left-color:${color};` : '';
+  const z = stackZIndex(j);
+  const multiTruck = jobTrucksNeeded(j) > 1;
+  const removeBtn = (multiTruck && truckIdCtx && currentRole!=='crew')
+    ? `<span class="jb-remove" title="Remove from this truck" onclick="event.stopPropagation();removeTruckFromJob('${j.id}','${truckIdCtx}')">×</span>` : '';
+  const shareNote = multiTruck ? `<div class="jb-time">${truckBadge(j)} · trucks: ${jobTruckLabel(j)}</div>` : '';
+  if(j.type==='long_distance'){
+    const dayIdx = daysBetween(j.date, date) + 1;
+    const totalDays = daysBetween(j.date, jobEnd(j)) + 1;
+    const tip = `${j.customer} — LD to ${j.destination} (${fmtRange(j)})${conflict?' — CONFLICT: overlaps another job on this truck':''}`;
+    return `<div class="job-block ld${conflict}" data-job="${j.id}" title="${tip}" style="left:0%;width:100%;z-index:${z};${colorStyle}">
+      ${removeBtn}
+      <b>${j.customer}${conflict?' ⚠':''}</b>
+      <div class="jb-time">${j.id} · LD → ${j.destination.split(',')[0]} · Day ${dayIdx}/${totalDays} (${ldStageLabels[j.stage||'scheduled']})</div>
+      ${shareNote}
+    </div>`;
+  }
+  const start = timeToHour(j.startTime) ?? TIMELINE_START;
+  const dur = j.duration || 2;
+  const left = (start-TIMELINE_START)/(TIMELINE_END-TIMELINE_START)*100;
+  const width = dur/(TIMELINE_END-TIMELINE_START)*100;
+  const tip = `${j.customer} — ${hourToLabel(start)}, ${j.origin} → ${j.destination}${conflict?' — CONFLICT: overlaps another job on this truck':''}`;
+  return `<div class="job-block${conflict}" data-job="${j.id}" title="${tip}" style="left:${left}%;width:${width}%;z-index:${z};${colorStyle}">
+    <b>${j.customer}${conflict?' ⚠':''}</b>
+    <div class="jb-time">${hourToLabel(start)} · ${j.id}</div>
+  </div>`;
+}
+
+function removeTruckFromJob(jobId, truckId){
+  const job = jobs.find(j=>j.id===jobId);
+  if(!job) return;
+  job.truckIds = jobTruckIds(job).filter(id=>id!==truckId);
+  renderBoard();
+  if(currentRole==='admin') renderAdmin();
+}
+
+function renderTimeline(date){
+  const el = document.getElementById('timeline');
+  const hours = [];
+  for(let h=TIMELINE_START; h<TIMELINE_END; h++) hours.push(h);
+
+  let html = `<div class="timeline-header"><div class="truck-col-spacer"></div><div class="hours">${hours.map(h=>`<div class="hour">${hourToLabel(h)}</div>`).join('')}</div></div>`;
+
+  trucks.forEach(t=>{
+    const driver = t.driverId ? drivers.find(d=>d.id===t.driverId) : null;
+    const tjobs = jobs.filter(j=>jobTruckIds(j).includes(t.id) && jobActiveOn(j, date));
+    const hasConflict = tjobs.some(j=>currentConflictIds.has(j.id));
+    html += `
+      <div class="truck-row">
+        <div class="truck-info">
+          <div class="tname ${statusClass(t.status)}"><span class="status-dot"></span>${t.name}${hasConflict ? '<span class="conflict-flag">⚠ conflict</span>' : ''}</div>
+          <div class="meta">${t.size}${driver ? ' · '+driver.name : ''}</div>
+          <div class="meta">${statusLabel(t.status)}</div>
+        </div>
+        <div class="track" data-truck="${t.id}">${tjobs.map(j=>jobBlockHTML(j, date, t.id)).join('')}</div>
+      </div>`;
+  });
+
+  el.innerHTML = html;
+
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0,10);
+  if(date === todayStr){
+    const hourNow = now.getHours() + now.getMinutes()/60;
+    if(hourNow >= TIMELINE_START && hourNow <= TIMELINE_END){
+      const pct = (hourNow-TIMELINE_START)/(TIMELINE_END-TIMELINE_START)*100;
+      el.querySelectorAll('.track').forEach(track=>{
+        const line = document.createElement('div');
+        line.className = 'now-line';
+        line.style.left = pct+'%';
+        track.appendChild(line);
+      });
+    }
+  }
+
+  el.querySelectorAll('.job-block').forEach(block=>{
+    block.draggable = currentRole !== 'crew';
+    block.addEventListener('dragstart', e=> e.dataTransfer.setData('text/plain', block.dataset.job));
+  });
+
+  if(currentRole !== 'crew'){
+    el.querySelectorAll('.track').forEach(track=>{
+      track.addEventListener('dragover', e=>{ e.preventDefault(); track.classList.add('dragover'); });
+      track.addEventListener('dragleave', ()=> track.classList.remove('dragover'));
+      track.addEventListener('drop', e=>{
+        e.preventDefault();
+        track.classList.remove('dragover');
+        const jobId = e.dataTransfer.getData('text/plain');
+        const job = jobs.find(j=>j.id===jobId);
+        if(!job) return;
+        const truckId = track.dataset.truck;
+        // Add-only: dropping onto a truck adds it to the job's assigned trucks (needed for
+        // multi-truck LD jobs). Use the × button on a block, or drag to Unassigned, to remove one.
+        if(!job.truckIds) job.truckIds = [];
+        if(!job.truckIds.includes(truckId)) job.truckIds.push(truckId);
+        const t = trucks.find(t=>t.id===truckId);
+        if(t && t.status==='available') t.status = 'onjob';
+
+        if(job.type !== 'long_distance'){
+          const rect = track.getBoundingClientRect();
+          const frac = Math.min(1, Math.max(0, (e.clientX - rect.left)/rect.width));
+          let newHour = TIMELINE_START + frac*(TIMELINE_END-TIMELINE_START);
+          newHour = Math.round(newHour*2)/2;
+          const dur = job.duration || 2;
+          newHour = Math.min(newHour, TIMELINE_END-dur);
+          const hh = String(Math.floor(newHour)).padStart(2,'0');
+          const mm = (newHour%1===0.5) ? '30' : '00';
+          job.startTime = `${hh}:${mm}`;
+        }
+        renderBoard();
+      });
+    });
+  }
+}
+
+document.getElementById('refreshBoard').addEventListener('click', ()=>{
+  document.getElementById('boardDate').value = '2026-08-05';
+  renderBoard();
+});
+document.getElementById('boardDate').addEventListener('change', renderBoard);
+
+/* ---------- MONTH VIEW (Google-Calendar-style multi-day bars) ---------- */
+function isoDate(y,m,d){
+  return `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+}
+
+function assignLanes(events){
+  // Shorter jobs claim the topmost lane first, so a job that conflicts with a longer one
+  // is always the more prominent (higher) bar — same "less time on top" rule as the day view.
+  events.forEach(ev=>{ ev._dur = jobDurationHours(ev.job); });
+  events.sort((a,b)=> a._dur-b._dur || a.startCol-b.startCol);
+  const laneEnds = [];
+  events.forEach(ev=>{
+    let placed = false;
+    for(let li=0; li<laneEnds.length; li++){
+      if(laneEnds[li] < ev.startCol){ laneEnds[li] = ev.endCol; ev.lane = li; placed = true; break; }
+    }
+    if(!placed){ laneEnds.push(ev.endCol); ev.lane = laneEnds.length-1; }
+  });
+  return laneEnds.length;
+}
+
+function renderMonthChip(j){
+  const color = getJobDriverColor(j);
+  const hasTruck = jobTruckIds(j).length>0;
+  const conflict = currentConflictIds.has(j.id);
+  const mine = currentRole==='crew' && jobTruckIds(j).includes(currentCrewTruck);
+  const style = color ? `border-left-color:${color};` : '';
+  const time = j.startTime ? hourToLabel(timeToHour(j.startTime)) : '';
+  const tip = `${j.customer} — ${time}${j.duration?` (${j.duration}h)`:''} · ${jobTruckLabel(j)}${conflict?' — CONFLICT: overlaps another job on this truck':''}`;
+  return `<div class="month-chip ${!hasTruck?'unassigned':''} ${mine?'mine':''} ${conflict?'conflict':''}" data-job="${j.id}" title="${tip}" style="${style}">${conflict?'⚠ ':''}${time?time+' · ':''}${jobTruckLabel(j)}: ${j.customer}</div>`;
+}
+
+function renderWeekBar(ev, weekStart, weekEnd){
+  const j = ev.job;
+  const color = getJobDriverColor(j);
+  const conflict = currentConflictIds.has(j.id);
+  const mine = currentRole==='crew' && jobTruckIds(j).includes(currentCrewTruck);
+  const continuesLeft = j.date < weekStart;
+  const continuesRight = jobEnd(j) > weekEnd;
+  const borderColor = color || 'var(--muted)';
+  const radius = `${continuesLeft?'2px':'6px'} ${continuesRight?'2px':'6px'} ${continuesRight?'2px':'6px'} ${continuesLeft?'2px':'6px'}`;
+  const understaffed = jobTruckIds(j).length < jobTrucksNeeded(j);
+  const tip = `${j.customer} — ${j.origin} → ${j.destination} (${fmtRange(j)})${conflict?' — CONFLICT: overlaps another job on this truck':''}${understaffed?' — needs more trucks':''}`;
+  return `<div class="week-bar ${conflict?'conflict':''} ${mine?'mine':''} ${understaffed?'understaffed':''}" data-job="${j.id}"
+    title="${tip}"
+    style="grid-column:${ev.startCol+1} / ${ev.endCol+2}; grid-row:${ev.lane+1}; border-color:${borderColor}; border-radius:${radius}; z-index:${stackZIndex(j)};">
+    ${continuesLeft?'◂ ':''}${conflict?'⚠ ':''}${understaffed?'🚚! ':''}${jobTruckLabel(j)}: ${j.customer}${continuesRight?' ▸':''}
+  </div>`;
+}
+
+function renderConflictOverlayChip(jobsArr, dayIndex, lane){
+  const single = jobsArr.length===1;
+  const z = Math.max(...jobsArr.map(j=>stackZIndex(j)));
+  const mine = currentRole==='crew' && jobsArr.some(j=>jobTruckIds(j).includes(currentCrewTruck));
+  const names = jobsArr.map(j=>j.customer).join(', ');
+  const tip = jobsArr.map(j=>`${j.customer} — ${j.origin} → ${j.destination} — CONFLICT: overlaps a long-distance job on this truck`).join('  |  ');
+  const dataJob = single ? ` data-job="${jobsArr[0].id}"` : '';
+  return `<div class="week-bar conflict overlay-chip ${mine?'mine':''}"${dataJob} title="${tip}"
+    style="grid-column:${dayIndex+1} / ${dayIndex+2}; grid-row:${lane+1}; z-index:${z};">
+    ⚠ ${single ? names : jobsArr.length+' jobs: '+names}
+  </div>`;
+}
+
+function renderMonthBoard(){
+  refreshConflicts();
+  renderDriverLegend();
+  const y = monthCursor.getFullYear();
+  const m = monthCursor.getMonth();
+  document.getElementById('monthLabel').textContent = monthCursor.toLocaleDateString('en-US',{month:'long', year:'numeric'});
+
+  const firstOfMonth = isoDate(y,m,1);
+  const startOffset = new Date(y,m,1).getDay();
+  const calStart = addDays(firstOfMonth, -startOffset);
+  const todayStr = new Date().toISOString().slice(0,10);
+  const monthStr = String(m+1).padStart(2,'0');
+
+  const weeks = [];
+  let cursor = calStart;
+  for(let w=0; w<6; w++){
+    const week = [];
+    for(let d=0; d<7; d++){ week.push(cursor); cursor = addDays(cursor,1); }
+    weeks.push(week);
+  }
+
+  const container = document.getElementById('monthGrid');
+  let html = '';
+
+  weeks.forEach(week=>{
+    const weekStart = week[0], weekEnd = week[6];
+    const ldEvents = jobs
+      .filter(j=> j.type==='long_distance' && j.date<=weekEnd && jobEnd(j)>=weekStart)
+      .map(j=>({
+        job:j,
+        startCol: Math.max(0, daysBetween(weekStart, j.date)),
+        endCol: Math.min(6, daysBetween(weekStart, jobEnd(j)))
+      }));
+    const laneCount = assignLanes(ldEvents);
+    const laneMap = {};
+    ldEvents.forEach(ev=>{ laneMap[ev.job.id] = ev.lane; });
+    const barsAreaHeight = laneCount ? laneCount*20 : 0;
+
+    // A local job that conflicts with an LD job on the same truck is drawn as a small
+    // marker directly on top of that LD bar, in the exact day column where the overlap happens —
+    // shorter job always wins the top spot (stackZIndex favors less time). If more than one local
+    // job conflicts with the same LD job on the same day, they're grouped into a single marker
+    // instead of stacking on top of each other.
+    const overlayJobIds = new Set();
+    const overlayGroups = {};
+    week.forEach((dateStr, dayIndex)=>{
+      jobs.filter(j=> j.type!=='long_distance' && j.date===dateStr && currentConflictIds.has(j.id)).forEach(j=>{
+        // Find a conflict partner that is specifically the LD job (a job can conflict with more
+        // than one thing — e.g. another local job AND an LD job — so don't just take the first match).
+        const pair = currentConflicts.find(c=>
+          (c.a.id===j.id && c.b.type==='long_distance') || (c.b.id===j.id && c.a.type==='long_distance')
+        );
+        if(!pair) return;
+        const partner = pair.a.id===j.id ? pair.b : pair.a;
+        if(laneMap[partner.id]===undefined) return;
+        overlayJobIds.add(j.id);
+        const key = dayIndex+'-'+laneMap[partner.id];
+        (overlayGroups[key] = overlayGroups[key] || {dayIndex, lane:laneMap[partner.id], jobs:[]}).jobs.push(j);
+      });
+    });
+    const overlayHTML = Object.values(overlayGroups).map(g=> renderConflictOverlayChip(g.jobs, g.dayIndex, g.lane)).join('');
+
+    const barsHTML = ldEvents.map(ev=>renderWeekBar(ev, weekStart, weekEnd)).join('') + overlayHTML;
+
+    const dayCellsHTML = week.map(dateStr=>{
+      const dayNum = parseInt(dateStr.slice(8,10),10);
+      const inMonth = dateStr.slice(5,7)===monthStr;
+      const isToday = dateStr===todayStr;
+      const localJobs = jobs.filter(j=> j.type!=='long_distance' && j.date===dateStr && !overlayJobIds.has(j.id));
+      return `<div class="month-day ${inMonth?'':'pad'} ${isToday?'today':''}" data-date="${dateStr}">
+        <div class="day-num">${dayNum}</div>
+        <div class="bar-spacer" style="height:${barsAreaHeight}px;"></div>
+        <div class="day-events">${localJobs.map(j=>renderMonthChip(j)).join('')}</div>
+      </div>`;
+    }).join('');
+
+    html += `<div class="month-week">
+      <div class="week-bars" style="padding-top:${DAY_NUM_H}px;">${barsHTML}</div>
+      <div class="month-week-grid">${dayCellsHTML}</div>
+    </div>`;
+  });
+
+  container.innerHTML = html;
+
+  container.querySelectorAll('.month-chip, .week-bar').forEach(el=>{
+    if(!el.dataset.job){ el.draggable = false; return; } // grouped multi-job markers aren't a single draggable job
+    el.draggable = currentRole !== 'crew';
+    el.addEventListener('dragstart', e=> e.dataTransfer.setData('text/plain', el.dataset.job));
+  });
+
+  if(currentRole !== 'crew'){
+    container.querySelectorAll('.month-day[data-date]').forEach(cell=>{
+      cell.addEventListener('dragover', e=>{ e.preventDefault(); cell.classList.add('dragover'); });
+      cell.addEventListener('dragleave', ()=> cell.classList.remove('dragover'));
+      cell.addEventListener('drop', e=>{
+        e.preventDefault();
+        cell.classList.remove('dragover');
+        const jobId = e.dataTransfer.getData('text/plain');
+        const job = jobs.find(j=>j.id===jobId);
+        if(!job) return;
+        const newDate = cell.dataset.date;
+        const delta = daysBetween(job.date, newDate);
+        if(job.endDate) job.endDate = addDays(job.endDate, delta);
+        job.date = newDate;
+        renderMonthBoard();
+      });
+    });
+  }
+}
+
+/* ---------- LD PLANNER ---------- */
+const ldStages = ['scheduled','loading','in_transit','delivering','complete'];
+const ldStageLabels = {scheduled:'Scheduled', loading:'Loading', in_transit:'In Transit', delivering:'Delivering', complete:'Complete'};
+
+function renderLD(){
+  const list = document.getElementById('ldList');
+  const ldJobs = jobs.filter(j=>j.type==='long_distance');
+  list.innerHTML = ldJobs.map(j=>{
+    const ts = jobTrucks(j);
+    const driverNames = ts.map(t=> t.driverId ? drivers.find(d=>d.id===t.driverId)?.name.split(' ')[0] : null).filter(Boolean);
+    const stageIdx = ldStages.indexOf(j.stage || 'scheduled');
+    const conflict = currentConflictIds.has(j.id);
+    const color = getJobDriverColor(j);
+    return `
+      <div class="ld-row" style="${conflict?'border-color:var(--red);':(color?`border-left:4px solid ${color};`:'')}">
+        <div class="ld-route">
+          ${j.customer}${conflict?' <span class="conflict-flag">⚠ conflict</span>':''}${smBadge(j)} ${truckBadge(j)}
+          <div class="sub">${j.origin} → ${j.destination} · ${j.id}</div>
+        </div>
+        <div class="ld-field"><label>Pickup</label><div>${j.date}</div></div>
+        <div class="ld-field"><label>Delivery</label><div>${jobEnd(j)}</div></div>
+        <div class="ld-field"><label>Trucks / Drivers</label><div>${ts.length ? ts.map(t=>t.name).join(', ') : 'Unassigned'}${driverNames.length ? ' · '+driverNames.join(', ') : ''}</div></div>
+        <div class="pipeline">
+          ${ldStages.map((s,i)=>`<span class="pipe-step ${i<stageIdx?'done':i===stageIdx?'current':''}">${ldStageLabels[s]}</span>`).join('')}
+        </div>
+      </div>
+    `;
+  }).join('') || '<div class="empty">No long distance jobs.</div>';
+}
+
+/* ---------- ADMIN: Trucks, Drivers, Job Assignments ---------- */
+function nextId(list, prefix){
+  const nums = list.map(x=> parseInt(String(x.id).replace(prefix,''),10)).filter(n=>!isNaN(n));
+  const max = nums.length ? Math.max(...nums) : 0;
+  return prefix + (max+1);
+}
+
+document.getElementById('addTruckBtn').addEventListener('click', ()=>{ showAddTruckForm = !showAddTruckForm; showAddDriverForm=false; renderAdmin(); });
+document.getElementById('addDriverBtn').addEventListener('click', ()=>{ showAddDriverForm = !showAddDriverForm; showAddTruckForm=false; renderAdmin(); });
+
+function saveNewTruck(){
+  const name = document.getElementById('newTruckName').value.trim() || `Truck ${trucks.length+1}`;
+  const size = document.getElementById('newTruckSize').value.trim() || '26ft Box';
+  const capacity = document.getElementById('newTruckCapacity').value.trim() || '—';
+  const homeBase = document.getElementById('newTruckBase').value.trim() || 'Denver, CO';
+  trucks.push({id:nextId(trucks,'T'), name, size, capacity, status:'available', driverId:null, homeBase});
+  showAddTruckForm = false;
+  renderAdmin(); renderBoard();
+}
+function cancelAddTruck(){ showAddTruckForm = false; renderAdmin(); }
+
+function saveNewDriver(){
+  const name = document.getElementById('newDriverName').value.trim();
+  if(!name){ alert('Enter a driver name.'); return; }
+  const phone = document.getElementById('newDriverPhone').value.trim() || '—';
+  const cdl = document.getElementById('newDriverCdl').value.trim() || 'Class A';
+  drivers.push({id:nextId(drivers,'D'), name, phone, cdl, truckId:null});
+  showAddDriverForm = false;
+  renderAdmin();
+}
+function cancelAddDriver(){ showAddDriverForm = false; renderAdmin(); }
+
+function updateTruckField(id, field, value){
+  const t = trucks.find(t=>t.id===id);
+  if(t){ t[field] = value; renderBoard(); }
+}
+function updateDriverField(id, field, value){
+  const d = drivers.find(d=>d.id===id);
+  if(d){ d[field] = value; renderBoard(); }
+}
+function updateTruckStatus(id, status){
+  const t = trucks.find(t=>t.id===id);
+  if(t){ t.status = status; renderAdmin(); renderBoard(); }
+}
+function linkTruckDriver(truckId, driverId){
+  drivers.forEach(d=>{ if(d.truckId===truckId) d.truckId = null; });
+  if(driverId) trucks.forEach(t=>{ if(t.driverId===driverId) t.driverId = null; });
+  const truck = trucks.find(t=>t.id===truckId);
+  if(truck) truck.driverId = driverId || null;
+  if(driverId){
+    const driver = drivers.find(d=>d.id===driverId);
+    if(driver) driver.truckId = truckId;
+  }
+  renderAdmin(); renderBoard();
+}
+function unassignDriverTruck(driverId){
+  const driver = drivers.find(d=>d.id===driverId);
+  if(!driver) return;
+  const truck = trucks.find(t=>t.driverId===driverId);
+  if(truck) truck.driverId = null;
+  driver.truckId = null;
+  renderAdmin(); renderBoard();
+}
+function setJobSingleTruck(jobId, truckId){
+  const job = jobs.find(j=>j.id===jobId);
+  if(!job) return;
+  job.truckIds = truckId ? [truckId] : [];
+  if(truckId){
+    const t = trucks.find(t=>t.id===truckId);
+    if(t && t.status==='available') t.status = 'onjob';
+  }
+  renderAdmin(); renderBoard();
+}
+function toggleJobTruck(jobId, truckId, checked){
+  const job = jobs.find(j=>j.id===jobId);
+  if(!job) return;
+  if(!job.truckIds) job.truckIds = [];
+  if(checked){
+    if(!job.truckIds.includes(truckId)) job.truckIds.push(truckId);
+    const t = trucks.find(t=>t.id===truckId);
+    if(t && t.status==='available') t.status = 'onjob';
+  } else {
+    job.truckIds = job.truckIds.filter(id=>id!==truckId);
+  }
+  renderAdmin(); renderBoard();
+}
+function updateJobField(jobId, field, value){
+  const job = jobs.find(j=>j.id===jobId);
+  if(job){ job[field] = value; renderAdmin(); renderBoard(); }
+}
+
+function renderAdmin(){
+  refreshConflicts();
+  renderSyncPanel();
+  const truckAddFormHTML = !showAddTruckForm ? '' : `
+    <div class="admin-card add-form">
+      <h3>New Truck</h3>
+      <div class="row"><span class="field-label">Name</span><input type="text" id="newTruckName" placeholder="Truck 6"></div>
+      <div class="row"><span class="field-label">Size</span><input type="text" id="newTruckSize" placeholder="26ft Box"></div>
+      <div class="row"><span class="field-label">Capacity</span><input type="text" id="newTruckCapacity" placeholder="12,000 lbs"></div>
+      <div class="row"><span class="field-label">Home Base</span><input type="text" id="newTruckBase" placeholder="Denver, CO"></div>
+      <div class="row" style="justify-content:flex-end;">
+        <button class="btn secondary" onclick="cancelAddTruck()">Cancel</button>
+        <button class="btn" onclick="saveNewTruck()">Save Truck</button>
+      </div>
+    </div>`;
+
+  const truckList = document.getElementById('truckAdminList');
+  truckList.innerHTML = truckAddFormHTML + trucks.map(t=>{
+    return `
+      <div class="admin-card">
+        <h3><input type="text" value="${t.name}" style="font-weight:700;font-size:13px;width:110px;" onchange="updateTruckField('${t.id}','name',this.value)">
+          <input type="text" value="${t.size}" style="font-weight:400;color:var(--muted);font-size:12px;width:150px;" onchange="updateTruckField('${t.id}','size',this.value)"></h3>
+        <div class="row"><span class="field-label">Status</span>
+          <select onchange="updateTruckStatus('${t.id}', this.value)">
+            <option value="available" ${t.status==='available'?'selected':''}>Available</option>
+            <option value="onjob" ${t.status==='onjob'?'selected':''}>On Job</option>
+            <option value="maintenance" ${t.status==='maintenance'?'selected':''}>Maintenance</option>
+          </select>
+        </div>
+        <div class="row"><span class="field-label">Capacity</span><input type="text" value="${t.capacity}" onchange="updateTruckField('${t.id}','capacity',this.value)"></div>
+        <div class="row"><span class="field-label">Driver</span>
+          <select onchange="linkTruckDriver('${t.id}', this.value)">
+            <option value="">— Unassigned —</option>
+            ${drivers.map(d=>`<option value="${d.id}" ${t.driverId===d.id?'selected':''}>${d.name}</option>`).join('')}
+          </select>
+        </div>
+        <div class="row"><span class="field-label">Home Base</span><input type="text" value="${t.homeBase}" onchange="updateTruckField('${t.id}','homeBase',this.value)"></div>
+      </div>
+    `;
+  }).join('');
+
+  const driverAddFormHTML = !showAddDriverForm ? '' : `
+    <div class="admin-card add-form">
+      <h3>New Driver</h3>
+      <div class="row"><span class="field-label">Name</span><input type="text" id="newDriverName" placeholder="Full name"></div>
+      <div class="row"><span class="field-label">Phone</span><input type="text" id="newDriverPhone" placeholder="(303) 555-0100"></div>
+      <div class="row"><span class="field-label">License</span><input type="text" id="newDriverCdl" placeholder="Class A"></div>
+      <div class="row" style="justify-content:flex-end;">
+        <button class="btn secondary" onclick="cancelAddDriver()">Cancel</button>
+        <button class="btn" onclick="saveNewDriver()">Save Driver</button>
+      </div>
+    </div>`;
+
+  const driverList = document.getElementById('driverAdminList');
+  driverList.innerHTML = driverAddFormHTML + drivers.map(d=>{
+    const assignedTruck = trucks.find(t=>t.driverId===d.id);
+    return `
+    <div class="admin-card">
+      <h3><span class="dl-swatch" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${driverColor(d.id)};margin-right:6px;"></span><input type="text" value="${d.name}" style="font-weight:700;font-size:13px;width:150px;" onchange="updateDriverField('${d.id}','name',this.value)"></h3>
+      <div class="row"><span class="field-label">Phone</span><input type="text" value="${d.phone}" onchange="updateDriverField('${d.id}','phone',this.value)"></div>
+      <div class="row"><span class="field-label">License</span><input type="text" value="${d.cdl}" onchange="updateDriverField('${d.id}','cdl',this.value)"></div>
+      <div class="row"><span class="field-label">Truck</span>
+        <select onchange="this.value ? linkTruckDriver(this.value, '${d.id}') : unassignDriverTruck('${d.id}')">
+          <option value="">— Unassigned —</option>
+          ${trucks.map(t=>`<option value="${t.id}" ${assignedTruck && assignedTruck.id===t.id ? 'selected':''}>${t.name}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+  `;
+  }).join('');
+
+  renderJobAssignments();
+}
+
+function renderJobAssignments(){
+  const el = document.getElementById('jobAssignList');
+  const sorted = [...jobs].sort((a,b)=> a.date.localeCompare(b.date));
+  el.innerHTML = sorted.map(j=>{
+    const ts = jobTrucks(j);
+    const driverNames = ts.map(t=> t.driverId ? drivers.find(d=>d.id===t.driverId)?.name : null).filter(Boolean);
+    const conflict = currentConflictIds.has(j.id);
+    const multiCapable = j.type==='long_distance';
+    const truckControl = multiCapable ? `
+          <div class="truck-checklist">
+            ${trucks.map(t=>`<label><input type="checkbox" ${jobTruckIds(j).includes(t.id)?'checked':''} onchange="toggleJobTruck('${j.id}','${t.id}',this.checked)"> ${t.name}</label>`).join('')}
+          </div>
+          <div style="margin-top:6px;font-size:11px;color:var(--muted);">Trucks needed (from SmartMoving):
+            <input type="text" class="needed-input" value="${jobTrucksNeeded(j)}" onchange="updateJobField('${j.id}','trucksNeeded', Math.max(1, parseInt(this.value)||1))">
+            ${truckBadge(j)}
+          </div>` : `
+          <select onchange="setJobSingleTruck('${j.id}', this.value)">
+            <option value="">— Unassigned —</option>
+            ${trucks.map(t=>`<option value="${t.id}" ${jobTruckIds(j).includes(t.id)?'selected':''}>${t.name}</option>`).join('')}
+          </select>`;
+    return `
+      <div class="assign-row ${conflict?'conflict':''}">
+        <div>
+          <div class="aj-title">${j.customer} <span style="color:var(--muted);font-weight:400;">· ${j.id}</span>${conflict?'<span class="aj-conflict-tag">⚠ CONFLICT</span>':''}${smBadge(j)}</div>
+          <div class="aj-meta">${fmtRange(j)}${j.startTime ? ' · '+hourToLabel(timeToHour(j.startTime)) : ''} · ${j.type==='long_distance'?'Long Distance':'Local'} · ${j.origin.split(',')[0]} → ${j.destination.split(',')[0]}${driverNames.length ? ' · Driver: '+driverNames.join(', ') : ''}</div>
+        </div>
+        <div>
+          <span class="field-label">${multiCapable?'Trucks':'Truck'}</span>
+          ${truckControl}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+/* ---------- CREW / DRIVER MOBILE VIEW ---------- */
+function renderCrew(){
+  refreshConflicts();
+  const wrap = document.getElementById('crewWrap');
+  const truck = trucks.find(t=>t.id===currentCrewTruck);
+  const driver = truck ? drivers.find(d=>d.id===truck.driverId) : null;
+  const myJobs = jobs.filter(j=>jobTruckIds(j).includes(currentCrewTruck)).sort((a,b)=> a.date.localeCompare(b.date) || (a.startTime||'').localeCompare(b.startTime||''));
+
+  wrap.innerHTML = `
+    <div class="crew-truck-header">
+      <div class="t-name">${truck.name} — ${truck.size}</div>
+      <div class="t-driver">Driver: ${driver ? driver.name : 'Unassigned'} · ${statusLabel(truck.status)}</div>
+    </div>
+    ${myJobs.length ? myJobs.map(j=>{
+      const conflict = currentConflictIds.has(j.id);
+      return `
+      <div class="crew-job ${conflict?'conflict':''}">
+        <div class="cj-date">${fmtRange(j)}${j.startTime ? ' · '+hourToLabel(timeToHour(j.startTime)) : ''}${j.type==='long_distance' ? ' · Long Distance' : ''}</div>
+        <div class="cj-customer">${j.customer}</div>
+        <div class="cj-addr"><span class="lbl">Pickup</span>${j.origin}</div>
+        <div class="cj-addr"><span class="lbl">Drop-off</span>${j.destination}</div>
+        <div class="cj-footer">
+          <span>${j.crewSize} crew</span>
+          <span>${j.miles} mi${j.transitDays ? ' · '+j.transitDays+' day transit' : ''}</span>
+        </div>
+        ${jobTrucksNeeded(j)>1 ? `<div class="cj-footer" style="border-top:none;padding-top:0;">Trucks on this move: ${jobTruckLabel(j)} ${truckBadge(j)}</div>` : ''}
+        ${conflict ? '<div class="cj-conflict">⚠ This truck is double-booked — overlaps with another job. Check with dispatch.</div>' : ''}
+      </div>
+    `;}).join('') : '<div class="empty">No jobs assigned to this truck yet.</div>'}
+  `;
+}
+
+/* ---------- INIT ---------- */
+applyRole();
+</script>
+</body>
+</html>

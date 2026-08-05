@@ -1,0 +1,16 @@
+{
+  "name": "atm-scheduler-smartmoving-sync",
+  "version": "1.0.0",
+  "description": "Backend that pulls booked jobs from SmartMoving into the Around Town Movers scheduler.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "mock": "node mock-smartmoving-server.js",
+    "test-webhook": "node test-webhook.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED",
+  "private": true
+}

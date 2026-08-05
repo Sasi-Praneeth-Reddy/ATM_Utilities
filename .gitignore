@@ -1,0 +1,10 @@
+# Secrets — never commit
+server/.env
+
+# Dependencies (none currently, but future-proof if any get added)
+node_modules/
+
+# OS/editor cruft
+.DS_Store
+Thumbs.db
+*.swp
