@@ -6,10 +6,11 @@ one-way sync from the SmartMoving CRM.
 ## What's here
 
 - **`atm-scheduler.html`** — the scheduler itself. A single self-contained HTML/CSS/JS file, no
-  build step, no dependencies. Open it directly in a browser to run it, with or without the sync
-  backend running.
-- **`server/`** — a small Node backend that pulls schedulable jobs out of SmartMoving CRM and
-  serves them to the scheduler. See [`server/README.md`](server/README.md) for setup, webhook
+  build step, no client-side dependencies. It's a thin client, though: it holds no data of its own
+  and needs the backend below running to load or save anything.
+- **`server/`** — a small Node + SQLite backend. It stores all scheduler data (trucks, drivers,
+  jobs) and serves it over a REST API, and separately pulls schedulable jobs out of SmartMoving CRM
+  into that same database. See [`server/README.md`](server/README.md) for setup, webhook
   configuration, deployment, and the full list of known limitations.
 
 ## Features
@@ -28,21 +29,25 @@ one-way sync from the SmartMoving CRM.
 - SmartMoving sync (Admin → Trucks & Drivers → SmartMoving Sync panel): pulls jobs that need
   dispatching directly into the board. One-way — see [`server/README.md`](server/README.md) for
   why, and for the webhook + polling architecture that keeps it up to date.
+- Shared, persistent data: trucks/drivers/jobs live in a SQLite database on the backend, not in the
+  browser — every device pointed at the same backend sees the same board, and it stays refreshed
+  automatically (polls every 15s). Admin → Trucks & Drivers → **Reset to sample data** clears the
+  database back to the original demo state for everyone using it.
 
 ## Getting started
 
-**Just the scheduler, with mock data:** open `atm-scheduler.html` in a browser. No setup needed.
+The scheduler needs the backend running — there's no offline/mock-data-only mode anymore, since all
+data lives in its database.
 
-**With live SmartMoving sync:**
 ```bash
 cd server
 cp .env.example .env
-# edit .env, add your SmartMoving API key
+# edit .env, add your SmartMoving API key (optional — only needed for CRM sync)
 npm start
 ```
-Then open `atm-scheduler.html`, go to Admin → Trucks & Drivers, and use **Import from
-SmartMoving**. Full details, including webhook setup for real-time sync, are in
-[`server/README.md`](server/README.md).
+This creates and seeds `server/data/atm.db` on first run. Then open `atm-scheduler.html` — it
+connects to `http://localhost:8787` by default. Full backend details, including webhook setup for
+real-time SmartMoving sync and deployment notes, are in [`server/README.md`](server/README.md).
 
 ## Status
 
@@ -54,12 +59,15 @@ actual dispatch.
 - [x] Long-distance multi-day jobs, multi-truck jobs, conflict detection
 - [x] Role-based views (Admin / Dispatcher / Crew)
 - [x] SmartMoving one-way sync: webhook receiver + polling fallback, backend + UI
+- [x] Shared persistence: SQLite database on the backend (trucks/drivers/jobs), served over a REST
+      API — the scheduler is now a thin client with no local/offline storage, so multiple devices
+      pointed at the same backend share one live board
 - [ ] Live test of the sync against a real SmartMoving account
-- [ ] Real hosting for the backend (needed for webhooks — they require a public URL)
+- [ ] Real hosting for the backend (needed for webhooks — they require a public URL — and for
+      multi-device use outside one machine)
 - [ ] Push job/schedule changes back to SmartMoving — currently blocked; their public API has no
       write endpoint for job date/time (see `server/README.md`)
-- [ ] Hosting decision for the scheduler itself (currently a standalone file; multi-user real-time
-      sharing across dispatcher/crew devices will eventually need a real backend + database)
+- [ ] Manual browser click-through test of the rewritten (backend-backed) scheduler UI
 
 ## License
 

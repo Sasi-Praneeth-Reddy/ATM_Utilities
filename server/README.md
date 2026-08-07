@@ -1,7 +1,14 @@
-# ATM Scheduler — SmartMoving sync
+# ATM Scheduler — backend
 
-Pulls jobs that need dispatching out of SmartMoving CRM and into `atm-scheduler.html`, so dispatchers
-don't have to re-enter them by hand.
+This backend has two jobs:
+
+1. **Serves the scheduler's data** — trucks, drivers, and jobs live in a SQLite database on this
+   server and are exposed over a small REST API (`GET /api/state`, plus create/update endpoints).
+   `atm-scheduler.html` is a thin client: it has no local storage of its own anymore, so this
+   backend has to be running for the scheduler to work at all, and every device that opens it talks
+   to the same shared database.
+2. **Pulls jobs that need dispatching out of SmartMoving CRM** and writes them into that same
+   database, so dispatchers don't have to re-enter them by hand.
 
 **This is one-way (pull only).** SmartMoving's public API has no endpoint that can write a job's
 date, time, or truck assignment — every write endpoint (create job, update job notes, update job
@@ -40,29 +47,35 @@ booking (`opp-direct-004`) that exists only via the opportunity-details endpoint
 
 ## What it does
 
-1. **Webhook receiver** (`POST /webhooks/smartmoving`) — SmartMoving POSTs here on `job-created`,
+1. **REST API for the scheduler** (`server.js` + `db.js`) — `GET /api/state` returns all
+   trucks/drivers/jobs from the SQLite database; `POST`/`PATCH` endpoints create and update them.
+   The scheduler UI calls these directly for every action (assigning a truck, adding a driver,
+   editing a job) and polls `GET /api/state` in the background every 15s so multiple open tabs/
+   devices stay in sync with each other.
+2. **Webhook receiver** (`POST /webhooks/smartmoving`) — SmartMoving POSTs here on `job-created`,
    `opportunity-created`, `opportunity-status-changed`, or `opportunity-changed`. On a relevant
    event, fetches `GET /api/opportunities/{id}` (and, best-effort, the older
    `GET /api/premium/opportunities/{id}/jobs` for exact start/end times) and upserts the result
-   into an in-memory store.
-2. **Poll sweep** (fallback, every `POLL_INTERVAL_MINUTES`) — walks `GET /api/leads` for a rolling
+   into the `jobs` table.
+3. **Poll sweep** (fallback, every `POLL_INTERVAL_MINUTES`) — walks `GET /api/leads` for a rolling
    date window and hydrates each one the same way, so nothing depends solely on webhooks arriving.
-3. `GET /api/schedulable-jobs` serves straight from that in-memory store (instant — no live API
-   calls on every request), filtered by status.
-4. In the scheduler, Admin → Trucks & Drivers → SmartMoving Sync panel → **Import from
-   SmartMoving** pulls that list in and merges it into the local job list. Jobs already imported
-   (matched by SmartMoving's internal job ID) get their SmartMoving-owned fields refreshed
-   (customer, date, time, addresses, crew size) but truck assignments and status you've set locally
-   are left alone — re-importing won't undo a dispatcher's work. Jobs are never deleted by a
-   sync — a cancelled booking just stops showing up as *schedulable*, but stays in your local list
-   until you remove it, so nothing a dispatcher already touched vanishes silently.
+4. Syncing a job that's already in the database (matched by SmartMoving's internal job ID) only
+   refreshes its SmartMoving-owned fields (customer, date, time, addresses, crew size) — truck
+   assignments and status a dispatcher has set locally are left alone, so a sync can't undo their
+   work. Jobs are never deleted by a sync — a cancelled booking just stops showing up as
+   *schedulable*, but stays in the database until removed by hand.
 
 Imported jobs show a small **SM** badge in the UI so it's clear which ones came from SmartMoving
-vs. were entered by hand.
+vs. were entered by hand. From the scheduler, Admin → Trucks & Drivers → SmartMoving Sync panel →
+**Sync now** triggers an on-demand poll sweep — normally you don't need this, since webhooks (or
+the automatic interval sweep) keep things current on their own.
 
 ## Setup
 
-Requires Node 18 or newer (for the built-in `fetch`). No npm install needed — zero dependencies.
+Requires **Node 22.5 or newer** — this uses the built-in `node:sqlite` module (experimental as of
+this Node line), not a separate database server or an npm package. No npm install needed — zero
+dependencies. Check your version with `node -v`; if you're on an older Node, upgrade first (e.g.
+via nvm: `nvm install 22 && nvm use 22`).
 
 ```bash
 cd server
@@ -71,10 +84,15 @@ cp .env.example .env
 npm start
 ```
 
-This starts the backend on `http://localhost:8787`. Open `atm-scheduler.html`, go to
-**Trucks & Drivers**, confirm the Backend URL field points at that address, and click
-**Import from SmartMoving** — this runs an on-demand poll sweep the first time (store starts
-empty) and instantly after that.
+This starts the backend on `http://localhost:8787` and creates `server/data/atm.db` on first run,
+seeded with sample trucks/drivers/jobs. Open `atm-scheduler.html` — it talks to
+`http://localhost:8787` by default. To point it at a different backend (e.g. once you've deployed
+one), open it with `?api=https://your-deployed-host` in the URL, or use the retry field that
+appears in the red banner if it can't reach the backend.
+
+**The scheduler needs this backend running to work at all** — there's no offline/local-only mode
+anymore. If the backend is unreachable, the scheduler shows a banner and won't have any data to
+display.
 
 ### Wiring up webhooks (do this once you have real hosting)
 
@@ -122,8 +140,9 @@ npm run mock          # fake SmartMoving API on :8788
 SMARTMOVING_BASE_URL=http://localhost:8788/v1 SMARTMOVING_API_KEY=test-key npm start
 ```
 
-Then hit `http://localhost:8787/api/schedulable-jobs` directly, or use the Import button in the
-scheduler.
+Then open `atm-scheduler.html` (it'll load from this backend) and use the **Sync now** button in
+Admin → Trucks & Drivers → SmartMoving Sync, or hit `http://localhost:8787/api/schedulable-jobs`
+directly to see what would be imported.
 
 ## Configuration
 
@@ -137,26 +156,33 @@ Environment variables (set in `.env`, or via your hosting platform):
 | `POLL_LOOKBACK_DAYS` | `7` | How far back the poll sweep's date window starts. |
 | `POLL_LOOKAHEAD_DAYS` | `60` | How far forward the poll sweep's date window extends. |
 | `SMARTMOVING_BASE_URL` | `https://api-public.smartmoving.com/v1` | Override to point at the mock server for testing. |
-| `PORT` | `8787` | Port the sync backend listens on. |
+| `PORT` | `8787` | Port the backend listens on. |
+| `SQLITE_PATH` | `server/data/atm.db` | Where the database file lives. Must be a normal local-disk path — SQLite needs real file locking, which doesn't work over some network drives or FUSE-style mounts. |
 
-The scheduler's Backend URL field (saved in the browser's local storage) needs to point at
-wherever this server ends up running — `http://localhost:8787` for local use, or your deployed
-URL if you host it.
+The scheduler picks up the backend URL from a `?api=` query parameter (falls back to
+`http://localhost:8787`) — there's nothing to configure in the browser's storage, since the app no
+longer uses any.
 
 ## Deployment
 
-The backend is a single dependency-free Node process, so it runs anywhere Node 18+ runs: a small
+The backend is a single dependency-free Node process, so it runs anywhere Node 22.5+ runs: a small
 VM, Render, Railway, Fly.io, or a container. Whatever you use:
 
 - Set `SMARTMOVING_API_KEY` and `WEBHOOK_SECRET` as real environment variables, not committed to a
   repo.
-- The `/api/schedulable-jobs` and `/api/health` endpoints have no auth of their own — keep the
-  deployment reachable only by whoever needs the scheduler (an allowlist, VPN, or reverse-proxy
-  auth is enough for a small team). `/webhooks/smartmoving` is the one route that must stay
-  publicly reachable (for SmartMoving to reach it), so make sure the secret is set before exposing
-  it.
-- The in-memory job store resets on every restart — the poll sweep repopulates it on startup, so
-  a restart just means a brief gap until the first sweep completes, not data loss.
+- The `/api/*` endpoints (including `/api/state`, which is the whole scheduler's data) have no auth
+  of their own — keep the deployment reachable only by whoever needs the scheduler (an allowlist,
+  VPN, or reverse-proxy auth is enough for a small team). `/webhooks/smartmoving` is the one route
+  that must stay publicly reachable (for SmartMoving to reach it), so make sure the secret is set
+  before exposing it.
+- The database is a single SQLite file at `server/data/atm.db` (auto-created and seeded on first
+  run, gitignored). It needs to sit on real local disk — most VMs and container platforms give you
+  this by default, but if you attach a network volume, confirm it supports normal file locking
+  first. Run only **one instance** of this backend against one database file — SQLite handles
+  concurrent access from many clients (the scheduler's tabs/devices) fine, but isn't meant to be
+  shared by multiple *server* processes at once the way a networked database would be.
+- Back up `server/data/atm.db` periodically (a plain file copy is fine while the server isn't
+  mid-write) — it's now the only copy of trucks, drivers, and jobs.
 
 ## Known limitations (flagged for future work)
 

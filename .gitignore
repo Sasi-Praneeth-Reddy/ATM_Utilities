@@ -1,6 +1,9 @@
 # Secrets — never commit
 server/.env
 
+# Runtime data — the SQLite database file. Auto-created and seeded on first run, not source.
+server/data/
+
 # Dependencies (none currently, but future-proof if any get added)
 node_modules/
 

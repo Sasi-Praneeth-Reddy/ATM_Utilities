@@ -216,6 +216,7 @@
 </nav>
 
 <main>
+  <div id="backendBanner"></div>
   <div class="hint" id="roleHint"></div>
 
   <!-- BOARD TAB -->
@@ -273,6 +274,7 @@
       <div style="display:flex;gap:8px;">
         <button class="btn" id="addTruckBtn">+ Add Truck</button>
         <button class="btn" id="addDriverBtn">+ Add Driver</button>
+        <button class="btn secondary" onclick="resetToSampleData()" title="Clear all local changes and reload the original sample data">Reset to sample data</button>
       </div>
     </div>
     <div class="grid-2">
@@ -297,43 +299,110 @@
 </main>
 
 <script>
-/* ---------- MOCK DATA (shaped like SmartMoving job records) ---------- */
-/* Long-distance jobs are multi-day: `date` = pickup/load day, `endDate` = last transit/delivery day. */
-let trucks = [
-  {id:'T1', name:'Truck 1', size:'26ft Box', capacity:'12,000 lbs', status:'available', driverId:'D1', homeBase:'Denver, CO'},
-  {id:'T2', name:'Truck 2', size:'26ft Box', capacity:'12,000 lbs', status:'onjob', driverId:'D2', homeBase:'Denver, CO'},
-  {id:'T3', name:'Truck 3', size:'53ft Trailer (LD)', capacity:'26,000 lbs', status:'available', driverId:'D3', homeBase:'Denver, CO'},
-  {id:'T4', name:'Truck 4', size:'16ft Box', capacity:'6,000 lbs', status:'maintenance', driverId:'D4', homeBase:'Denver, CO'},
-  {id:'T5', name:'Truck 5', size:'53ft Trailer (LD)', capacity:'26,000 lbs', status:'available', driverId:'D5', homeBase:'Denver, CO'},
-];
+/* ---------- BACKEND-BACKED STATE ----------
+   Trucks/drivers/jobs live in the backend's SQLite database (server/db.js), not in this browser —
+   every device that opens this file against the same backend sees the same live board. This means
+   the app now needs the backend running to do anything; there's no more local-only fallback mode.
+   Nothing about this app's data is ever written to localStorage or any other on-device storage. */
+let trucks = [];
+let drivers = [];
+let jobs = [];
 
-let drivers = [
-  {id:'D1', name:'Mike Reynolds', phone:'(303) 555-0114', cdl:'Class A', truckId:'T1'},
-  {id:'D2', name:'Alex Chen', phone:'(303) 555-0122', cdl:'Class A', truckId:'T2'},
-  {id:'D3', name:'Jordan Blake', phone:'(303) 555-0133', cdl:'Class A + LD Endorsed', truckId:'T3'},
-  {id:'D4', name:'Sam Patel', phone:'(303) 555-0147', cdl:'Class B', truckId:'T4'},
-  {id:'D5', name:'Casey Nunez', phone:'(303) 555-0158', cdl:'Class A + LD Endorsed', truckId:'T5'},
-];
+const DEFAULT_BACKEND_URL = 'http://localhost:8787';
+let backendUrl = new URLSearchParams(location.search).get('api') || DEFAULT_BACKEND_URL;
+let backendConnected = false;
+let backendErrorMsg = '';
+let lastSyncedAt = null;
 
-/* `truckIds` is an array — most local jobs use one truck, but a long-distance job can need
-   several (`trucksNeeded`, pulled from SmartMoving's job record) when the shipment is too
-   large for a single trailer. */
-let jobs = [
-  {id:'J-10231', customer:'Sarah Thompson', type:'local', date:'2026-08-05', endDate:'2026-08-05', startTime:'08:00', duration:3, origin:'1420 Larimer St, Denver, CO', destination:'880 Pearl St, Boulder, CO', crewSize:3, truckIds:['T1'], trucksNeeded:1, status:'scheduled', miles:32},
-  {id:'J-10232', customer:'The Whitfield Family', type:'local', date:'2026-08-05', endDate:'2026-08-05', startTime:'09:30', duration:2.5, origin:'2200 Colfax Ave, Denver, CO', destination:'50 S Steele St, Denver, CO', crewSize:2, truckIds:['T2'], trucksNeeded:1, status:'in_progress', miles:8},
-  {id:'J-10233', customer:'Devon Marsh', type:'local', date:'2026-08-05', endDate:'2026-08-05', startTime:'13:00', duration:2, origin:'900 Auraria Pkwy, Denver, CO', destination:'12 Golden Gate Cyn, Golden, CO', crewSize:2, truckIds:[], trucksNeeded:1, status:'scheduled', miles:19},
-  {id:'J-10235', customer:'Grace Lin', type:'local', date:'2026-08-05', endDate:'2026-08-05', startTime:'15:30', duration:2, origin:'3300 E Colfax Ave, Denver, CO', destination:'700 Kalamath St, Denver, CO', crewSize:2, truckIds:[], trucksNeeded:1, status:'scheduled', miles:6},
-  {id:'J-10234', customer:'Priya Nair', type:'local', date:'2026-08-06', endDate:'2026-08-06', startTime:'09:00', duration:3, origin:'400 W 48th Ave, Denver, CO', destination:'77 S Union Blvd, Lakewood, CO', crewSize:3, truckIds:[], trucksNeeded:1, status:'scheduled', miles:14},
-  {id:'J-10236', customer:'Tom Alvarez', type:'local', date:'2026-08-11', endDate:'2026-08-11', startTime:'08:30', duration:3, origin:'1660 Wynkoop St, Denver, CO', destination:'6900 Layton Ave, Denver, CO', crewSize:2, truckIds:['T1'], trucksNeeded:1, status:'scheduled', miles:11},
-  {id:'J-10237', customer:'Nia Coleman', type:'local', date:'2026-08-14', endDate:'2026-08-14', startTime:'10:00', duration:2.5, origin:'2001 York St, Denver, CO', destination:'1000 Chapman Dr, Louisville, CO', crewSize:3, truckIds:['T2'], trucksNeeded:1, status:'scheduled', miles:23},
-  {id:'J-10238', customer:'Ortiz Household', type:'local', date:'2026-08-20', endDate:'2026-08-20', startTime:'09:00', duration:3, origin:'4650 Leetsdale Dr, Denver, CO', destination:'150 W Prospect Rd, Fort Collins, CO', crewSize:3, truckIds:[], trucksNeeded:1, status:'scheduled', miles:66},
-  {id:'J-10244', customer:'Nguyen Family', type:'local', date:'2026-08-06', endDate:'2026-08-06', startTime:'10:00', duration:2, origin:'1900 Grant St, Denver, CO', destination:'8000 E Girard Ave, Denver, CO', crewSize:2, truckIds:['T3'], trucksNeeded:1, status:'scheduled', miles:10},
+function setBackendUrl(url){
+  backendUrl = (url || DEFAULT_BACKEND_URL).trim().replace(/\/$/,'');
+  loadStateFromServer();
+}
 
-  {id:'J-10240', customer:'Harold & Anne Kessler', type:'long_distance', date:'2026-08-05', endDate:'2026-08-08', origin:'Denver, CO', destination:'Phoenix, AZ', crewSize:4, truckIds:['T3'], trucksNeeded:2, status:'loading', miles:862, transitDays:2, stage:'loading'},
-  {id:'J-10241', customer:'Reyes Household', type:'long_distance', date:'2026-08-06', endDate:'2026-08-09', origin:'Denver, CO', destination:'Austin, TX', crewSize:3, truckIds:['T5'], trucksNeeded:1, status:'scheduled', miles:925, transitDays:2, stage:'scheduled'},
-  {id:'J-10242', customer:'Ben Okafor', type:'long_distance', date:'2026-08-04', endDate:'2026-08-07', origin:'Denver, CO', destination:'Portland, OR', crewSize:3, truckIds:[], trucksNeeded:2, status:'in_transit', miles:1245, transitDays:3, stage:'in_transit'},
-  {id:'J-10243', customer:'Marcus Webb', type:'long_distance', date:'2026-08-18', endDate:'2026-08-21', origin:'Denver, CO', destination:'Chicago, IL', crewSize:3, truckIds:[], trucksNeeded:1, status:'scheduled', miles:996, transitDays:2, stage:'scheduled'},
-];
+async function apiCall(method, path, body){
+  const res = await fetch(backendUrl + path, {
+    method,
+    headers: body !== undefined ? {'Content-Type':'application/json'} : undefined,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if(!res.ok){
+    let detail = '';
+    try{ detail = (await res.json()).error || ''; } catch(e){}
+    throw new Error(`Backend returned ${res.status}${detail ? ' — '+detail : ''}`);
+  }
+  return res.status === 204 ? null : res.json();
+}
+
+/** Fire-and-forget persistence for a mutation that's already been applied optimistically to the
+    local trucks/drivers/jobs arrays and re-rendered. Surfaces a banner on failure instead of
+    silently losing the change — since there's no local storage fallback, a failed save here means
+    the change genuinely didn't happen anywhere except this one render. */
+function persist(method, path, body){
+  apiCall(method, path, body).then(()=>{
+    backendErrorMsg = '';
+  }).catch(err=>{
+    backendErrorMsg = `Couldn't save your last change to the server (${err.message}). It may be lost on refresh — check your connection to ${backendUrl}.`;
+    renderBackendBanner();
+  });
+}
+
+function renderBackendBanner(){
+  const el = document.getElementById('backendBanner');
+  if(!el) return;
+  if(!backendConnected){
+    el.innerHTML = `<div class="conflict-banner"><div class="cb-title">⚠ Can't reach the backend at ${backendUrl}</div>
+      This scheduler now stores everything in a shared database, so it needs the backend running to load or save anything.
+      Start it with <code>cd server && npm start</code>, or set a different backend URL below, then reload.
+      <div class="sync-row" style="margin-top:8px;">
+        <input type="text" id="backendUrlInput" value="${backendUrl}" placeholder="http://localhost:8787">
+        <button class="btn secondary" onclick="setBackendUrl(document.getElementById('backendUrlInput').value)">Retry</button>
+      </div>
+    </div>`;
+  } else if(backendErrorMsg){
+    el.innerHTML = `<div class="conflict-banner"><div class="cb-title">⚠ Save failed</div>${backendErrorMsg}</div>`;
+  } else {
+    el.innerHTML = '';
+  }
+}
+
+async function loadStateFromServer(){
+  try{
+    const state = await apiCall('GET', '/api/state');
+    trucks = state.trucks; drivers = state.drivers; jobs = state.jobs;
+    backendConnected = true;
+    backendErrorMsg = '';
+    lastSyncedAt = new Date();
+  } catch(err){
+    backendConnected = false;
+    backendErrorMsg = err.message;
+  }
+  renderBackendBanner();
+  return backendConnected;
+}
+
+/** Refetches from the server periodically so multiple devices converge on the same board.
+    Skipped while an admin add-form is open so it doesn't wipe out in-progress typing. */
+function startBackgroundRefresh(){
+  setInterval(async ()=>{
+    if(showAddTruckForm || showAddDriverForm) return;
+    const before = JSON.stringify({trucks, drivers, jobs});
+    const ok = await loadStateFromServer();
+    if(!ok) return;
+    if(JSON.stringify({trucks, drivers, jobs}) === before) return; // nothing changed, skip a re-render
+    if(currentRole==='crew') renderCrew();
+    else { renderBoard(); if(currentRole==='admin') renderAdmin(); renderLD(); }
+  }, 15000);
+}
+
+function resetToSampleData(){
+  if(!confirm('Reset the board back to the original sample data? This clears everything in the database (assignments, imported SmartMoving jobs, admin edits) for every device using this backend, and cannot be undone.')) return;
+  apiCall('POST', '/api/reset-to-sample-data').then(state=>{
+    trucks = state.trucks; drivers = state.drivers; jobs = state.jobs;
+    applyRole();
+  }).catch(err=>{
+    alert(`Couldn't reset: ${err.message}`);
+  });
+}
 
 const roleLabels = {
   admin: "Admin — full access to trucks, drivers, availability, and jobs.",
@@ -446,56 +515,30 @@ function renderConflictBanner(){
 }
 
 /* ---------- SMARTMOVING SYNC (one-way: pull only) ----------
-   The scheduler pulls jobs that need dispatching FROM SmartMoving via the local sync backend
-   (see /server). SmartMoving's public API has no endpoint to write job date/time back, so any
-   date/truck/time edits made here stay local — dispatchers still need to mirror schedule
-   changes into SmartMoving by hand until SmartMoving exposes a write endpoint. */
-const SYNC_URL_KEY = 'atmSyncBackendUrl';
-function getSyncBackendUrl(){ return localStorage.getItem(SYNC_URL_KEY) || 'http://localhost:8787'; }
-let syncStatus = { loading:false, lastSyncedAt:null, message:'', error:null };
+   The backend pulls jobs that need dispatching FROM SmartMoving continuously — via webhooks in
+   real time, plus a periodic poll as backup (see server/README.md "Webhooks vs. polling") — and
+   writes them straight into the shared database. So SmartMoving-sourced jobs just show up here on
+   their own; this panel's button triggers an immediate poll instead of waiting for the interval,
+   for when you don't want to wait. SmartMoving's public API has no endpoint to write job date/time
+   back, so any date/truck/time edits made here stay local to this database — dispatchers still
+   need to mirror schedule changes into SmartMoving by hand until SmartMoving exposes one. */
+let syncStatus = { loading:false, message:'', error:null };
 
-function saveSyncBackendUrl(){
-  const val = document.getElementById('syncUrlInput').value.trim();
-  if(val) localStorage.setItem(SYNC_URL_KEY, val.replace(/\/$/,''));
-  renderSyncPanel();
-}
-
-async function importFromSmartMoving(){
-  const base = getSyncBackendUrl();
-  syncStatus = { ...syncStatus, loading:true, message:'', error:null };
+async function syncNow(){
+  syncStatus = { loading:true, message:'', error:null };
   renderSyncPanel();
   try{
-    const res = await fetch(`${base}/api/schedulable-jobs`);
-    if(!res.ok) throw new Error(`Backend responded with status ${res.status}`);
-    const data = await res.json();
-    let added=0, updated=0;
-    (data.jobs || []).forEach(smJob=>{
-      const existing = jobs.find(j=>j.smartMovingJobId && j.smartMovingJobId===smJob.smartMovingJobId);
-      if(existing){
-        // Only overwrite the fields SmartMoving owns — never touch truckIds/trucksNeeded/status,
-        // since those hold the dispatcher's local assignment work.
-        Object.assign(existing, {
-          customer: smJob.customer, type: smJob.type, date: smJob.date, endDate: smJob.endDate,
-          startTime: smJob.startTime, duration: smJob.duration, origin: smJob.origin,
-          destination: smJob.destination, crewSize: smJob.crewSize,
-          smartMovingOpportunityId: smJob.smartMovingOpportunityId, smartMovingStatus: smJob.smartMovingStatus,
-          source: 'smartmoving',
-        });
-        updated++;
-      } else {
-        jobs.push(smJob);
-        added++;
-      }
-    });
-    const errNote = (data.errors && data.errors.length) ? ` ${data.errors.length} job${data.errors.length>1?'s':''} couldn't be read — see console.` : '';
-    if(data.errors && data.errors.length) console.warn('SmartMoving sync errors:', data.errors);
-    syncStatus = { loading:false, lastSyncedAt:new Date(), message:`Imported ${added} new job${added!==1?'s':''}, updated ${updated} existing.${errNote}`, error:null };
+    const result = await apiCall('POST', '/api/sync-now');
+    trucks = result.state.trucks; drivers = result.state.drivers; jobs = result.state.jobs;
+    const errNote = (result.errors && result.errors.length) ? ` ${result.errors.length} opportunit${result.errors.length>1?'ies':'y'} couldn't be read — see console.` : '';
+    if(result.errors && result.errors.length) console.warn('SmartMoving sync errors:', result.errors);
+    syncStatus = { loading:false, message:`Synced ${result.leadCount ?? 0} lead${result.leadCount===1?'':'s'} from SmartMoving.${errNote}`, error:null };
     refreshConflicts();
     renderBoard();
     if(currentRole==='admin') renderJobAssignments();
     renderLD();
   } catch(err){
-    syncStatus = { loading:false, lastSyncedAt:syncStatus.lastSyncedAt, message:'', error:`Sync failed: ${err.message}. Is the backend running at ${base}? (cd server && npm start)` };
+    syncStatus = { loading:false, message:'', error:`Sync failed: ${err.message}` };
   }
   renderSyncPanel();
 }
@@ -503,19 +546,16 @@ async function importFromSmartMoving(){
 function renderSyncPanel(){
   const el = document.getElementById('syncPanel');
   if(!el) return;
-  const last = syncStatus.lastSyncedAt ? syncStatus.lastSyncedAt.toLocaleString() : 'never';
+  const last = lastSyncedAt ? lastSyncedAt.toLocaleString() : 'never';
   el.innerHTML = `
     <h3>SmartMoving Sync</h3>
-    <div style="font-size:12px;color:var(--muted);">Pulls jobs that need dispatching from SmartMoving. Last synced: ${last}.</div>
+    <div style="font-size:12px;color:var(--muted);">The backend pulls jobs that need dispatching from SmartMoving automatically (webhooks + a periodic poll) and writes them into the shared database — they'll appear here on their own. Board last loaded: ${last}.</div>
     <div class="sync-row">
-      <span class="field-label">Backend URL</span>
-      <input type="text" id="syncUrlInput" value="${getSyncBackendUrl()}" onchange="saveSyncBackendUrl()">
-      <button class="btn" onclick="importFromSmartMoving()" ${syncStatus.loading?'disabled':''}>${syncStatus.loading?'Importing…':'Import from SmartMoving'}</button>
+      <button class="btn" onclick="syncNow()" ${syncStatus.loading?'disabled':''}>${syncStatus.loading?'Syncing…':'Sync now'}</button>
     </div>
     ${syncStatus.message ? `<div class="sync-msg ok">${syncStatus.message}</div>` : ''}
     ${syncStatus.error ? `<div class="sync-msg err">${syncStatus.error}</div>` : ''}
     <div class="oneway-note">⚠ One-way sync: this pulls jobs FROM SmartMoving only. Truck/driver assignments and any date or time edits made in this scheduler are <b>not</b> pushed back to SmartMoving — SmartMoving's API doesn't support that yet. Update SmartMoving manually to keep both systems in sync. Jobs imported from SmartMoving are marked <span class="sm-badge">SM</span>.</div>
-    <div class="oneway-note" style="background:#fff4ec;border-color:#ffd9c2;color:#8a4a26;">⚠ The backend now listens for SmartMoving webhooks (job/opportunity created or booked) so jobs booked directly — not just ones that started as a lead — get picked up, with a periodic poll as backup. This closes the gap where directly-booked jobs could be missed, but still needs a live test against your real account before you rely on it for dispatch — see <code>server/README.md</code>.</div>
   `;
 }
 
@@ -636,7 +676,7 @@ function renderUnassignedTray(date){
       tray.classList.remove('dragover');
       const jobId = e.dataTransfer.getData('text/plain');
       const job = jobs.find(j=>j.id===jobId);
-      if(job){ job.truckIds = []; renderBoard(); }
+      if(job){ job.truckIds = []; renderBoard(); persist('PATCH', `/api/jobs/${jobId}`, {truckIds:[]}); }
     };
   } else {
     tray.ondragover = tray.ondrop = null;
@@ -691,6 +731,7 @@ function removeTruckFromJob(jobId, truckId){
   job.truckIds = jobTruckIds(job).filter(id=>id!==truckId);
   renderBoard();
   if(currentRole==='admin') renderAdmin();
+  persist('PATCH', `/api/jobs/${jobId}`, {truckIds: job.truckIds});
 }
 
 function renderTimeline(date){
@@ -753,7 +794,8 @@ function renderTimeline(date){
         if(!job.truckIds) job.truckIds = [];
         if(!job.truckIds.includes(truckId)) job.truckIds.push(truckId);
         const t = trucks.find(t=>t.id===truckId);
-        if(t && t.status==='available') t.status = 'onjob';
+        let truckStatusChanged = false;
+        if(t && t.status==='available'){ t.status = 'onjob'; truckStatusChanged = true; }
 
         if(job.type !== 'long_distance'){
           const rect = track.getBoundingClientRect();
@@ -767,6 +809,8 @@ function renderTimeline(date){
           job.startTime = `${hh}:${mm}`;
         }
         renderBoard();
+        persist('PATCH', `/api/jobs/${jobId}`, {truckIds: job.truckIds, startTime: job.startTime});
+        if(truckStatusChanged) persist('PATCH', `/api/trucks/${truckId}`, {status:'onjob'});
       });
     });
   }
@@ -946,6 +990,7 @@ function renderMonthBoard(){
         if(job.endDate) job.endDate = addDays(job.endDate, delta);
         job.date = newDate;
         renderMonthBoard();
+        persist('PATCH', `/api/jobs/${jobId}`, {date: job.date, endDate: job.endDate});
       });
     });
   }
@@ -982,48 +1027,52 @@ function renderLD(){
 }
 
 /* ---------- ADMIN: Trucks, Drivers, Job Assignments ---------- */
-function nextId(list, prefix){
-  const nums = list.map(x=> parseInt(String(x.id).replace(prefix,''),10)).filter(n=>!isNaN(n));
-  const max = nums.length ? Math.max(...nums) : 0;
-  return prefix + (max+1);
-}
-
 document.getElementById('addTruckBtn').addEventListener('click', ()=>{ showAddTruckForm = !showAddTruckForm; showAddDriverForm=false; renderAdmin(); });
 document.getElementById('addDriverBtn').addEventListener('click', ()=>{ showAddDriverForm = !showAddDriverForm; showAddTruckForm=false; renderAdmin(); });
 
-function saveNewTruck(){
+async function saveNewTruck(){
   const name = document.getElementById('newTruckName').value.trim() || `Truck ${trucks.length+1}`;
   const size = document.getElementById('newTruckSize').value.trim() || '26ft Box';
   const capacity = document.getElementById('newTruckCapacity').value.trim() || '—';
   const homeBase = document.getElementById('newTruckBase').value.trim() || 'Denver, CO';
-  trucks.push({id:nextId(trucks,'T'), name, size, capacity, status:'available', driverId:null, homeBase});
-  showAddTruckForm = false;
-  renderAdmin(); renderBoard();
+  try{
+    const truck = await apiCall('POST', '/api/trucks', {name, size, capacity, homeBase});
+    trucks.push(truck);
+    showAddTruckForm = false;
+    renderAdmin(); renderBoard();
+  } catch(err){
+    alert(`Couldn't create the truck: ${err.message}`);
+  }
 }
 function cancelAddTruck(){ showAddTruckForm = false; renderAdmin(); }
 
-function saveNewDriver(){
+async function saveNewDriver(){
   const name = document.getElementById('newDriverName').value.trim();
   if(!name){ alert('Enter a driver name.'); return; }
   const phone = document.getElementById('newDriverPhone').value.trim() || '—';
   const cdl = document.getElementById('newDriverCdl').value.trim() || 'Class A';
-  drivers.push({id:nextId(drivers,'D'), name, phone, cdl, truckId:null});
-  showAddDriverForm = false;
-  renderAdmin();
+  try{
+    const driver = await apiCall('POST', '/api/drivers', {name, phone, cdl});
+    drivers.push(driver);
+    showAddDriverForm = false;
+    renderAdmin();
+  } catch(err){
+    alert(`Couldn't create the driver: ${err.message}`);
+  }
 }
 function cancelAddDriver(){ showAddDriverForm = false; renderAdmin(); }
 
 function updateTruckField(id, field, value){
   const t = trucks.find(t=>t.id===id);
-  if(t){ t[field] = value; renderBoard(); }
+  if(t){ t[field] = value; renderBoard(); persist('PATCH', `/api/trucks/${id}`, {[field]: value}); }
 }
 function updateDriverField(id, field, value){
   const d = drivers.find(d=>d.id===id);
-  if(d){ d[field] = value; renderBoard(); }
+  if(d){ d[field] = value; renderBoard(); persist('PATCH', `/api/drivers/${id}`, {[field]: value}); }
 }
 function updateTruckStatus(id, status){
   const t = trucks.find(t=>t.id===id);
-  if(t){ t.status = status; renderAdmin(); renderBoard(); }
+  if(t){ t.status = status; renderAdmin(); renderBoard(); persist('PATCH', `/api/trucks/${id}`, {status}); }
 }
 function linkTruckDriver(truckId, driverId){
   drivers.forEach(d=>{ if(d.truckId===truckId) d.truckId = null; });
@@ -1035,6 +1084,7 @@ function linkTruckDriver(truckId, driverId){
     if(driver) driver.truckId = truckId;
   }
   renderAdmin(); renderBoard();
+  persist('POST', `/api/trucks/${truckId}/link-driver`, {driverId: driverId || null});
 }
 function unassignDriverTruck(driverId){
   const driver = drivers.find(d=>d.id===driverId);
@@ -1043,33 +1093,40 @@ function unassignDriverTruck(driverId){
   if(truck) truck.driverId = null;
   driver.truckId = null;
   renderAdmin(); renderBoard();
+  persist('POST', `/api/drivers/${driverId}/unassign-truck`, {});
 }
 function setJobSingleTruck(jobId, truckId){
   const job = jobs.find(j=>j.id===jobId);
   if(!job) return;
   job.truckIds = truckId ? [truckId] : [];
+  let truckStatusChanged = false;
   if(truckId){
     const t = trucks.find(t=>t.id===truckId);
-    if(t && t.status==='available') t.status = 'onjob';
+    if(t && t.status==='available'){ t.status = 'onjob'; truckStatusChanged = true; }
   }
   renderAdmin(); renderBoard();
+  persist('PATCH', `/api/jobs/${jobId}`, {truckIds: job.truckIds});
+  if(truckStatusChanged) persist('PATCH', `/api/trucks/${truckId}`, {status:'onjob'});
 }
 function toggleJobTruck(jobId, truckId, checked){
   const job = jobs.find(j=>j.id===jobId);
   if(!job) return;
   if(!job.truckIds) job.truckIds = [];
+  let truckStatusChanged = false;
   if(checked){
     if(!job.truckIds.includes(truckId)) job.truckIds.push(truckId);
     const t = trucks.find(t=>t.id===truckId);
-    if(t && t.status==='available') t.status = 'onjob';
+    if(t && t.status==='available'){ t.status = 'onjob'; truckStatusChanged = true; }
   } else {
     job.truckIds = job.truckIds.filter(id=>id!==truckId);
   }
   renderAdmin(); renderBoard();
+  persist('PATCH', `/api/jobs/${jobId}`, {truckIds: job.truckIds});
+  if(truckStatusChanged) persist('PATCH', `/api/trucks/${truckId}`, {status:'onjob'});
 }
 function updateJobField(jobId, field, value){
   const job = jobs.find(j=>j.id===jobId);
-  if(job){ job[field] = value; renderAdmin(); renderBoard(); }
+  if(job){ job[field] = value; renderAdmin(); renderBoard(); persist('PATCH', `/api/jobs/${jobId}`, {[field]: value}); }
 }
 
 function renderAdmin(){
@@ -1213,8 +1270,15 @@ function renderCrew(){
   `;
 }
 
-/* ---------- INIT ---------- */
-applyRole();
+/* ---------- INIT ----------
+   Everything depends on the backend now, so wait for the first successful load before rendering
+   the real UI. If the backend can't be reached, applyRole() still runs so the tab/role chrome is
+   there, but every list will just be empty and the banner above explains why. */
+(async function init(){
+  await loadStateFromServer();
+  applyRole();
+  startBackgroundRefresh();
+})();
 </script>
 </body>
 </html>

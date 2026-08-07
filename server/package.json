@@ -9,7 +9,7 @@
     "test-webhook": "node test-webhook.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.5.0"
   },
   "license": "UNLICENSED",
   "private": true
