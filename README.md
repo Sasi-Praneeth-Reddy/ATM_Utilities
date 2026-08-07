@@ -5,13 +5,17 @@ one-way sync from the SmartMoving CRM.
 
 ## What's here
 
-- **`atm-scheduler.html`** — the scheduler itself. A single self-contained HTML/CSS/JS file, no
-  build step, no client-side dependencies. It's a thin client, though: it holds no data of its own
-  and needs the backend below running to load or save anything.
+- **`frontend/`** — the scheduler itself, as a React (Vite) app. It's a thin client: it holds no
+  data of its own and needs the backend below running to load or save anything. See
+  [`frontend/README.md`](frontend/README.md) for setup and project layout.
 - **`server/`** — a small Node + SQLite backend. It stores all scheduler data (trucks, drivers,
   jobs) and serves it over a REST API, and separately pulls schedulable jobs out of SmartMoving CRM
   into that same database. See [`server/README.md`](server/README.md) for setup, webhook
   configuration, deployment, and the full list of known limitations.
+- **`atm-scheduler.html`** — the original single-file HTML/CSS/JS version. Superseded by
+  `frontend/` (same features, ported 1:1 into React components) — kept around for now so nothing's
+  deleted before you've had a chance to confirm the new version works for you. Safe to delete once
+  you have.
 
 ## Features
 
@@ -40,14 +44,24 @@ The scheduler needs the backend running — there's no offline/mock-data-only mo
 data lives in its database.
 
 ```bash
+# 1. backend
 cd server
 cp .env.example .env
 # edit .env, add your SmartMoving API key (optional — only needed for CRM sync)
 npm start
 ```
-This creates and seeds `server/data/atm.db` on first run. Then open `atm-scheduler.html` — it
-connects to `http://localhost:8787` by default. Full backend details, including webhook setup for
-real-time SmartMoving sync and deployment notes, are in [`server/README.md`](server/README.md).
+This creates and seeds `server/data/atm.db` on first run. Full backend details, including webhook
+setup for real-time SmartMoving sync and deployment notes, are in
+[`server/README.md`](server/README.md).
+
+```bash
+# 2. frontend (separate terminal)
+cd frontend
+npm install
+npm run dev
+```
+This prints a local dev URL (usually `http://localhost:5173`) — open it in a browser. It connects
+to `http://localhost:8787` by default. More in [`frontend/README.md`](frontend/README.md).
 
 ## Status
 
@@ -62,12 +76,16 @@ actual dispatch.
 - [x] Shared persistence: SQLite database on the backend (trucks/drivers/jobs), served over a REST
       API — the scheduler is now a thin client with no local/offline storage, so multiple devices
       pointed at the same backend share one live board
+- [x] Frontend rewritten from a single HTML/JS file into a React (Vite) app in `frontend/` — same
+      features, ported 1:1 into components; build verified and every view smoke-tested against the
+      real backend
 - [ ] Live test of the sync against a real SmartMoving account
 - [ ] Real hosting for the backend (needed for webhooks — they require a public URL — and for
-      multi-device use outside one machine)
+      multi-device use outside one machine) and a static host for the built `frontend/`
 - [ ] Push job/schedule changes back to SmartMoving — currently blocked; their public API has no
       write endpoint for job date/time (see `server/README.md`)
-- [ ] Manual browser click-through test of the rewritten (backend-backed) scheduler UI
+- [ ] Manual browser click-through test of the React frontend (drag-and-drop, forms) — build and
+      component rendering are verified, but no interactive browser session yet
 
 ## License
 
