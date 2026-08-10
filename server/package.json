@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "mock": "node mock-smartmoving-server.js",
-    "test-webhook": "node test-webhook.js"
+    "test-webhook": "node test-webhook.js",
+    "create-admin": "node create-admin.js"
   },
   "engines": {
     "node": ">=22.5.0"

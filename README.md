@@ -27,9 +27,12 @@ one-way sync from the SmartMoving CRM.
   with a "needs N more trucks" indicator.
 - Scheduling conflict detection: overlapping jobs on the same truck are flagged, with the
   shorter/conflicting job always rendered on top so it's visible against a longer move underneath.
-- Three roles: **Admin** (full edit — trucks, drivers, jobs), **Dispatcher** (can assign/move jobs,
-  can't edit truck/driver master records), **Crew** (read-only, mobile-oriented, scoped to one
-  truck's jobs).
+- Login: Microsoft (Entra ID) sign-in only, tenant-restricted to Around Town Movers' real Microsoft
+  365 accounts (`@aroundtownmovers.com`, any case) — no passwords anywhere. Three roles —
+  **Admin** (full edit — trucks, drivers, jobs, and can grant/manage other users' access),
+  **Dispatcher** (can assign/move jobs, can't edit truck/driver master records or users), **Crew**
+  (read-only, mobile-oriented). See [`server/README.md`](server/README.md) "Login & accounts" for
+  the Entra ID app registration steps, how the first admin gets granted, and how to add more people.
 - SmartMoving sync (Admin → Trucks & Drivers → SmartMoving Sync panel): pulls jobs that need
   dispatching directly into the board. One-way — see [`server/README.md`](server/README.md) for
   why, and for the webhook + polling architecture that keeps it up to date.
@@ -47,12 +50,15 @@ data lives in its database.
 # 1. backend
 cd server
 cp .env.example .env
-# edit .env, add your SmartMoving API key (optional — only needed for CRM sync)
+# edit .env: register the app in Microsoft Entra ID and set MICROSOFT_CLIENT_ID/
+# MICROSOFT_CLIENT_SECRET/MICROSOFT_TENANT_ID, set ADMIN_EMAIL (grants the first admin — no
+# password needed), and, optionally, your SmartMoving API key
 npm start
 ```
-This creates and seeds `server/data/atm.db` on first run. Full backend details, including webhook
-setup for real-time SmartMoving sync and deployment notes, are in
-[`server/README.md`](server/README.md).
+This creates and seeds `server/data/atm.db` on first run, and grants the first admin account from
+`ADMIN_EMAIL` (they sign in with that address via Microsoft). Full backend details, including the
+Entra ID app registration walkthrough, login/account management, webhook setup for real-time
+SmartMoving sync, and deployment notes, are in [`server/README.md`](server/README.md).
 
 ```bash
 # 2. frontend (separate terminal)
@@ -79,6 +85,13 @@ actual dispatch.
 - [x] Frontend rewritten from a single HTML/JS file into a React (Vite) app in `frontend/` — same
       features, ported 1:1 into components; build verified and every view smoke-tested against the
       real backend
+- [x] Login: Microsoft (Entra ID) OAuth sign-in only, tenant-restricted to Around Town Movers' real
+      Microsoft 365 accounts (`@aroundtownmovers.com`), no passwords anywhere, httpOnly-cookie
+      sessions, role-based access (admin/dispatcher/crew) enforced on every API route, admin-only
+      Users panel to grant access / change roles / remove access. First admin account bootstraps
+      from `.env`; claim validation, CSRF state, tenant scoping, CORS, and domain gating all
+      verified — the live Microsoft redirect itself needs real Entra ID credentials to test
+      end-to-end (see `server/README.md` "Login & accounts")
 - [ ] Live test of the sync against a real SmartMoving account
 - [ ] Real hosting for the backend (needed for webhooks — they require a public URL — and for
       multi-device use outside one machine) and a static host for the built `frontend/`

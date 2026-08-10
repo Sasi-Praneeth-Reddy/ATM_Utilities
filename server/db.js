@@ -74,8 +74,29 @@ db.exec(`
     PRIMARY KEY (jobId, truckId)
   );
 
+  CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    role TEXT NOT NULL DEFAULT 'dispatcher',
+    createdAt TEXT NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_jobs_smartMovingJobId ON jobs(smartMovingJobId);
 `);
+
+// Migration: the users table originally had a NOT NULL passwordHash column, from before login
+// switched to Microsoft sign-in (no passwords anywhere anymore). Drop it if it's still there on an
+// existing database file — SQLite has supported DROP COLUMN since 3.35 (2021), which every Node
+// version new enough to have node:sqlite bundles. Wrapped defensively in case of an older SQLite
+// build; worst case the column just sits there unused.
+try {
+  const userColumns = db.prepare("PRAGMA table_info(users)").all();
+  if (userColumns.some(c => c.name === 'passwordHash')) {
+    db.exec('ALTER TABLE users DROP COLUMN passwordHash');
+  }
+} catch (err) {
+  console.warn('Could not drop the old users.passwordHash column (safe to ignore — it just goes unused):', err.message);
+}
 
 /* ---------- Sample data (used to seed an empty database on first run) ---------- */
 const SAMPLE_TRUCKS = [
@@ -291,6 +312,45 @@ function upsertSmartMovingJob(job) {
   return { job: getJob(job.id), created: true };
 }
 
+/* ---------- Users (login accounts) ----------
+   No passwords anywhere — accounts sign in with their real Microsoft 365 account (see auth.js).
+   A row here is really just "this email is allowed in, with this role"; an admin creates it
+   in advance (via the Users panel or create-admin.js), and signing in with Microsoft only
+   succeeds if the authenticated email matches a row that already exists. */
+const insertUserStmt = db.prepare(`
+  INSERT INTO users (id, email, role, createdAt) VALUES (@id, @email, @role, @createdAt)
+`);
+function createUser({ id, email, role }) {
+  insertUserStmt.run({ id, email, role: role || 'dispatcher', createdAt: new Date().toISOString() });
+  return getUserById(id);
+}
+
+function listUsers() {
+  return db.prepare('SELECT id, email, role, createdAt FROM users ORDER BY createdAt').all();
+}
+
+function getUserByEmail(email) {
+  return db.prepare('SELECT * FROM users WHERE email = ?').get(email) || null;
+}
+
+function getUserById(id) {
+  const row = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+  return row || null;
+}
+
+function updateUserRole(id, role) {
+  db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, id);
+  return getUserById(id);
+}
+
+function deleteUser(id) {
+  db.prepare('DELETE FROM users WHERE id = ?').run(id);
+}
+
+function countAdmins() {
+  return db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'").get().n;
+}
+
 /* ---------- Reset ---------- */
 function clearAll() {
   db.exec('DELETE FROM job_trucks; DELETE FROM jobs; DELETE FROM drivers; DELETE FROM trucks;');
@@ -322,4 +382,5 @@ module.exports = {
   createDriver, updateDriver,
   createJob, updateJob, setJobTrucks, upsertSmartMovingJob,
   resetToSampleData,
+  createUser, listUsers, getUserByEmail, getUserById, updateUserRole, deleteUser, countAdmins,
 };

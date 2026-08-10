@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { apiCall, initialBackendUrl, normalizeBackendUrl } from '../api';
+import { apiCall } from '../api';
 import { addDays, daysBetween } from '../utils/dates';
 
 function sameJSON(a, b) {
@@ -17,9 +17,14 @@ function sameJSON(a, b) {
  * innerHTML re-render would have wiped out whatever the user was mid-typing. That guard isn't
  * needed here — form inputs are their own component-local React state now, so a background data
  * refresh can't touch them.
+ *
+ * `backendUrl` is owned by the caller (shared with useAuth, since both need it). `enabled` gates
+ * the initial load and background polling — pass false until the user is actually logged in, so
+ * this doesn't fire a doomed /api/state call (and log a confusing error) before that.
+ * `onAuthError` fires whenever a request comes back 401, so the caller can bounce back to the
+ * login screen if a session expires mid-use.
  */
-export function useSchedulerData() {
-  const [backendUrl, setBackendUrlState] = useState(initialBackendUrl());
+export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {}) {
   const [trucks, setTrucks] = useState([]);
   const [drivers, setDrivers] = useState([]);
   const [jobs, setJobs] = useState([]);
@@ -36,11 +41,12 @@ export function useSchedulerData() {
     call(method, path, body)
       .then(() => setBackendErrorMsg(''))
       .catch((err) => {
+        if (err.status === 401) { onAuthError?.(); return; }
         setBackendErrorMsg(
           `Couldn't save your last change to the server (${err.message}). It may be lost on refresh — check your connection to ${backendUrl}.`
         );
       });
-  }, [call, backendUrl]);
+  }, [call, backendUrl, onAuthError]);
 
   const loadStateFromServer = useCallback(async () => {
     try {
@@ -53,22 +59,25 @@ export function useSchedulerData() {
       setLastSyncedAt(new Date());
       return true;
     } catch (err) {
+      if (err.status === 401) { onAuthError?.(); return false; }
       setBackendConnected(false);
       setBackendErrorMsg(err.message);
       return false;
     }
-  }, [call]);
+  }, [call, onAuthError]);
 
   // Initial load, and reload whenever the backend URL changes (e.g. the user retries with a
-  // different one from the disconnected banner).
+  // different one from the disconnected banner) — only once logged in.
   useEffect(() => {
+    if (!enabled) return;
     loadStateFromServer();
-  }, [loadStateFromServer]);
+  }, [enabled, loadStateFromServer]);
 
   // Background refresh every 15s so multiple tabs/devices converge on the same board. Only
   // swaps in new arrays when something actually changed, so unrelated components don't re-render
   // for no reason.
   useEffect(() => {
+    if (!enabled) return;
     const id = setInterval(async () => {
       try {
         const state = await call('GET', '/api/state');
@@ -79,16 +88,13 @@ export function useSchedulerData() {
         setDrivers((prev) => (sameJSON(prev, state.drivers) ? prev : state.drivers));
         setJobs((prev) => (sameJSON(prev, state.jobs) ? prev : state.jobs));
       } catch (err) {
+        if (err.status === 401) { onAuthError?.(); return; }
         setBackendConnected(false);
         setBackendErrorMsg(err.message);
       }
     }, 15000);
     return () => clearInterval(id);
-  }, [call]);
-
-  const setBackendUrl = useCallback((url) => {
-    setBackendUrlState(normalizeBackendUrl(url));
-  }, []);
+  }, [enabled, call, onAuthError]);
 
   const resetToSampleData = useCallback(() => {
     if (
@@ -262,7 +268,6 @@ export function useSchedulerData() {
   }, [jobs, persist]);
 
   return {
-    backendUrl, setBackendUrl,
     trucks, drivers, jobs,
     backendConnected, backendErrorMsg,
     lastSyncedAt,

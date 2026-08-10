@@ -3,6 +3,7 @@ import SyncPanel from './SyncPanel';
 import TruckAdminList from './TruckAdminList';
 import DriverAdminList from './DriverAdminList';
 import JobAssignments from './JobAssignments';
+import UsersAdmin from './UsersAdmin';
 
 export default function AdminTab({
   trucks, drivers, jobs, conflictIds,
@@ -10,6 +11,7 @@ export default function AdminTab({
   onCreateTruck, onCreateDriver,
   onUpdateTruckField, onUpdateTruckStatus, onLinkDriver, onUpdateDriverField, onUnassignDriverTruck,
   onSetJobSingleTruck, onToggleJobTruck, onUpdateJobField,
+  users, currentUserId, onCreateUser, onChangeUserRole, onDeleteUser,
 }) {
   const [showAddTruckForm, setShowAddTruckForm] = useState(false);
   const [showAddDriverForm, setShowAddDriverForm] = useState(false);
@@ -85,6 +87,16 @@ export default function AdminTab({
         onToggleJobTruck={onToggleJobTruck}
         onUpdateJobField={onUpdateJobField}
       />
+
+      <div style={{ marginTop: 22 }}>
+        <UsersAdmin
+          users={users}
+          currentUserId={currentUserId}
+          onCreateUser={onCreateUser}
+          onChangeRole={onChangeUserRole}
+          onDeleteUser={onDeleteUser}
+        />
+      </div>
     </section>
   );
 }
