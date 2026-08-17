@@ -1,4 +1,4 @@
-export default function Header({ user, onLogout, role, trucks, crewTruck, onCrewTruckChange }) {
+export default function Header({ user, onLogout, role, trucks, crewTruck, onCrewTruckChange, theme, onToggleTheme }) {
   return (
     <header>
       <div className="brand">
@@ -17,6 +17,16 @@ export default function Header({ user, onLogout, role, trucks, crewTruck, onCrew
           </select>
         )}
         <span>{user.email} <span style={{ opacity: 0.7 }}>({role})</span></span>
+        {onToggleTheme && (
+          <button
+            className="theme-toggle"
+            onClick={onToggleTheme}
+            title={theme === 'dark' ? 'Switch to day view' : 'Switch to night view'}
+            aria-label={theme === 'dark' ? 'Switch to day view' : 'Switch to night view'}
+          >
+            {theme === 'dark' ? '☀' : '☾'}
+          </button>
+        )}
         <button className="btn secondary" onClick={onLogout}>Log out</button>
       </div>
     </header>

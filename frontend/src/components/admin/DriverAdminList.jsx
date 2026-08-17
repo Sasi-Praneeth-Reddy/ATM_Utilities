@@ -26,37 +26,65 @@ function AddDriverForm({ onSave, onCancel }) {
   );
 }
 
-export default function DriverAdminList({ trucks, drivers, showAddForm, onSaveNewDriver, onCancelAddDriver, onUpdateField, onLinkDriver, onUnassignDriverTruck }) {
+function DriverCard({ d, trucks, drivers, onUpdateField, onLinkDriver, onUnassignDriverTruck, onDeleteDriver }) {
+  const assignedTruck = trucks.find((t) => t.driverId === d.id);
+
+  async function handleDelete() {
+    if (!window.confirm(`Remove driver "${d.name}"? If they're linked to a truck, that link will be cleared. This can't be undone.`)) return;
+    try {
+      await onDeleteDriver(d.id);
+    } catch (err) {
+      window.alert(`Couldn't delete driver: ${err.message}`);
+    }
+  }
+
+  return (
+    <div className="admin-card">
+      <h3>
+        <span className="dl-swatch" style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: driverColor(drivers, d.id), marginRight: 6 }} />
+        <input
+          type="text" value={d.name}
+          style={{ fontWeight: 700, fontSize: 13, width: 150 }}
+          onChange={(e) => onUpdateField(d.id, 'name', e.target.value)}
+        />
+      </h3>
+      <div className="row"><span className="field-label">Phone</span><input type="text" value={d.phone} onChange={(e) => onUpdateField(d.id, 'phone', e.target.value)} /></div>
+      <div className="row"><span className="field-label">License</span><input type="text" value={d.cdl} onChange={(e) => onUpdateField(d.id, 'cdl', e.target.value)} /></div>
+      <div className="row">
+        <span className="field-label">Truck</span>
+        <select
+          value={assignedTruck ? assignedTruck.id : ''}
+          onChange={(e) => (e.target.value ? onLinkDriver(e.target.value, d.id) : onUnassignDriverTruck(d.id))}
+        >
+          <option value="">— Unassigned —</option>
+          {trucks.map((t) => <option value={t.id} key={t.id}>{t.name}</option>)}
+        </select>
+      </div>
+      {onDeleteDriver && (
+        <div className="row" style={{ justifyContent: 'flex-end' }}>
+          <button className="btn secondary" style={{ color: 'var(--red)' }} onClick={handleDelete}>Delete driver</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function DriverAdminList({ trucks, drivers, showAddForm, onSaveNewDriver, onCancelAddDriver, onUpdateField, onLinkDriver, onUnassignDriverTruck, onDeleteDriver }) {
   return (
     <div>
       {showAddForm && <AddDriverForm onSave={onSaveNewDriver} onCancel={onCancelAddDriver} />}
-      {drivers.map((d) => {
-        const assignedTruck = trucks.find((t) => t.driverId === d.id);
-        return (
-          <div className="admin-card" key={d.id}>
-            <h3>
-              <span className="dl-swatch" style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: driverColor(drivers, d.id), marginRight: 6 }} />
-              <input
-                type="text" value={d.name}
-                style={{ fontWeight: 700, fontSize: 13, width: 150 }}
-                onChange={(e) => onUpdateField(d.id, 'name', e.target.value)}
-              />
-            </h3>
-            <div className="row"><span className="field-label">Phone</span><input type="text" value={d.phone} onChange={(e) => onUpdateField(d.id, 'phone', e.target.value)} /></div>
-            <div className="row"><span className="field-label">License</span><input type="text" value={d.cdl} onChange={(e) => onUpdateField(d.id, 'cdl', e.target.value)} /></div>
-            <div className="row">
-              <span className="field-label">Truck</span>
-              <select
-                value={assignedTruck ? assignedTruck.id : ''}
-                onChange={(e) => (e.target.value ? onLinkDriver(e.target.value, d.id) : onUnassignDriverTruck(d.id))}
-              >
-                <option value="">— Unassigned —</option>
-                {trucks.map((t) => <option value={t.id} key={t.id}>{t.name}</option>)}
-              </select>
-            </div>
-          </div>
-        );
-      })}
+      {drivers.map((d) => (
+        <DriverCard
+          key={d.id}
+          d={d}
+          trucks={trucks}
+          drivers={drivers}
+          onUpdateField={onUpdateField}
+          onLinkDriver={onLinkDriver}
+          onUnassignDriverTruck={onUnassignDriverTruck}
+          onDeleteDriver={onDeleteDriver}
+        />
+      ))}
     </div>
   );
 }

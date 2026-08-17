@@ -1,8 +1,9 @@
 /**
  * ATM Scheduler — backend API + SmartMoving sync + login.
  *
- * Requires Node 22.5+ (see the version check below) — uses Node's built-in `node:sqlite` so there
- * are still zero npm dependencies, but that module needs a fairly recent Node.
+ * Requires Node 22.5+ (see the version check below) — uses Node's built-in `node:sqlite`, which
+ * needs a fairly recent Node. This backend is otherwise dependency-free except for `nodemailer`
+ * (see `emailer.js` for why that's the one deliberate exception).
  *
  * This backend does three jobs:
  *  1. Serves the scheduler's own data (trucks/drivers/jobs/assignments) from a SQLite database
@@ -10,11 +11,11 @@
  *     each browser having its own separate localStorage copy.
  *  2. Pulls jobs FROM SmartMoving CRM (webhooks + a polling fallback) and writes them straight into
  *     that same database — see server/README.md "Webhooks vs. polling" for why both exist.
- *  3. Handles login: sign-in with Microsoft (Entra ID), restricted to the Around Town Movers
- *     Microsoft 365 tenant, an httpOnly-cookie session, and role-based access
+ *  3. Handles login: email + password sign-in, an httpOnly-cookie session, and role-based access
  *     (admin/dispatcher/crew) — see server/README.md "Login & accounts" for how the first admin
- *     gets access and how roles map to what each route allows. There are no passwords anywhere in
- *     this app.
+ *     gets access and how roles map to what each route allows. Nobody's password is ever stored in
+ *     plaintext (see auth.js), and there's no admin-set temp password — new accounts (and anyone
+ *     locked out) set their own password via an emailed one-time code.
  *
  * One-way sync only: editing a job's date/truck/time in the scheduler does NOT push back to
  * SmartMoving — their public API has no endpoint for that (checked exhaustively; see
@@ -23,24 +24,40 @@
  * API summary (routes marked [public] need no login; everything else needs a valid session, and
  * [admin]/[admin+dispatcher] further restrict by role):
  *   GET   /api/health                              [public]
- *   GET   /api/auth/microsoft/login                 [public] redirects to Microsoft's sign-in page
- *   GET   /api/auth/microsoft/callback               [public] Microsoft redirects back here after sign-in
+ *   POST  /api/auth/login                            [public] body: {email, password}
+ *   POST  /api/auth/forgot-password                  [public] body: {email} — emails a one-time code if the account exists
+ *   POST  /api/auth/reset-password                   [public] body: {email, otp, newPassword} — sets a new password and signs in
+ *   GET   /api/auth/status                           [public] { otpEmailConfigured, devBypassEnabled }
+ *   GET   /api/auth/dev-login?role=admin             [public, dev-only] signs in without a password — only
+ *                                                     responds when DEV_BYPASS_LOGIN=true. See server/README.md.
  *   POST  /api/auth/logout
  *   GET   /api/auth/me
  *   GET   /api/users                                [admin]
- *   POST  /api/users                                [admin]  body: {email, role} — grants access, doesn't create a password
+ *   POST  /api/users                                [admin]  body: {email, role} — grants access with no password set yet
  *   PATCH /api/users/:id                             [admin]  body: {role}
  *   DELETE /api/users/:id                            [admin]
  *   GET   /api/state                                -> { trucks, drivers, jobs }
  *   POST  /api/trucks                                [admin]  body: {name, size, capacity, homeBase}
  *   PATCH /api/trucks/:id                            [admin]  body: any truck field(s) to change
+ *   DELETE /api/trucks/:id                           [admin]  job_trucks rows cascade-delete; any driver
+ *                                                     linked to this truck is unlinked
  *   POST  /api/trucks/:id/link-driver                [admin]  body: {driverId}
  *   POST  /api/drivers                               [admin]  body: {name, phone, cdl}
  *   PATCH /api/drivers/:id                           [admin]  body: any driver field(s) to change
+ *   DELETE /api/drivers/:id                          [admin]  any truck linked to this driver is unlinked
  *   POST  /api/drivers/:id/unassign-truck            [admin]
+ *   POST  /api/jobs                                   [admin+dispatcher] body: {customer, date, endDate, startTime}
+ *                                                              — creates a manual "placeholder" job, unassigned,
+ *                                                              type inferred from date vs endDate
  *   PATCH /api/jobs/:id                              [admin+dispatcher] body: any job field(s), incl. truckIds[]
+ *   DELETE /api/jobs/:id                             [admin+dispatcher] permanently removes a job — UI only
+ *                                                              offers this for placeholder jobs, see db.js
  *   POST  /api/reset-to-sample-data                  [admin]
- *   POST  /api/sync-now                              [admin]  triggers an immediate SmartMoving poll sweep
+ *   POST  /api/clear-jobs                            [admin]  empties jobs only — trucks/drivers untouched
+ *   POST  /api/sync-now?from=YYYY-MM-DD&to=YYYY-MM-DD [admin]  triggers an immediate SmartMoving poll
+ *                                                              sweep; from/to are optional and override
+ *                                                              POLL_LOOKBACK_DAYS/POLL_LOOKAHEAD_DAYS
+ *                                                              for this sync only
  *   GET   /api/schedulable-jobs?statuses=4           [admin]  SmartMoving-sourced jobs only (debugging)
  *   POST  /webhooks/smartmoving?secret=...           [public, secret-checked] SmartMoving webhook receiver
  */
@@ -62,24 +79,17 @@ const crypto = require('crypto');
   }
 }
 
-// Minimal .env loader (kept dependency-free on purpose — see file header). Values already set
-// in the real environment (e.g. by your hosting platform) are left untouched.
-(function loadDotEnv() {
-  const envPath = path.join(__dirname, '.env');
-  if (!fs.existsSync(envPath)) return;
-  fs.readFileSync(envPath, 'utf8').split('\n').forEach(line => {
-    const match = line.match(/^\s*([\w.-]+)\s*=\s*(.*)?\s*$/);
-    if (!match) return;
-    const key = match[1];
-    let value = (match[2] || '').trim();
-    if (value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1);
-    if (!(key in process.env)) process.env[key] = value;
-  });
-})();
+// Loads server/.env into process.env (shared with create-admin.js and any other CLI script — see
+// load-env.js for why this used to be inline here and why that was a bug).
+require('./load-env');
 
 const db = require('./db');
 const auth = require('./auth');
-const { getAllLeads, getJobsByOpportunityId, getOpportunityDetails } = require('./smartmovingClient');
+const { sendOtpEmail, otpEmailConfigured } = require('./emailer');
+const {
+  getAllLeads, getJobsByOpportunityId, getOpportunityDetails,
+  getAllCrewMembers, getAllJobsByCrewMemberId, getAllCustomersWithOpportunities,
+} = require('./smartmovingClient');
 const { mapOpportunityToJobs } = require('./mapOpportunity');
 const { OPPORTUNITY_STATUS } = require('./mapJobs');
 
@@ -90,17 +100,15 @@ const POLL_INTERVAL_MINUTES = process.env.POLL_INTERVAL_MINUTES !== undefined ? 
 const POLL_LOOKBACK_DAYS = Number(process.env.POLL_LOOKBACK_DAYS) || 7;
 const POLL_LOOKAHEAD_DAYS = Number(process.env.POLL_LOOKAHEAD_DAYS) || 60;
 const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true';
-
-const MICROSOFT_CLIENT_ID = process.env.MICROSOFT_CLIENT_ID || '';
-const MICROSOFT_CLIENT_SECRET = process.env.MICROSOFT_CLIENT_SECRET || '';
-const MICROSOFT_TENANT_ID = process.env.MICROSOFT_TENANT_ID || '';
-const MICROSOFT_CONFIGURED = Boolean(MICROSOFT_CLIENT_ID && MICROSOFT_CLIENT_SECRET && MICROSOFT_TENANT_ID);
-// Must match exactly what's registered as a redirect URI in the Entra ID app registration.
-const BACKEND_URL = (process.env.BACKEND_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
-const MICROSOFT_REDIRECT_URI = `${BACKEND_URL}/api/auth/microsoft/callback`;
-// Where to send the browser after a login attempt (success or failure) — the frontend dev server
-// by default.
+// Only used by the dev-login bypass below, which is a full-page browser navigation (like an old
+// OAuth redirect) rather than a fetch call, so it needs somewhere to send the browser back to.
 const FRONTEND_URL = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+
+// ---- Local dev login bypass (NOT for production) ----
+// Lets you sign in without a real password or a configured email provider — useful for local
+// development/testing. Requires an explicit opt-in flag; never enable this on anything reachable
+// outside your own machine.
+const DEV_BYPASS_LOGIN = process.env.DEV_BYPASS_LOGIN === 'true';
 
 let SESSION_SECRET = process.env.SESSION_SECRET;
 let sessionSecretIsEphemeral = false;
@@ -111,17 +119,19 @@ if (!SESSION_SECRET) {
 
 /* ---------- Bootstrap the first admin account ----------
    Only runs when the users table is empty, so it never overwrites real accounts. Set ADMIN_EMAIL
-   in .env for the very first run — there's no password to set, since login happens via Microsoft;
-   this just grants that email address admin access so someone can sign in and use the Users panel
-   to grant everyone else access. Safe to remove ADMIN_EMAIL afterward (or leave it — it's only
-   consulted while there are zero users). */
+   in .env for the very first run. If ADMIN_PASSWORD is also set, the account can sign in with it
+   immediately; otherwise it's created with no password, and whoever owns that email needs to use
+   "Forgot password?" on the login screen (which requires SMTP_USER/SMTP_PASS to be
+   configured — see server/README.md) to set one before they can sign in. Safe to remove
+   ADMIN_EMAIL/ADMIN_PASSWORD afterward (or leave them — they're only consulted while there are
+   zero users). */
 (function bootstrapAdmin() {
   if (db.listUsers().length > 0) return;
   const email = auth.normalizeEmail(process.env.ADMIN_EMAIL);
   if (!email) {
     console.warn(
       'No user accounts exist yet and ADMIN_EMAIL is not set in .env — nobody can log in. Set it ' +
-      'in server/.env and restart, or run: node create-admin.js <email> [admin|dispatcher|crew]'
+      'in server/.env and restart, or run: node create-admin.js <email> [admin|dispatcher|crew] [password]'
     );
     return;
   }
@@ -130,14 +140,32 @@ if (!SESSION_SECRET) {
     return;
   }
   const id = 'U1';
-  db.createUser({ id, email, role: 'admin' });
-  console.log(`Granted admin access to: ${email} (they sign in with Microsoft using that address)`);
+  const adminPassword = process.env.ADMIN_PASSWORD || '';
+  const passwordHash = adminPassword ? auth.hashPassword(adminPassword) : undefined;
+  db.createUser({ id, email, role: 'admin', passwordHash });
+  console.log(passwordHash
+    ? `Granted admin access to: ${email} (signs in with the ADMIN_PASSWORD you set in .env — change it via "Forgot password?" afterward).`
+    : `Granted admin access to: ${email} — no password set yet. Use "Forgot password?" on the login screen to set one (requires email sending to be configured), or run: node create-admin.js ${email} admin <password>`);
 })();
 
 function todayYyyymmdd(offsetDays = 0) {
   const d = new Date();
   d.setDate(d.getDate() + offsetDays);
   return Number(`${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`);
+}
+
+/** Parses a "YYYY-MM-DD" string (as sent by an HTML <input type="date">) into the yyyymmdd integer
+ * format used everywhere else in this file (e.g. 20260812). Returns null for an empty/missing
+ * value, throws a descriptive error for a non-empty value that doesn't parse — so a bad manual
+ * sync-range request fails with a clear 400 instead of silently syncing the wrong window. */
+function parseDateParamToYyyymmdd(value, paramName) {
+  if (!value) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!m) throw new Error(`${paramName} must be in YYYY-MM-DD format, got "${value}"`);
+  const [, y, mo, d] = m;
+  const asDate = new Date(`${y}-${mo}-${d}T00:00:00`);
+  if (isNaN(asDate.getTime())) throw new Error(`${paramName} is not a valid date: "${value}"`);
+  return Number(`${y}${mo}${d}`);
 }
 
 function nextId(rows, prefix) {
@@ -163,8 +191,8 @@ function sendJson(req, res, status, body, extraHeaders) {
   res.end(data);
 }
 
-/** For the OAuth redirect dance — a top-level browser navigation, not a fetch call, so this just
-    needs a Location header (and, on the callback's success path, a Set-Cookie alongside it). */
+/** For the dev-login bypass — a top-level browser navigation, not a fetch call, so this just needs
+    a Location header alongside the Set-Cookie that signs the browser in. */
 function sendRedirect(res, status, location, extraHeaders) {
   res.writeHead(status, { Location: location, ...(extraHeaders || {}) });
   res.end();
@@ -244,29 +272,106 @@ async function hydrateOpportunity(opportunityId) {
 }
 
 /* ---------- Poll sweep (fallback/backfill) ---------- */
-async function pollSweep() {
-  const from = todayYyyymmdd(-POLL_LOOKBACK_DAYS);
-  const to = todayYyyymmdd(POLL_LOOKAHEAD_DAYS);
+/**
+ * Three independent discovery sources, merged before hydrating:
+ *
+ *  1. GET /api/leads — confirmed live in the dev portal (2026-08-10) to ONLY EVER return
+ *     New/InProgress opportunities by default (IncludeBad/IncludeLost are the only two widening
+ *     params that exist — there's no way to ask it for Booked/Completed/Closed). So on its own
+ *     this can never surface an already-booked job. Kept because it's the earliest signal (a lead
+ *     the moment it's created) and gives a customer name for free.
+ *  2. GET /api/crew-members/{id}/jobs — real JOBS, filtered by service date, that never go
+ *     through /api/leads at all. Finds already-booked, already-staffed work. Requires enumerating
+ *     crew members first (no status filter — see getAllCrewMembers's doc comment; filtering to
+ *     Active-only was found 2026-08-10 to silently miss real jobs on crew with any other status).
+ *  3. GET /api/customers — confirmed live 2026-08-10, added after a real user report of jobs
+ *     missing even with NO crew assigned yet (source 2 can't find those — nothing to enumerate
+ *     from). Lists customers filtered by job service date, each with opportunities[] across the
+ *     FULL status range and their jobs[] embedded — doesn't depend on lead-pipeline stage OR crew
+ *     assignment at all, closing the one gap sources 1 and 2 structurally can't reach.
+ *
+ * Each opportunity discovered by any source is hydrated exactly once via the shared
+ * hydrateOpportunity() (a Map dedupes by opportunityId before the hydration loop runs).
+ */
+async function pollSweep({ from: fromOverride, to: toOverride } = {}) {
+  const from = fromOverride ?? todayYyyymmdd(-POLL_LOOKBACK_DAYS);
+  const to = toOverride ?? todayYyyymmdd(POLL_LOOKAHEAD_DAYS);
   const errors = [];
   let leadCount = 0;
+  let crewJobOpportunityCount = 0;
+  let customerJobOpportunityCount = 0;
+  let jobCount = 0;
+  let leadsWithNoJobCount = 0;
+  let sourcesFailed = 0;
+
+  // opportunityId -> customerName (undefined if only found via sources 2/3, which don't carry one
+  // in the shape used for the Map key — source 3 actually does have a name, applied below).
+  const opportunityIds = new Map();
+
   try {
     const leads = await getAllLeads({ from, to, includeBad: false, includeLost: false });
     leadCount = leads.length;
-    for (const lead of leads) {
+    leads.forEach(l => opportunityIds.set(l.id, l.customerName));
+  } catch (err) {
+    sourcesFailed += 1;
+    errors.push({ opportunityId: null, customer: null, message: `GET /api/leads: ${err.message}` });
+  }
+
+  try {
+    // No status filter — see smartmovingClient.js's getAllCrewMembers doc comment. Filtering to
+    // "Active" only risks silently missing jobs assigned to crew whose real status string doesn't
+    // exactly match that, which has no relationship to whether they're actually working today.
+    const crewMembers = await getAllCrewMembers();
+    const crewOpportunityIds = new Set();
+    for (const crew of crewMembers) {
       try {
-        await hydrateOpportunity(lead.id);
+        const jobs = await getAllJobsByCrewMemberId(crew.id, { from, to });
+        jobs.forEach(job => { if (job.opportunityId) crewOpportunityIds.add(job.opportunityId); });
       } catch (err) {
-        errors.push({ opportunityId: lead.id, customer: lead.customerName, message: err.message });
+        errors.push({ opportunityId: null, customer: crew.name, message: `crew jobs: ${err.message}` });
       }
     }
-    lastPollAt = new Date().toISOString();
-    lastPollError = null;
-    recordEvent({ type: 'poll-sweep', leadCount, errorCount: errors.length });
+    crewJobOpportunityCount = crewOpportunityIds.size;
+    crewOpportunityIds.forEach(id => { if (!opportunityIds.has(id)) opportunityIds.set(id, undefined); });
   } catch (err) {
-    lastPollError = err.message;
-    recordEvent({ type: 'poll-sweep-failed', message: err.message });
+    sourcesFailed += 1;
+    errors.push({ opportunityId: null, customer: null, message: `GET /api/crew-members: ${err.message}` });
   }
-  return { errors, leadCount };
+
+  try {
+    const customers = await getAllCustomersWithOpportunities({ fromServiceDate: from, toServiceDate: to });
+    const customerOpportunityIds = new Set();
+    customers.forEach(customer => {
+      (customer.opportunities || []).forEach(opp => {
+        if (opp.id && Array.isArray(opp.jobs) && opp.jobs.length > 0) {
+          customerOpportunityIds.add(opp.id);
+          if (!opportunityIds.has(opp.id)) opportunityIds.set(opp.id, customer.name);
+        }
+      });
+    });
+    customerJobOpportunityCount = customerOpportunityIds.size;
+  } catch (err) {
+    sourcesFailed += 1;
+    errors.push({ opportunityId: null, customer: null, message: `GET /api/customers: ${err.message}` });
+  }
+
+  for (const [opportunityId, customerName] of opportunityIds) {
+    try {
+      const mappedJobs = await hydrateOpportunity(opportunityId);
+      jobCount += mappedJobs.length;
+      if (mappedJobs.length === 0) leadsWithNoJobCount += 1;
+    } catch (err) {
+      errors.push({ opportunityId, customer: customerName, message: err.message });
+    }
+  }
+
+  lastPollAt = new Date().toISOString();
+  lastPollError = sourcesFailed >= 3 ? errors[0].message : null;
+  recordEvent({
+    type: 'poll-sweep', leadCount, crewJobOpportunityCount, customerJobOpportunityCount,
+    opportunityCount: opportunityIds.size, jobCount, leadsWithNoJobCount, errorCount: errors.length,
+  });
+  return { errors, leadCount, crewJobOpportunityCount, customerJobOpportunityCount, jobCount, leadsWithNoJobCount, from, to };
 }
 
 let pollTimer = null;
@@ -329,11 +434,12 @@ async function handleWebhook(req, res, url) {
   }
 }
 
-/** Shapes a user row for the API response (kept as its own function in case fields are added
-    later that shouldn't go out over the wire). */
+/** Shapes a user row for the API response — deliberately leaves out passwordHash/otpHash/
+    otpExpiresAt, which should never go out over the wire. `hasPassword` lets the Users panel show
+    whether an account has finished first-time setup yet without exposing the hash itself. */
 function publicUser(row) {
   if (!row) return null;
-  return { id: row.id, email: row.email, role: row.role, createdAt: row.createdAt };
+  return { id: row.id, email: row.email, role: row.role, createdAt: row.createdAt, hasPassword: Boolean(row.passwordHash ?? row.hasPassword) };
 }
 
 /* ---------- HTTP server ---------- */
@@ -367,64 +473,85 @@ const server = http.createServer(async (req, res) => {
 
     /* ---- Auth ---- */
 
-    if (p === '/api/auth/microsoft/login' && req.method === 'GET') {
-      if (!MICROSOFT_CONFIGURED) {
-        sendJson(req, res, 500, { error: 'Microsoft sign-in is not configured on this server — set MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, and MICROSOFT_TENANT_ID in server/.env.' });
+    if (p === '/api/auth/login' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      const email = auth.normalizeEmail(body.email);
+      const password = body.password || '';
+      const row = db.getUserByEmail(email);
+      // Same generic error either way — confirming "that email exists but the password's wrong"
+      // vs. "no such account" would let someone probe which addresses have access.
+      if (!row || !auth.verifyPassword(password, row.passwordHash)) {
+        recordEvent({ type: 'login-failed', email });
+        sendJson(req, res, 401, { error: 'Incorrect email or password.' });
         return;
       }
-      const state = auth.createOAuthState(SESSION_SECRET);
-      const authorizeUrl = auth.buildMicrosoftAuthorizeUrl({
-        tenantId: MICROSOFT_TENANT_ID, clientId: MICROSOFT_CLIENT_ID, redirectUri: MICROSOFT_REDIRECT_URI, state,
-      });
-      sendRedirect(res, 302, authorizeUrl);
+      const token = auth.createSessionToken(row, SESSION_SECRET);
+      recordEvent({ type: 'login', email });
+      sendJson(req, res, 200, publicUser(row), { 'Set-Cookie': auth.sessionCookieHeader(token, COOKIE_SECURE) });
       return;
     }
 
-    if (p === '/api/auth/microsoft/callback' && req.method === 'GET') {
-      const msError = url.searchParams.get('error');
-      if (msError) {
-        recordEvent({ type: 'login-failed', reason: msError });
-        sendRedirect(res, 302, `${FRONTEND_URL}/?authError=${encodeURIComponent(msError)}`);
-        return;
-      }
-
-      const state = url.searchParams.get('state');
-      if (!auth.verifyOAuthState(state, SESSION_SECRET)) {
-        sendRedirect(res, 302, `${FRONTEND_URL}/?authError=invalid_state`);
-        return;
-      }
-
-      const code = url.searchParams.get('code');
-      let tokenData, claims;
-      try {
-        tokenData = await auth.exchangeMicrosoftCode({
-          tenantId: MICROSOFT_TENANT_ID, clientId: MICROSOFT_CLIENT_ID, clientSecret: MICROSOFT_CLIENT_SECRET,
-          redirectUri: MICROSOFT_REDIRECT_URI, code,
-        });
-        claims = auth.decodeJwtPayload(tokenData.id_token);
-        auth.validateMicrosoftIdToken(claims, { clientId: MICROSOFT_CLIENT_ID, tenantId: MICROSOFT_TENANT_ID });
-      } catch (err) {
-        recordEvent({ type: 'login-failed', reason: err.message });
-        sendRedirect(res, 302, `${FRONTEND_URL}/?authError=sign_in_failed`);
-        return;
-      }
-
-      const email = auth.normalizeEmail(claims.email || claims.preferred_username);
-      if (!auth.isCompanyEmail(email)) {
-        recordEvent({ type: 'login-rejected', reason: 'wrong domain', email });
-        sendRedirect(res, 302, `${FRONTEND_URL}/?authError=wrong_domain`);
-        return;
-      }
-
+    if (p === '/api/auth/forgot-password' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      const email = auth.normalizeEmail(body.email);
       const row = db.getUserByEmail(email);
-      if (!row) {
-        recordEvent({ type: 'login-rejected', reason: 'no account', email });
-        sendRedirect(res, 302, `${FRONTEND_URL}/?authError=not_authorized`);
+      // Always the same response regardless of whether the account exists — otherwise this route
+      // becomes a way to enumerate which addresses have access to the app.
+      if (row) {
+        const code = auth.generateOtp();
+        const otpHash = auth.hashOtp(code, SESSION_SECRET);
+        db.setUserOtp(row.id, otpHash, new Date(Date.now() + auth.OTP_TTL_MS).toISOString());
+        try {
+          await sendOtpEmail(email, code);
+          recordEvent({ type: 'otp-sent', email });
+        } catch (err) {
+          recordEvent({ type: 'otp-send-failed', email, message: err.message });
+        }
+      }
+      sendJson(req, res, 200, { ok: true, message: 'If that email has access, a reset code was sent to it.' });
+      return;
+    }
+
+    if (p === '/api/auth/reset-password' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      const email = auth.normalizeEmail(body.email);
+      const code = String(body.otp || '').trim();
+      const newPassword = body.newPassword || '';
+      const row = db.getUserByEmail(email);
+      const otpValid = row && row.otpHash && row.otpExpiresAt
+        && Date.now() <= Date.parse(row.otpExpiresAt)
+        && auth.verifyOtp(code, row.otpHash, SESSION_SECRET);
+      if (!otpValid) {
+        sendJson(req, res, 400, { error: 'That code is invalid or has expired. Request a new one.' });
         return;
       }
-
+      if (newPassword.length < 8) {
+        sendJson(req, res, 400, { error: 'Password must be at least 8 characters.' });
+        return;
+      }
+      db.setUserPassword(row.id, auth.hashPassword(newPassword));
       const token = auth.createSessionToken(row, SESSION_SECRET);
-      recordEvent({ type: 'login', email });
+      recordEvent({ type: 'password-reset', email });
+      sendJson(req, res, 200, publicUser(db.getUserById(row.id)), { 'Set-Cookie': auth.sessionCookieHeader(token, COOKIE_SECURE) });
+      return;
+    }
+
+    if (p === '/api/auth/status' && req.method === 'GET') {
+      sendJson(req, res, 200, { otpEmailConfigured: otpEmailConfigured(), devBypassEnabled: DEV_BYPASS_LOGIN });
+      return;
+    }
+
+    if (p === '/api/auth/dev-login' && req.method === 'GET') {
+      if (!DEV_BYPASS_LOGIN) { sendJson(req, res, 404, { error: 'Not found' }); return; }
+      const requestedRole = url.searchParams.get('role');
+      const users = db.listUsers();
+      if (users.length === 0) {
+        sendJson(req, res, 500, { error: 'No user accounts exist yet — set ADMIN_EMAIL in server/.env and restart, or run node create-admin.js <email> [role].' });
+        return;
+      }
+      const row = users.find(u => u.role === requestedRole) || users.find(u => u.role === 'admin') || users[0];
+      const token = auth.createSessionToken(row, SESSION_SECRET);
+      recordEvent({ type: 'dev-login-bypass', email: row.email, role: row.role });
       sendRedirect(res, 302, FRONTEND_URL, { 'Set-Cookie': auth.sessionCookieHeader(token, COOKIE_SECURE) });
       return;
     }
@@ -466,8 +593,8 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const id = nextId(db.listUsers(), 'U');
-      // Grants access only — there's no password to set. This person can now sign in with
-      // Microsoft using this exact email address.
+      // Grants access only — no password set. This person uses "Forgot password?" on the login
+      // screen to set one via an emailed one-time code before they can sign in.
       const user = db.createUser({ id, email, role });
       sendJson(req, res, 201, publicUser(user));
       return;
@@ -524,9 +651,27 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (p === '/api/clear-jobs' && req.method === 'POST') {
+      requireRole(currentUser, ['admin']);
+      sendJson(req, res, 200, db.clearJobs());
+      return;
+    }
+
     if (p === '/api/sync-now' && req.method === 'POST') {
       requireRole(currentUser, ['admin']);
-      const result = await pollSweep();
+      let from, to;
+      try {
+        from = parseDateParamToYyyymmdd(url.searchParams.get('from'), 'from');
+        to = parseDateParamToYyyymmdd(url.searchParams.get('to'), 'to');
+      } catch (err) {
+        sendJson(req, res, 400, { error: err.message });
+        return;
+      }
+      if (from && to && from > to) {
+        sendJson(req, res, 400, { error: '"from" date must be on or before "to" date' });
+        return;
+      }
+      const result = await pollSweep({ from, to });
       sendJson(req, res, 200, { ...result, state: db.getState() });
       return;
     }
@@ -546,6 +691,13 @@ const server = http.createServer(async (req, res) => {
       requireRole(currentUser, ['admin']);
       const body = await readJsonBody(req);
       sendJson(req, res, 200, db.updateTruck(m[1], body));
+      return;
+    }
+    if (m && req.method === 'DELETE') {
+      requireRole(currentUser, ['admin']);
+      const { trucks } = db.getState();
+      if (!trucks.some(t => t.id === m[1])) { sendJson(req, res, 404, { error: 'Truck not found' }); return; }
+      sendJson(req, res, 200, db.deleteTruck(m[1]));
       return;
     }
 
@@ -576,12 +728,57 @@ const server = http.createServer(async (req, res) => {
       sendJson(req, res, 200, db.updateDriver(m[1], body));
       return;
     }
+    if (m && req.method === 'DELETE') {
+      requireRole(currentUser, ['admin']);
+      const { drivers } = db.getState();
+      if (!drivers.some(d => d.id === m[1])) { sendJson(req, res, 404, { error: 'Driver not found' }); return; }
+      sendJson(req, res, 200, db.deleteDriver(m[1]));
+      return;
+    }
 
     m = p.match(/^\/api\/drivers\/([^/]+)\/unassign-truck$/);
     if (m && req.method === 'POST') {
       requireRole(currentUser, ['admin']);
       db.unassignDriverTruck(m[1]);
       sendJson(req, res, 200, db.getState());
+      return;
+    }
+
+    // Manually created "placeholder" job — a stub for a booking that isn't in SmartMoving yet (or
+    // never will be), created directly from the day view with just a name/date/time so a
+    // dispatcher can pencil something in and fill in the rest later. `source: 'placeholder'`
+    // reuses the same column SmartMoving-sourced jobs use to tag themselves (see SmBadge in
+    // JobVisuals.jsx) rather than adding a new column for what's really the same concept —
+    // "where did this job come from."
+    if (p === '/api/jobs' && req.method === 'POST') {
+      requireRole(currentUser, ['admin', 'dispatcher']);
+      const body = await readJsonBody(req);
+      if (!body.date) { sendJson(req, res, 400, { error: 'date is required' }); return; }
+      const { jobs } = db.getState();
+      const id = nextId(jobs, 'J-');
+      const endDate = body.endDate || body.date;
+      // No explicit type picker in the quick-add form — inferred the same way the rest of the
+      // board treats dates: a job that runs past a single day is a multi-day (long-distance-style)
+      // placeholder, otherwise it's a same-day local one. Matches how JobEditModal already frames
+      // "until which day" as the field that distinguishes the two.
+      const type = endDate > body.date ? 'long_distance' : 'local';
+      const job = db.createJob({
+        id,
+        customer: (body.customer || '').trim() || 'New job',
+        type,
+        date: body.date,
+        endDate,
+        startTime: body.startTime || null,
+        duration: type === 'local' ? 2 : null,
+        origin: '',
+        destination: '',
+        crewSize: null,
+        trucksNeeded: 1,
+        status: 'scheduled',
+        source: 'placeholder',
+        truckIds: [],
+      });
+      sendJson(req, res, 201, { ...job, state: db.getState() });
       return;
     }
 
@@ -592,6 +789,16 @@ const server = http.createServer(async (req, res) => {
       const job = db.getJob(m[1]);
       if (!job) { sendJson(req, res, 404, { error: 'Job not found' }); return; }
       sendJson(req, res, 200, db.updateJob(m[1], body));
+      return;
+    }
+
+    // Same role gate as PATCH — the frontend only ever offers this for placeholder jobs (see
+    // db.js's deleteJob doc comment for why), but that's a UI choice, not enforced here.
+    if (m && req.method === 'DELETE') {
+      requireRole(currentUser, ['admin', 'dispatcher']);
+      const job = db.getJob(m[1]);
+      if (!job) { sendJson(req, res, 404, { error: 'Job not found' }); return; }
+      sendJson(req, res, 200, db.deleteJob(m[1]));
       return;
     }
 
@@ -635,9 +842,13 @@ server.listen(PORT, () => {
     console.warn('SESSION_SECRET is not set in .env — using a random one generated for this run. ' +
       'Everyone will be logged out on the next restart. Set SESSION_SECRET in .env to avoid that.');
   }
-  console.log(MICROSOFT_CONFIGURED
-    ? `Microsoft sign-in is configured (tenant ${MICROSOFT_TENANT_ID}). Redirect URI: ${MICROSOFT_REDIRECT_URI}`
-    : 'Microsoft sign-in is NOT configured — set MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, and MICROSOFT_TENANT_ID in .env before anyone can log in.');
+  console.log(otpEmailConfigured()
+    ? 'Password-reset emails are configured (SMTP).'
+    : 'Password-reset emails are NOT configured — set SMTP_USER and SMTP_PASS in .env, or nobody without a password can get one (see server/README.md "Login & accounts").');
+  if (DEV_BYPASS_LOGIN) {
+    console.warn('⚠️  DEV_BYPASS_LOGIN is active — /api/auth/dev-login skips password checks entirely. ' +
+      'Local dev only. Do not set this on anything reachable outside your own machine.');
+  }
   console.log(`${db.listUsers().length} user account(s) have access.`);
   if (process.env.SMARTMOVING_API_KEY) pollSweep().catch(() => {}); // warm the store on startup
   startPolling();

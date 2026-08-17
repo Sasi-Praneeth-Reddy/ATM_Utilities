@@ -1,5 +1,5 @@
 // Job/truck/driver/conflict helpers — ported 1:1 from the original atm-scheduler.html.
-import { jobEnd, timeToHour, daysBetween } from './dates';
+import { jobEnd, timeToHour, daysBetween, jobActiveOn } from './dates';
 
 export const DRIVER_COLORS = [
   '#7c3aed', '#0891b2', '#be185d', '#4338ca', '#0f766e', '#a16207', '#525252', '#9333ea',
@@ -25,6 +25,20 @@ export function statusClass(s) {
 }
 export function statusLabel(s) {
   return s === 'available' ? 'Available' : s === 'onjob' ? 'On Job' : 'Maintenance';
+}
+
+/** A truck's "Available"/"On Job" state used to be a persisted field that got flipped to 'onjob'
+ * the moment a job was assigned but never flipped back once that job was removed/unassigned —
+ * trucks got stuck showing "On Job" forever. Fixed by deriving it fresh for whatever date is being
+ * viewed: a truck is 'onjob' only on days it actually has an active job assigned, 'available'
+ * otherwise. 'maintenance' is the one manual, non-derived state — a dispatcher taking a truck out
+ * of service isn't something job assignments should silently override, so it always wins
+ * regardless of what's on the board that day. Any other stored value (including a stale 'onjob'
+ * left over from before this fix) is treated as "no override" and computed automatically. */
+export function deriveTruckStatus(truck, jobs, date) {
+  if (truck.status === 'maintenance') return 'maintenance';
+  const hasActiveJob = jobs.some((j) => jobTruckIds(j).includes(truck.id) && jobActiveOn(j, date));
+  return hasActiveJob ? 'onjob' : 'available';
 }
 
 export function driverColor(drivers, driverId) {
@@ -66,6 +80,31 @@ export function getJobDriverColor(trucks, drivers, j) {
   const truck = jobTrucks(trucks, j)[0];
   if (!truck || !truck.driverId) return null;
   return driverColor(drivers, truck.driverId);
+}
+
+/** Groups jobs that share a SmartMoving opportunity (one booking split into multiple jobs — e.g.
+ * quote 23569 with jobs 23569-1/23569-2/23569-3, all sharing one smartMovingOpportunityId) so the
+ * unassigned tray can show one chip with a picker instead of one row per job. Jobs with no
+ * smartMovingOpportunityId (locally created), or the lone job on an opportunity, are returned
+ * ungrouped — grouping only helps once there's more than one job to choose between. */
+export function groupByOpportunity(jobsArr) {
+  const byOpportunity = new Map();
+  const singles = [];
+  jobsArr.forEach((j) => {
+    if (j.smartMovingOpportunityId) {
+      const list = byOpportunity.get(j.smartMovingOpportunityId) || [];
+      list.push(j);
+      byOpportunity.set(j.smartMovingOpportunityId, list);
+    } else {
+      singles.push(j);
+    }
+  });
+  const groups = [];
+  byOpportunity.forEach((list) => {
+    if (list.length > 1) groups.push(list);
+    else singles.push(...list);
+  });
+  return { groups, singles };
 }
 
 /* ---------- CONFLICT DETECTION ---------- */

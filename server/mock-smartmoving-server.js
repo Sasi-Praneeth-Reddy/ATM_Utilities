@@ -108,6 +108,84 @@ const OPPORTUNITIES = {
       crewMembers: ['crew-8', 'crew-9'],
     }],
   },
+  // Absent from LEADS AND only ever assigned to crew-9, whose status is "Inactive" — models a
+  // real gap found 2026-08-10: filtering crew enumeration to Status=Active would silently miss
+  // this job even though it's real, booked, and staffed. Proves getAllCrewMembers() with no
+  // status filter finds it.
+  'opp-inactive-crew-005': {
+    id: 'opp-inactive-crew-005', quoteNumber: 90005,
+    customer: { id: 'cust-5', name: 'Priya Shah' },
+    opportunityType: 0, // Local
+    status: 4, // Booked
+    serviceDate: 20260808,
+    jobs: [{
+      id: 'job-inactive-crew-1', jobNumber: 'J-90005', jobDate: 20260808,
+      jobAddresses: ['100 Speer Blvd, Denver, CO', '200 Union Blvd, Lakewood, CO'],
+      arrivalWindow: { startTime: 9, endTime: 11 },
+      crewMembers: ['crew-9'],
+    }],
+  },
+  // Booked, with a job already created, but NO crew assigned to it at all (crewMembers: []) and
+  // not present in LEADS or any CREW_JOBS entry — models the real gap reported 2026-08-10 that
+  // neither /api/leads nor /api/crew-members/{id}/jobs can reach, since there's no crew member to
+  // enumerate from. Only GET /api/customers (see CUSTOMERS below) can find this one.
+  'opp-unstaffed-006': {
+    id: 'opp-unstaffed-006', quoteNumber: 90006,
+    customer: { id: 'cust-6', name: 'Marcus Webb' },
+    opportunityType: 0, // Local
+    status: 4, // Booked
+    serviceDate: 20260809,
+    jobs: [{
+      id: 'job-unstaffed-1', jobNumber: 'J-90006', jobDate: 20260809,
+      jobAddresses: ['300 Blake St, Denver, CO', '400 17th St, Denver, CO'],
+      arrivalWindow: { startTime: 10, endTime: 12 },
+      crewMembers: [],
+    }],
+  },
+};
+
+// GET /api/customers — confirmed live in the dev portal 2026-08-10. Real response shape is a
+// customer-centric summary (not full opportunity/job detail — that still comes from
+// OPPORTUNITIES above via getOpportunityDetails), used purely for discovery. Deliberately doesn't
+// filter by FromServiceDate/ToServiceDate here — the mock only needs to prove pollSweep's parsing
+// and dedup logic works, not reproduce SmartMoving's exact server-side date-filtering behavior
+// (which can't be verified without a live account anyway).
+const CUSTOMERS = [
+  {
+    id: 'cust-6', name: 'Marcus Webb',
+    opportunities: [{
+      id: 'opp-unstaffed-006', quoteNumber: '90006', status: 4,
+      jobs: [{ id: 'job-unstaffed-1', jobNumber: 'J-90006', serviceDate: '20260809', type: 1 }],
+    }],
+  },
+  {
+    id: 'cust-3', name: 'Not Yet Booked',
+    opportunities: [{ id: 'opp-lead-003', quoteNumber: '90099', status: 1, jobs: [] }],
+  },
+];
+
+// Crew members + their jobs — models GET /api/crew-members and GET /api/crew-members/{id}/jobs,
+// confirmed live in the dev portal 2026-08-10. Deliberately assigns opp-direct-004's job to
+// crew-8: that opportunity is NOT in LEADS above (it simulates a direct booking that never went
+// through the lead pipeline), so this is what proves the poll sweep's crew-jobs source finds it
+// even with zero webhooks configured — the leads-based source alone cannot.
+const CREW_MEMBERS = [
+  { id: 'crew-1', name: 'Alex Rivera', status: 'Active' },
+  { id: 'crew-8', name: 'Jordan Park', status: 'Active' },
+  { id: 'crew-9', name: 'Sam Okafor', status: 'Inactive' },
+];
+
+const CREW_JOBS = {
+  'crew-1': [
+    { id: 'job-kessler-1', jobNumber: 'J-90001', opportunityId: 'opp-kessler-001', serviceType: 1, serviceDate: 20260805 },
+  ],
+  'crew-8': [
+    { id: 'job-direct-1', jobNumber: 'J-90004', opportunityId: 'opp-direct-004', serviceType: 1, serviceDate: 20260807 },
+  ],
+  // Inactive, but still has a real job — proves getAllCrewMembers() must NOT filter by status.
+  'crew-9': [
+    { id: 'job-inactive-crew-1', jobNumber: 'J-90005', opportunityId: 'opp-inactive-crew-005', serviceType: 1, serviceDate: 20260808 },
+  ],
 };
 
 function json(res, status, body) {
@@ -134,10 +212,38 @@ const server = http.createServer((req, res) => {
     });
   }
 
-  const jobsMatch = url.pathname.match(/^\/v1\/api\/premium\/opportunities\/([^/]+)\/jobs$/);
+  // Basic-tier "Get jobs by opportunityId" — confirmed live path has no /premium/ segment.
+  const jobsMatch = url.pathname.match(/^\/v1\/api\/opportunities\/([^/]+)\/jobs$/);
   if (jobsMatch) {
     const opportunityId = jobsMatch[1];
     return json(res, 200, JOBS_BY_OPPORTUNITY[opportunityId] || []);
+  }
+
+  if (url.pathname === '/v1/api/crew-members') {
+    const status = url.searchParams.get('Status');
+    const results = CREW_MEMBERS.filter(c => !status || c.status === status);
+    return json(res, 200, {
+      pageNumber: 1, pageSize: 100, lastPage: true, totalPages: 1,
+      totalResults: results.length, totalThisPage: results.length, pageResults: results,
+    });
+  }
+
+  const crewJobsMatch = url.pathname.match(/^\/v1\/api\/crew-members\/([^/]+)\/jobs$/);
+  if (crewJobsMatch) {
+    const crewMemberId = crewJobsMatch[1];
+    const results = CREW_JOBS[crewMemberId] || [];
+    return json(res, 200, {
+      pageNumber: 1, pageSize: 100, lastPage: true, totalPages: 1,
+      totalResults: results.length, totalThisPage: results.length, pageResults: results,
+    });
+  }
+
+  if (url.pathname === '/v1/api/customers') {
+    // Real response is a plain array, not a {pageResults} wrapper — confirmed live 2026-08-10.
+    const page = Number(url.searchParams.get('Page')) || 1;
+    const pageSize = Number(url.searchParams.get('PageSize')) || 100;
+    const start = (page - 1) * pageSize;
+    return json(res, 200, CUSTOMERS.slice(start, start + pageSize));
   }
 
   const oppMatch = url.pathname.match(/^\/v1\/api\/opportunities\/([^/]+)$/);

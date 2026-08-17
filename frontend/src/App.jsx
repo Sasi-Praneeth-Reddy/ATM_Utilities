@@ -11,11 +11,27 @@ import LoginScreen from './components/LoginScreen';
 import BoardTab from './components/board/BoardTab';
 import LDPlanner from './components/LDPlanner';
 import AdminTab from './components/admin/AdminTab';
+import JobAssignmentsTab from './components/admin/JobAssignmentsTab';
+import UsersTab from './components/admin/UsersTab';
 import CrewTab from './components/CrewTab';
 
 export default function App() {
   const [backendUrl, setBackendUrlState] = useState(initialBackendUrl());
   const setBackendUrl = (url) => setBackendUrlState(normalizeBackendUrl(url));
+
+  // Day/night theme. Starts from the OS/browser's own light-vs-dark preference and can be
+  // switched with the header toggle — but deliberately isn't saved anywhere (no localStorage),
+  // consistent with this app's "nothing lives only on one device" rule, so it just falls back to
+  // system preference again on the next visit rather than remembering a per-device choice.
+  const [theme, setTheme] = useState(() => (
+    typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+      ? 'dark'
+      : 'light'
+  ));
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
+  const toggleTheme = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
 
   const authState = useAuth(backendUrl);
   const { user, status: authStatus } = authState;
@@ -38,21 +54,6 @@ export default function App() {
     setActiveTab(role === 'crew' ? 'crew' : 'board');
   }, [role]);
 
-  // After a Microsoft sign-in redirect, the backend sends the browser back here with
-  // ?authError=... on failure (nothing added on success). Pick it up once, then scrub it from the
-  // URL so refreshing the page doesn't keep re-showing a stale error.
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const err = params.get('authError');
-    if (err) {
-      authState.setAuthError(err);
-      params.delete('authError');
-      const query = params.toString();
-      window.history.replaceState({}, '', window.location.pathname + (query ? `?${query}` : ''));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // Keep the crew truck selector pointed at a real truck once data loads.
   useEffect(() => {
     if (trucks.length && !trucks.some((t) => t.id === currentCrewTruck)) {
@@ -70,9 +71,12 @@ export default function App() {
   if (authStatus === 'unauthenticated') {
     return (
       <LoginScreen
-        microsoftLoginUrl={authState.microsoftLoginUrl}
-        authError={authState.authError}
+        onLogin={authState.login}
+        onForgotPassword={authState.forgotPassword}
+        onResetPassword={authState.resetPassword}
         connectionError={authState.connectionError}
+        devBypassEnabled={authState.devBypassEnabled}
+        devLoginUrl={authState.devLoginUrl}
       />
     );
   }
@@ -86,9 +90,15 @@ export default function App() {
         trucks={trucks}
         crewTruck={currentCrewTruck}
         onCrewTruckChange={setCurrentCrewTruck}
+        theme={theme}
+        onToggleTheme={toggleTheme}
       />
       <Nav role={role} activeTab={activeTab} onTabChange={setActiveTab} />
-      <main>
+      {/* Board tab (the truck timeline, now a full 24-hour day) needs real width — capping it at
+          the same 1400px reading width as the admin forms just left empty space on both sides of
+          a wide monitor while still forcing the timeline to scroll horizontally. Other tabs keep
+          the narrower, more readable width. */}
+      <main className={activeTab === 'board' || activeTab === 'ld' ? 'board-main' : ''}>
         <BackendBanner
           backendConnected={data.backendConnected}
           backendErrorMsg={data.backendErrorMsg}
@@ -110,24 +120,46 @@ export default function App() {
             onAddTruckToJob={data.addTruckToJob}
             onRemoveTruck={data.removeTruckFromJob}
             onMoveJobDate={data.moveJobDate}
+            onAddExtraTruck={data.addExtraTruckToJob}
+            onUpdateJobFields={data.updateJobFields}
+            onCreateJob={data.createJob}
+            onDeleteJob={data.deleteJob}
           />
         )}
 
         {activeTab === 'ld' && (
-          <LDPlanner trucks={trucks} drivers={drivers} jobs={jobs} conflictIds={conflictIds} />
+          <LDPlanner
+            role={role}
+            trucks={trucks} drivers={drivers} jobs={jobs}
+            conflicts={conflicts} conflictIds={conflictIds}
+          />
         )}
 
         {activeTab === 'admin' && role === 'admin' && (
           <AdminTab
-            trucks={trucks} drivers={drivers} jobs={jobs} conflictIds={conflictIds}
+            trucks={trucks} drivers={drivers} jobs={jobs}
             syncStatus={data.syncStatus} onSyncNow={data.syncNow} lastSyncedAt={data.lastSyncedAt}
             onResetToSampleData={data.resetToSampleData}
+            onClearJobs={data.clearJobs}
             onCreateTruck={data.createTruck} onCreateDriver={data.createDriver}
             onUpdateTruckField={data.updateTruckField} onUpdateTruckStatus={data.updateTruckStatus}
             onLinkDriver={data.linkTruckDriver}
             onUpdateDriverField={data.updateDriverField} onUnassignDriverTruck={data.unassignDriverTruck}
+            onDeleteTruck={data.deleteTruck} onDeleteDriver={data.deleteDriver}
+          />
+        )}
+
+        {activeTab === 'assignments' && role === 'admin' && (
+          <JobAssignmentsTab
+            trucks={trucks} drivers={drivers} jobs={jobs} conflictIds={conflictIds}
             onSetJobSingleTruck={data.setJobSingleTruck} onToggleJobTruck={data.toggleJobTruck}
             onUpdateJobField={data.updateJobField}
+            onAddExtraTruck={data.addExtraTruckToJob}
+          />
+        )}
+
+        {activeTab === 'users' && role === 'admin' && (
+          <UsersTab
             users={usersData.users} currentUserId={user.id}
             onCreateUser={usersData.createUser} onChangeUserRole={usersData.changeRole}
             onDeleteUser={usersData.deleteUser}

@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>SmartMoving API Playground</title>
+<style>
+  :root {
+    --bg: #0f172a; --panel: #1e293b; --border: #334155; --text: #e2e8f0; --muted: #94a3b8;
+    --accent: #38bdf8; --good: #4ade80; --bad: #f87171; --warn: #fbbf24;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    background: var(--bg); color: var(--text); font-size: 14px;
+  }
+  header {
+    padding: 14px 20px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .tag {
+    font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px;
+    padding: 2px 6px;
+  }
+  .controls {
+    padding: 14px 20px; border-bottom: 1px solid var(--border); display: flex; gap: 14px;
+    align-items: end; flex-wrap: wrap;
+  }
+  .controls label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+  .controls input[type=number] {
+    width: 80px; padding: 6px 8px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text);
+  }
+  .controls .checkbox-row { flex-direction: row; align-items: center; gap: 6px; }
+  button {
+    background: var(--accent); color: #06202f; border: none; border-radius: 6px; padding: 8px 14px;
+    font-weight: 600; cursor: pointer; font-size: 13px;
+  }
+  button.secondary { background: var(--panel); color: var(--text); border: 1px solid var(--border); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  #summary, #crewSummary, #customerSummary {
+    margin: 14px 20px; padding: 12px 14px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; display: none;
+  }
+  #summary .headline { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+  #summary .status-pill {
+    display: inline-block; padding: 3px 8px; border-radius: 12px; font-size: 12px; margin: 2px 4px 2px 0;
+    background: #0f172a; border: 1px solid var(--border);
+  }
+  main { display: flex; gap: 0; height: calc(100vh - 150px); }
+  #leadsPane { width: 45%; overflow-y: auto; border-right: 1px solid var(--border); padding: 0 20px; }
+  #detailPane { flex: 1; overflow-y: auto; padding: 20px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+  th { color: var(--muted); font-weight: 500; position: sticky; top: 0; background: var(--bg); }
+  tr.lead-row { cursor: pointer; }
+  tr.lead-row:hover { background: rgba(56,189,248,0.08); }
+  tr.lead-row.selected { background: rgba(56,189,248,0.15); }
+  .status-badge {
+    padding: 2px 7px; border-radius: 10px; font-size: 11px; font-weight: 600;
+  }
+  .status-Booked, .status-Completed { background: rgba(74,222,128,0.15); color: var(--good); }
+  .status-NewLead, .status-LeadInProgress, .status-Opportunity { background: rgba(251,191,36,0.15); color: var(--warn); }
+  .status-Cancelled, .status-Lost, .status-BadLead, .status-Closed { background: rgba(148,163,184,0.15); color: var(--muted); }
+  .jobcount { font-weight: 700; }
+  .jobcount.zero { color: var(--bad); }
+  .jobcount.nonzero { color: var(--good); }
+  .jobcount.unchecked { color: var(--muted); font-weight: 400; }
+  h2 { font-size: 14px; margin: 0 0 8px; }
+  .detail-block { margin-bottom: 18px; }
+  .big-jobcount { font-size: 28px; font-weight: 800; }
+  .big-jobcount.zero { color: var(--bad); }
+  .big-jobcount.nonzero { color: var(--good); }
+  pre {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px;
+    overflow-x: auto; font-size: 12px; line-height: 1.5; max-height: 340px; overflow-y: auto;
+  }
+  .placeholder { color: var(--muted); padding: 40px 0; text-align: center; }
+  .keys { color: var(--muted); font-size: 11.5px; margin-top: 4px; }
+  .warning-banner {
+    background: rgba(251,191,36,0.1); border: 1px solid var(--warn); color: var(--warn);
+    padding: 10px 12px; border-radius: 8px; margin-bottom: 14px; font-size: 13px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>SmartMoving API Playground</h1>
+  <span class="tag">read-only</span>
+  <span class="tag">not connected to the scheduler DB</span>
+</header>
+
+<div class="controls">
+  <label>Days back
+    <input type="number" id="daysBack" value="60" />
+  </label>
+  <label>Days ahead
+    <input type="number" id="daysAhead" value="90" />
+  </label>
+  <label class="checkbox-row"><input type="checkbox" id="includeBad" /> Include Bad</label>
+  <label class="checkbox-row"><input type="checkbox" id="includeLost" /> Include Lost</label>
+  <button id="fetchBtn">Fetch leads</button>
+  <button id="checkAllBtn" class="secondary" disabled>Check jobs[] for every lead</button>
+  <button id="crewJobsBtn" class="secondary">Check crew jobs (bypasses /api/leads)</button>
+  <button id="customersBtn" class="secondary">Check customers (finds unstaffed bookings too)</button>
+  <span id="loadingNote" style="color: var(--muted);"></span>
+</div>
+
+<div id="summary"></div>
+<div id="crewSummary"></div>
+<div id="customerSummary"></div>
+
+<main>
+  <div id="leadsPane"><div class="placeholder">Click "Fetch leads" to load /api/leads for this date range.</div></div>
+  <div id="detailPane"><div class="placeholder">Select a lead on the left to see its raw opportunity + premium-jobs response.</div></div>
+</main>
+
+<script>
+const STATUS_LABEL = {
+  0: 'NewLead', 1: 'LeadInProgress', 3: 'Opportunity', 4: 'Booked',
+  10: 'Completed', 11: 'Closed', 20: 'Cancelled', 30: 'Lost', 50: 'BadLead',
+};
+
+let leads = [];
+let jobCache = {}; // leadId -> { jobCount, opp, premium }
+let lastCrewOpportunityIds = [];
+
+const leadsPane = document.getElementById('leadsPane');
+const detailPane = document.getElementById('detailPane');
+const summaryEl = document.getElementById('summary');
+const crewSummaryEl = document.getElementById('crewSummary');
+const customerSummaryEl = document.getElementById('customerSummary');
+const loadingNote = document.getElementById('loadingNote');
+const checkAllBtn = document.getElementById('checkAllBtn');
+const crewJobsBtn = document.getElementById('crewJobsBtn');
+const customersBtn = document.getElementById('customersBtn');
+
+document.getElementById('fetchBtn').addEventListener('click', fetchLeads);
+checkAllBtn.addEventListener('click', checkAllJobs);
+crewJobsBtn.addEventListener('click', checkCrewJobs);
+customersBtn.addEventListener('click', checkCustomers);
+
+async function checkCustomers() {
+  const daysBack = document.getElementById('daysBack').value;
+  const daysAhead = document.getElementById('daysAhead').value;
+  customersBtn.disabled = true;
+  loadingNote.textContent = 'Checking customers (GET /api/customers, filtered by service date)...';
+  try {
+    const res = await fetch(`/api/customer-opportunities?daysBack=${daysBack}&daysAhead=${daysAhead}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to fetch customer opportunities');
+    loadingNote.textContent = '';
+    customersBtn.disabled = false;
+
+    const leadIds = new Set(leads.map(l => l.id));
+    const crewIds = new Set(lastCrewOpportunityIds);
+    const onlyViaCustomers = data.opportunities.filter(o => !leadIds.has(o.opportunityId) && !crewIds.has(o.opportunityId));
+
+    const rows = data.opportunities.map(o => `<tr>
+      <td>${escapeHtml(o.customerName || '')}</td>
+      <td><span class="status-badge status-${statusLabel(o.status)}">${statusLabel(o.status)}</span></td>
+      <td>${o.jobCount}</td>
+      <td>${!leadIds.has(o.opportunityId) && !crewIds.has(o.opportunityId) ? '<span class="jobcount nonzero">only here</span>' : ''}</td>
+    </tr>`).join('');
+
+    const rawSampleBlock = data.customerCount === 0
+      ? `<div class="warning-banner">0 customers came back. Here's the raw first-page response the real API sent for GET /api/customers — check whether it's actually a plain array (as documented) or wrapped in an object with a different key name:<pre style="white-space:pre-wrap;word-break:break-all;margin-top:6px;">${escapeHtml(JSON.stringify(data.rawFirstPageSample, null, 2)).slice(0, 4000)}</pre></div>`
+      : '';
+
+    customerSummaryEl.style.display = 'block';
+    customerSummaryEl.innerHTML = `
+      <div class="headline">Customers: ${data.customerCount} customer(s) checked, ${data.opportunities.length} opportunit${data.opportunities.length === 1 ? 'y' : 'ies'}-with-jobs found from ${data.from} to ${data.to}</div>
+      ${rawSampleBlock}
+      ${onlyViaCustomers.length > 0
+        ? `<div class="warning-banner" style="border-color:var(--good);color:var(--good);">${onlyViaCustomers.length} opportunit${onlyViaCustomers.length === 1 ? 'y is' : 'ies are'} found ONLY via customers (not in leads or crew jobs) — these likely have no crew assigned yet, and would be invisible to the scheduler without this check.</div>`
+        : `<div class="keys">Every opportunity found via customers also showed up in leads or crew jobs (run "Fetch leads" and "Check crew jobs" first for an accurate comparison).</div>`}
+      <table style="margin-top:8px;"><thead><tr><th>Customer</th><th>Status</th><th>jobs[]</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+    `;
+  } catch (err) {
+    loadingNote.textContent = '';
+    customersBtn.disabled = false;
+    customerSummaryEl.style.display = 'block';
+    customerSummaryEl.innerHTML = `<div class="warning-banner">Failed to check customers: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+async function checkCrewJobs() {
+  const daysBack = document.getElementById('daysBack').value;
+  const daysAhead = document.getElementById('daysAhead').value;
+  crewJobsBtn.disabled = true;
+  loadingNote.textContent = 'Checking crew jobs (GET /api/crew-members + GET /api/crew-members/{id}/jobs)...';
+  try {
+    const res = await fetch(`/api/crew-jobs?daysBack=${daysBack}&daysAhead=${daysAhead}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to fetch crew jobs');
+    loadingNote.textContent = '';
+    crewJobsBtn.disabled = false;
+    lastCrewOpportunityIds = data.opportunityIds;
+
+    const leadIds = new Set(leads.map(l => l.id));
+    const onlyViaCrew = data.opportunityIds.filter(id => !leadIds.has(id));
+
+    const rows = data.perCrew.map(({ crew, jobs, error }) => {
+      if (error) return `<tr><td>${escapeHtml(crew.name)}</td><td colspan="2" class="warning-banner" style="margin:0;">${escapeHtml(error)}</td></tr>`;
+      return `<tr><td>${escapeHtml(crew.name)}</td><td>${crew.status}</td><td>${jobs.length}</td></tr>`;
+    }).join('');
+
+    crewSummaryEl.style.display = 'block';
+    crewSummaryEl.innerHTML = `
+      <div class="headline">Crew jobs: ${data.crewCount} crew member(s) (all statuses), ${data.opportunityIds.length} distinct opportunit${data.opportunityIds.length === 1 ? 'y' : 'ies'} found from ${data.from} to ${data.to}</div>
+      ${onlyViaCrew.length > 0
+        ? `<div class="warning-banner" style="border-color:var(--good);color:var(--good);">${onlyViaCrew.length} opportunit${onlyViaCrew.length === 1 ? 'y is' : 'ies are'} found via crew jobs but NOT in the currently-loaded /api/leads list: ${onlyViaCrew.map(escapeHtml).join(', ')} — these are exactly what a leads-only poll sweep would miss.</div>`
+        : `<div class="keys">Every opportunity found via crew jobs is also present in the currently-loaded leads list (fetch leads first, and widen the date range, if you expect a gap here).</div>`}
+      <table style="margin-top:8px;"><thead><tr><th>Crew member</th><th>Status</th><th>Jobs in window</th></tr></thead><tbody>${rows}</tbody></table>
+    `;
+  } catch (err) {
+    loadingNote.textContent = '';
+    crewJobsBtn.disabled = false;
+    crewSummaryEl.style.display = 'block';
+    crewSummaryEl.innerHTML = `<div class="warning-banner">Failed to check crew jobs: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+async function fetchLeads() {
+  const daysBack = document.getElementById('daysBack').value;
+  const daysAhead = document.getElementById('daysAhead').value;
+  const includeBad = document.getElementById('includeBad').checked;
+  const includeLost = document.getElementById('includeLost').checked;
+  loadingNote.textContent = 'Loading leads...';
+  jobCache = {};
+  try {
+    const res = await fetch(`/api/leads?daysBack=${daysBack}&daysAhead=${daysAhead}&includeBad=${includeBad}&includeLost=${includeLost}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to fetch leads');
+    leads = data.leads;
+    loadingNote.textContent = `${leads.length} lead(s) from ${data.from} to ${data.to}`;
+    checkAllBtn.disabled = leads.length === 0;
+    renderLeadsTable();
+    renderSummary();
+  } catch (err) {
+    loadingNote.textContent = '';
+    leadsPane.innerHTML = `<div class="warning-banner">Failed to fetch leads: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function statusLabel(status) {
+  return STATUS_LABEL[status] || `unknown(${status})`;
+}
+
+function renderLeadsTable() {
+  if (leads.length === 0) {
+    leadsPane.innerHTML = '<div class="placeholder">No leads returned for this range/filters.</div>';
+    return;
+  }
+  let rows = leads.map(l => {
+    const label = statusLabel(l.status);
+    const cached = jobCache[l.id];
+    let jobCell = '<span class="jobcount unchecked">?</span>';
+    if (cached) {
+      const cls = cached.jobCount > 0 ? 'nonzero' : 'zero';
+      jobCell = `<span class="jobcount ${cls}">${cached.jobCount}</span>`;
+    }
+    return `<tr class="lead-row" data-id="${escapeHtml(l.id)}">
+      <td><span class="status-badge status-${label}">${label}</span></td>
+      <td>${escapeHtml(l.customerName || '(no name)')}</td>
+      <td>${l.serviceDate || ''}</td>
+      <td>${jobCell}</td>
+    </tr>`;
+  }).join('');
+  leadsPane.innerHTML = `<table>
+    <thead><tr><th>Status</th><th>Customer</th><th>Service date</th><th>jobs[]</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+  leadsPane.querySelectorAll('tr.lead-row').forEach(tr => {
+    tr.addEventListener('click', () => selectLead(tr.dataset.id));
+  });
+}
+
+function renderSummary() {
+  const byStatus = {};
+  leads.forEach(l => {
+    const label = statusLabel(l.status);
+    byStatus[label] = (byStatus[label] || 0) + 1;
+  });
+  const bookedLike = ['Booked', 'Completed', 'Closed'].reduce((sum, s) => sum + (byStatus[s] || 0), 0);
+  const pills = Object.entries(byStatus).map(([k, v]) => `<span class="status-pill">${k}: ${v}</span>`).join('');
+  let warning = '';
+  if (leads.length > 0 && bookedLike === 0) {
+    warning = `<div class="warning-banner">No Booked/Completed/Closed leads showed up in /api/leads at all for this
+      range — expected, /api/leads structurally never includes them. Use the "Check crew jobs" and
+      "Check customers" buttons above to see how the scheduler's poll sweep actually finds
+      already-booked work instead.</div>`;
+  }
+  summaryEl.style.display = 'block';
+  summaryEl.innerHTML = `<div class="headline">${leads.length} lead(s)</div>
+    <div>${pills}</div>${warning}`;
+}
+
+async function selectLead(id) {
+  leadsPane.querySelectorAll('tr.lead-row').forEach(tr => tr.classList.toggle('selected', tr.dataset.id === id));
+  const lead = leads.find(l => l.id === id);
+  detailPane.innerHTML = '<div class="placeholder">Loading opportunity detail...</div>';
+  try {
+    const [oppRes, premiumRes] = await Promise.all([
+      fetch(`/api/opportunity/${encodeURIComponent(id)}`),
+      fetch(`/api/premium-jobs/${encodeURIComponent(id)}`),
+    ]);
+    const opp = await oppRes.json();
+    const premium = await premiumRes.json();
+    if (!oppRes.ok) throw new Error(opp.error || 'Failed to fetch opportunity');
+
+    const jobCount = Array.isArray(opp.jobs) ? opp.jobs.length : 0;
+    jobCache[id] = { jobCount, opp, premium };
+    renderLeadsTable(); // refresh the jobs[] column for this row
+    // re-select after re-render
+    leadsPane.querySelectorAll('tr.lead-row').forEach(tr => tr.classList.toggle('selected', tr.dataset.id === id));
+
+    detailPane.innerHTML = `
+      <div class="detail-block">
+        <h2>${escapeHtml(lead.customerName || id)} — GET /api/opportunities/${escapeHtml(id)}</h2>
+        <div>Status: <span class="status-badge status-${statusLabel(opp.status)}">${statusLabel(opp.status)}</span></div>
+        <div style="margin-top:8px;">jobs[].length: <span class="big-jobcount ${jobCount > 0 ? 'nonzero' : 'zero'}">${jobCount}</span></div>
+        <div class="keys">Top-level keys: ${Object.keys(opp).join(', ')}</div>
+        <pre>${escapeHtml(JSON.stringify(opp, null, 2))}</pre>
+      </div>
+      <div class="detail-block">
+        <h2>GET /api/premium/opportunities/${escapeHtml(id)}/jobs</h2>
+        ${premium.ok === false
+          ? `<div class="warning-banner">${escapeHtml(premium.message)}${premium.status ? ` (HTTP ${premium.status})` : ''}
+             — likely means this endpoint isn't available on your SmartMoving tier.</div>`
+          : `<pre>${escapeHtml(JSON.stringify(premium.jobs, null, 2))}</pre>`}
+      </div>
+    `;
+  } catch (err) {
+    detailPane.innerHTML = `<div class="warning-banner">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+async function checkAllJobs() {
+  checkAllBtn.disabled = true;
+  let done = 0;
+  for (const lead of leads) {
+    loadingNote.textContent = `Checking jobs[] ... ${done}/${leads.length}`;
+    try {
+      const res = await fetch(`/api/opportunity/${encodeURIComponent(lead.id)}`);
+      const opp = await res.json();
+      const jobCount = Array.isArray(opp.jobs) ? opp.jobs.length : 0;
+      jobCache[lead.id] = { ...(jobCache[lead.id] || {}), jobCount, opp };
+    } catch (err) {
+      jobCache[lead.id] = { jobCount: 0, error: err.message };
+    }
+    done += 1;
+    renderLeadsTable();
+    // small delay to be polite to the API rather than firing dozens of requests at once
+    await new Promise(r => setTimeout(r, 150));
+  }
+  loadingNote.textContent = `Checked jobs[] for all ${leads.length} lead(s).`;
+  checkAllBtn.disabled = false;
+
+  const withJobs = Object.values(jobCache).filter(c => c.jobCount > 0).length;
+  const total = leads.length;
+  const extra = document.createElement('div');
+  extra.className = withJobs === 0 ? 'warning-banner' : 'status-pill';
+  extra.style.marginTop = '8px';
+  extra.textContent = `${withJobs} of ${total} lead(s) have a populated jobs[] array.`;
+  summaryEl.appendChild(extra);
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+</script>
+
+</body>
+</html>

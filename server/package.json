@@ -13,5 +13,8 @@
     "node": ">=22.5.0"
   },
   "license": "UNLICENSED",
-  "private": true
+  "private": true,
+  "dependencies": {
+    "nodemailer": "^9.0.5"
+  }
 }

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { addDays, isoDate, todayStr, daysBetween } from '../../utils/dates';
-import { assignLanes } from '../../utils/jobs';
-import { MonthChip, WeekBar, ConflictOverlayChip } from './JobVisuals';
+import { assignLanes, jobTruckIds, groupByOpportunity } from '../../utils/jobs';
+import { MonthChip, MonthGroupedChip, WeekBar, GroupedWeekBar, ConflictOverlayChip } from './JobVisuals';
 
 const DAY_NUM_H = 23; // reserved space (px) for the date number, so bars never cover it
 
@@ -24,20 +24,38 @@ function buildWeeks(monthCursor) {
   return weeks;
 }
 
-function Week({ week, monthStr, jobs, trucks, drivers, role, currentCrewTruck, conflicts, conflictIds, onDrop }) {
+function Week({ week, monthStr, jobs, trucks, drivers, role, currentCrewTruck, conflicts, conflictIds, onDrop, onAddExtraTruck, readOnly }) {
   const [dragOverDate, setDragOverDate] = useState(null);
-  const draggable = role !== 'crew';
+  // Crew never gets drag-and-drop (view-only role); `readOnly` is a separate, explicit override for
+  // callers like LDPlanner that want a view-only month calendar for an otherwise-editing role
+  // (admin/dispatcher) — kept distinct from the role check so disabling it there can't be confused
+  // with, or accidentally affect, the Truck Board's own month view.
+  const draggable = role !== 'crew' && !readOnly;
   const weekStart = week[0], weekEnd = week[6];
   const today = todayStr();
 
   const { ldEvents, laneCount, laneMap } = useMemo(() => {
-    const events = jobs
-      .filter((j) => j.type === 'long_distance' && j.date <= weekEnd && (j.endDate || j.date) >= weekStart)
-      .map((j) => ({
-        job: j,
-        startCol: Math.max(0, daysBetween(weekStart, j.date)),
-        endCol: Math.min(6, daysBetween(weekStart, j.endDate || j.date)),
-      }));
+    const ldJobsThisWeek = jobs.filter((j) => j.type === 'long_distance' && j.date <= weekEnd && (j.endDate || j.date) >= weekStart);
+    // Same grouping as the local-job chips: multiple unassigned long-distance jobs sharing one
+    // SmartMoving opportunity (one trip split into several job records, e.g. 23569-1/2/3) collapse
+    // into a single spanning bar with a picker instead of several overlapping bars for the same
+    // move. Assigned jobs, and any opportunity with only one unassigned job, stay individual —
+    // grouping only helps once there's more than one unassigned job to choose between.
+    const assignedLd = ldJobsThisWeek.filter((j) => jobTruckIds(j).length > 0);
+    const { groups: ldGroups, singles: unassignedLdSingles } = groupByOpportunity(
+      ldJobsThisWeek.filter((j) => jobTruckIds(j).length === 0)
+    );
+    const toEvent = (job, jobsInGroup) => ({
+      job,
+      jobsInGroup: jobsInGroup || null,
+      startCol: Math.max(0, daysBetween(weekStart, job.date)),
+      endCol: Math.min(6, daysBetween(weekStart, job.endDate || job.date)),
+    });
+    const events = [
+      ...assignedLd.map((j) => toEvent(j)),
+      ...unassignedLdSingles.map((j) => toEvent(j)),
+      ...ldGroups.map((g) => toEvent(g[0], g)),
+    ];
     const count = assignLanes(events);
     const map = {};
     events.forEach((ev) => { map[ev.job.id] = ev.lane; });
@@ -70,18 +88,31 @@ function Week({ week, monthStr, jobs, trucks, drivers, role, currentCrewTruck, c
     <div className="month-week">
       <div className="week-bars" style={{ paddingTop: DAY_NUM_H }}>
         {ldEvents.map((ev) => (
-          <WeekBar
-            key={ev.job.id}
-            ev={ev}
-            weekStart={weekStart}
-            weekEnd={weekEnd}
-            trucks={trucks}
-            drivers={drivers}
-            conflict={conflictIds.has(ev.job.id)}
-            mine={role === 'crew' && (ev.job.truckIds || []).includes(currentCrewTruck)}
-            draggable={draggable}
-            onDragStart={(e, jobId) => e.dataTransfer.setData('text/plain', jobId)}
-          />
+          ev.jobsInGroup ? (
+            <GroupedWeekBar
+              key={ev.job.smartMovingOpportunityId}
+              ev={ev}
+              weekStart={weekStart}
+              weekEnd={weekEnd}
+              conflictIds={conflictIds}
+              draggable={draggable}
+              onDragStart={(e, jobId) => e.dataTransfer.setData('text/plain', jobId)}
+            />
+          ) : (
+            <WeekBar
+              key={ev.job.id}
+              ev={ev}
+              weekStart={weekStart}
+              weekEnd={weekEnd}
+              trucks={trucks}
+              drivers={drivers}
+              conflict={conflictIds.has(ev.job.id)}
+              mine={role === 'crew' && (ev.job.truckIds || []).includes(currentCrewTruck)}
+              draggable={draggable}
+              onDragStart={(e, jobId) => e.dataTransfer.setData('text/plain', jobId)}
+              onAddExtraTruck={onAddExtraTruck}
+            />
+          )
         ))}
         {Object.values(overlayGroups).map((g, i) => (
           <ConflictOverlayChip
@@ -98,7 +129,14 @@ function Week({ week, monthStr, jobs, trucks, drivers, role, currentCrewTruck, c
           const dayNum = parseInt(dateStr.slice(8, 10), 10);
           const inMonth = dateStr.slice(5, 7) === monthStr;
           const isToday = dateStr === today;
-          const localJobs = jobs.filter((j) => j.type !== 'long_distance' && j.date === dateStr && !overlayJobIds.has(j.id));
+          const localJobsAll = jobs.filter((j) => j.type !== 'long_distance' && j.date === dateStr && !overlayJobIds.has(j.id));
+          // Same grouping as the day view's unassigned tray: multiple unassigned jobs sharing one
+          // SmartMoving opportunity collapse into a single chip with a picker. Assigned jobs stay
+          // individual (which truck they're on is meaningful info, so no reason to hide it).
+          const assignedLocalJobs = localJobsAll.filter((j) => jobTruckIds(j).length > 0);
+          const { groups: localGroups, singles: unassignedLocalSingles } = groupByOpportunity(
+            localJobsAll.filter((j) => jobTruckIds(j).length === 0)
+          );
           return (
             <div
               className={`month-day ${inMonth ? '' : 'pad'} ${isToday ? 'today' : ''} ${dragOverDate === dateStr ? 'dragover' : ''}`}
@@ -115,7 +153,7 @@ function Week({ week, monthStr, jobs, trucks, drivers, role, currentCrewTruck, c
               <div className="day-num">{dayNum}</div>
               <div className="bar-spacer" style={{ height: barsAreaHeight }} />
               <div className="day-events">
-                {localJobs.map((j) => (
+                {assignedLocalJobs.map((j) => (
                   <MonthChip
                     key={j.id}
                     job={j}
@@ -123,6 +161,30 @@ function Week({ week, monthStr, jobs, trucks, drivers, role, currentCrewTruck, c
                     drivers={drivers}
                     conflict={conflictIds.has(j.id)}
                     mine={role === 'crew' && (j.truckIds || []).includes(currentCrewTruck)}
+                    draggable={draggable}
+                    onDragStart={(e, jobId) => e.dataTransfer.setData('text/plain', jobId)}
+                    onAddExtraTruck={onAddExtraTruck}
+                  />
+                ))}
+                {unassignedLocalSingles.map((j) => (
+                  <MonthChip
+                    key={j.id}
+                    job={j}
+                    trucks={trucks}
+                    drivers={drivers}
+                    conflict={conflictIds.has(j.id)}
+                    mine={role === 'crew' && (j.truckIds || []).includes(currentCrewTruck)}
+                    draggable={draggable}
+                    onDragStart={(e, jobId) => e.dataTransfer.setData('text/plain', jobId)}
+                    onAddExtraTruck={onAddExtraTruck}
+                  />
+                ))}
+                {localGroups.map((g) => (
+                  <MonthGroupedChip
+                    key={g[0].smartMovingOpportunityId}
+                    jobsInGroup={g}
+                    conflictIds={conflictIds}
+                    mine={role === 'crew' && g.some((j) => (j.truckIds || []).includes(currentCrewTruck))}
                     draggable={draggable}
                     onDragStart={(e, jobId) => e.dataTransfer.setData('text/plain', jobId)}
                   />
@@ -136,7 +198,7 @@ function Week({ week, monthStr, jobs, trucks, drivers, role, currentCrewTruck, c
   );
 }
 
-export default function MonthBoard({ monthCursor, trucks, drivers, jobs, role, currentCrewTruck, conflicts, conflictIds, onMoveJobDate }) {
+export default function MonthBoard({ monthCursor, trucks, drivers, jobs, role, currentCrewTruck, conflicts, conflictIds, onMoveJobDate, onAddExtraTruck, readOnly }) {
   const y = monthCursor.getFullYear();
   const m = monthCursor.getMonth();
   const monthStr = String(m + 1).padStart(2, '0');
@@ -161,6 +223,8 @@ export default function MonthBoard({ monthCursor, trucks, drivers, jobs, role, c
             conflicts={conflicts}
             conflictIds={conflictIds}
             onDrop={onMoveJobDate}
+            onAddExtraTruck={onAddExtraTruck}
+            readOnly={readOnly}
           />
         ))}
       </div>

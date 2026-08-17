@@ -27,12 +27,12 @@ it with a `?api=` query param, e.g. `http://localhost:5173/?api=https://your-dep
 the backend can't be reached, the app shows a banner with a field to retry a different URL for the
 rest of that session — nothing is saved to local storage.
 
-You'll land on a login screen first — there's a single "Sign in with Microsoft" button, no
-email/password form. See the root [`server/README.md`](../server/README.md) "Login & accounts" for
-the Entra ID app registration steps and how the first account gets granted. There's no role switcher
-anymore (the old prototype let you pick "viewing as" from a dropdown) — your role comes from
-whichever Microsoft account you sign in with, enforced by the backend on every request, not just
-hidden in the UI.
+You'll land on a login screen first — email + password, with a "Forgot password?" link that also
+covers first-time setup (a brand new account starts with no password; that flow is how it gets one).
+See the root [`server/README.md`](../server/README.md) "Login & accounts" for how the first account
+gets granted and how the emailed one-time code works. There's no role switcher (the old prototype
+let you pick "viewing as" from a dropdown) — your role comes from your account, enforced by the
+backend on every request, not just hidden in the UI.
 
 ## Building for real use
 
@@ -49,10 +49,10 @@ serves the built `dist/` locally if you want to sanity-check a production build 
 
 - `src/api.js` — the fetch wrapper around the backend's REST API. Sends `credentials: 'include'` on
   every call so the httpOnly session cookie goes along with it.
-- `src/hooks/useAuth.js` — the logged-in user (via `/api/auth/me`), `microsoftLoginUrl` (a full-page
-  redirect, not a fetch call — sign-in itself happens on Microsoft's site), `logout`, and a
-  `handleAuthError` the other hooks call if a request ever comes back 401 (session expired) so the
-  app falls back to the login screen instead of just erroring. Also tracks `connectionError`
+- `src/hooks/useAuth.js` — the logged-in user (via `/api/auth/me`), `login`/`forgotPassword`/
+  `resetPassword` (plain fetch calls — the login screen owns its own form/error state), `logout`,
+  and a `handleAuthError` the other hooks call if a request ever comes back 401 (session expired) so
+  the app falls back to the login screen instead of just erroring. Also tracks `connectionError`
   separately from "not logged in," so an unreachable backend shows a clear message instead of a
   blank login form.
 - `src/hooks/useSchedulerData.js` — the one hook holding all trucks/drivers/jobs state and every
@@ -61,7 +61,8 @@ serves the built `dist/` locally if you want to sanity-check a production build 
   same optimistic-update pattern the original file used, just with React state instead of global
   variables and manual re-renders. Only starts loading/polling once `useAuth` confirms a session.
 - `src/hooks/useUsers.js` — admin-only: the Users list plus create/change-role/delete, each
-  refetching the list afterward. No password reset — there's nothing to reset.
+  refetching the list afterward. No password field in create — new accounts set their own via the
+  login screen's forgot-password flow.
 - `src/utils/dates.js`, `src/utils/jobs.js` — pure helper functions (date formatting, conflict
   detection, driver colors, month-view lane assignment) ported directly from the original file's
   equivalent functions, with the same behavior.

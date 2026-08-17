@@ -9,9 +9,9 @@ This backend has three jobs:
    shared database.
 2. **Pulls jobs that need dispatching out of SmartMoving CRM** and writes them into that same
    database, so dispatchers don't have to re-enter them by hand.
-3. **Handles login** — Microsoft (Entra ID) sign-in only, restricted to Around Town Movers' real
-   Microsoft 365 tenant so only `@aroundtownmovers.com` accounts can ever sign in, with role-based
-   access (admin / dispatcher / crew) on top. See "Login & accounts" below.
+3. **Handles login** — email + password sign-in, restricted to `@aroundtownmovers.com` accounts,
+   with role-based access (admin / dispatcher / crew) on top and an emailed one-time-code flow for
+   setting/resetting a password. See "Login & accounts" below.
 
 **This is one-way (pull only).** SmartMoving's public API has no endpoint that can write a job's
 date, time, or truck assignment — every write endpoint (create job, update job notes, update job
@@ -21,32 +21,87 @@ still need to mirror any date/time changes into SmartMoving by hand until SmartM
 write endpoint (worth asking their support team directly — this isn't something we can build
 around on our end).
 
-## Webhooks vs. polling — why both
+## Webhooks vs. polling — why both, and how polling alone now finds booked jobs too
 
-Originally this only polled `GET /api/leads`. That endpoint's own docs say it returns New/In
-Progress leads by default (Lost/Bad are opt-in) — it never documents Booked-status records being
-included, and it's explicitly scoped to *leads*. SmartMoving separately has a `Create an
-opportunity` endpoint that books a job directly, with no lead involved at all (e.g. a repeat
-customer or phone booking a staff member enters straight as a booking) — so polling `/api/leads`
-alone can silently miss real jobs.
+Originally this only polled `GET /api/leads`. **Confirmed live in the dev portal on 2026-08-10**
+(the "Get leads" operation's own description): "By default, only New and In Progress leads are
+returned, but Lost and Bad Leads can be included through query parameters." There is no parameter
+of any kind to widen this to Booked/Completed/Closed — `IncludeBad`/`IncludeLost` are the only two
+flags this endpoint has. So `/api/leads` **cannot ever** return an already-booked job, full stop —
+not a bug to fix, a hard ceiling on what that one source can see. SmartMoving separately has a
+`Create an opportunity` endpoint that books a job directly, with no lead involved at all (e.g. a
+repeat customer or phone booking a staff member enters straight as a booking) — those are
+permanently invisible to `/api/leads` too.
 
-Fixed by adding SmartMoving's webhooks as the primary trigger:
+Fixed two ways, so neither webhooks nor polling alone has to carry the whole load:
 
-- **`Job Created`** and **`Opportunity Created`/`Opportunity Status Changed`** fire off the
-  job/opportunity object itself — regardless of whether it ever passed through the lead pipeline.
-  Confirmed directly in the webhook docs: `Opportunity Created` is described as firing "whether
-  submitted via web form, entered manually, or created through an integration or API."
-- Webhook payloads are thin — just `{event-type, opportunity-id or job-id, opportunity-status}` —
-  so receiving one just tells the backend *which* opportunity to go re-fetch via
-  `GET /api/opportunities/{id}`, not the full job detail.
-- The old polling sweep is kept as a **fallback/backfill**, running on an interval (default every
-  15 minutes) in case a webhook is ever missed, delayed, or misconfigured. It still only sees
-  lead-sourced bookings, but between the two, coverage is as complete as the API allows.
+1. **Webhooks (primary, real-time)** — `Job Created` and `Opportunity Created`/
+   `Opportunity Status Changed`/`Opportunity Changed` fire off the job/opportunity object itself,
+   regardless of whether it ever passed through the lead pipeline. Confirmed directly in the
+   webhook docs: `Opportunity Created` is described as firing "whether submitted via web form,
+   entered manually, or created through an integration or API." Payloads are thin —
+   `opportunity-*` events give `{event-type, opportunity-id, opportunity-status}` (confirmed via
+   the dev portal's webhook document), so receiving one tells the backend which opportunity to
+   re-fetch via `GET /api/opportunities/{id}`. **`job-created` only ever gives `{event-type,
+   job-id}` — no opportunity-id** — and there's no endpoint that resolves a bare job-id to
+   anything (every job-detail endpoint needs the opportunity id too), so that event alone can't be
+   hydrated; `handleWebhook` in `server.js` deliberately no-ops on it and lets the poll sweep pick
+   it up on its next pass instead of guessing.
+2. **Poll sweep (fallback/backfill AND how job-created gets resolved)**, running on an interval
+   (default every 15 minutes), now merges **three** discovery sources before hydrating anything:
+   - `GET /api/leads` — same as before, catches a lead the moment it's created and gives a
+     customer name for the sync summary, but (see above) never the booked ones.
+   - `GET /api/crew-members/{id}/jobs` — **confirmed live in the dev portal 2026-08-10**: lists
+     real jobs directly by service date, for one crew member at a time. This does NOT go through
+     `/api/leads` at all, so it finds already-booked, already-staffed work. There's no "list all
+     jobs" endpoint on this API, so the sweep enumerates **every** crew member
+     (`GET /api/crew-members`, deliberately no `Status` filter — see below) and asks each one for
+     their jobs in the poll window. This source can't find a job with nobody staffed on it yet —
+     there's no crew member to enumerate it from.
+   - `GET /api/customers` — **confirmed live in the dev portal 2026-08-10**, added after a real
+     user reported jobs missing even with no crew assigned. Its own description: "Get a list of
+     all customers ordered by name. Optionally, you can filter them based on the job service date
+     associated with each customer's opportunities." Each customer comes back with
+     `opportunities[]` across the **full** `OpportunityStatus` range (not leads-scoped at all) and
+     each opportunity's `jobs[]` embedded — this doesn't depend on lead-pipeline stage OR crew
+     assignment, so it's what finds a Booked job that's had nobody staffed on it yet. This is the
+     closest thing this API has to a true "list every job in a date range" endpoint.
 
-Verified this actually closes the gap: `server/mock-smartmoving-server.js` includes a sample
-booking (`opp-direct-004`) that exists only via the opportunity-details endpoint, not via
-`/api/leads` — simulating a directly-booked job. A poll sweep alone doesn't find it; POSTing a
-`job-created` webhook for it does. See `test-webhook.js`.
+   Every opportunity id found by any of the three is hydrated exactly once.
+
+**Don't filter crew members by `Status=Active`.** Found 2026-08-10 against a real account: a real,
+booked, staffed job was missing from the board because it was assigned to a crew member whose
+status wasn't exactly `"Active"` (SmartMoving's docs only name two values, `Active`/`Inactive`, but
+that's no guarantee every real account's data matches cleanly). Filtering crew enumeration to
+Active-only silently drops every job assigned to anyone who doesn't match — for a scheduler, a
+false negative (a real job never appearing) is worse than the extra API calls from checking
+everyone. `getAllCrewMembers()` now fetches all crew members regardless of status.
+
+Verified all of this actually closes the gaps, in one bash-call test run each:
+`server/mock-smartmoving-server.js` has three sample bookings, each deliberately unreachable by a
+different subset of sources — one absent from `LEADS` (a direct booking), one assigned only to an
+`Inactive`-status crew member, and one Booked with a job created but `crewMembers: []` (nobody
+staffed) and absent from `LEADS`. Ran real `POST /api/sync-now` calls against the mock with **no
+webhook involved at all** and confirmed each one landed on the board through the poll sweep alone —
+`crewJobOpportunityCount`/`customerJobOpportunityCount` in the response show which source found
+which. Before these fixes, none of the three could be found without a deployed webhook; now polling
+finds all of them, closing the gap for accounts that haven't deployed a public webhook URL yet.
+`test-webhook.js` still exercises the webhook path itself (`npm run test-webhook`) — webhooks
+remain the better real-time signal once hosting is in place, but polling is no longer structurally
+blind to any booking state.
+
+### Rate limits
+
+The crew-jobs and customers sources mean one sync can be a lot of sequential calls on a real
+account: one per crew member, a handful of paginated calls to `/api/customers`, plus two per
+opportunity discovered (details + exact-timing jobs). Confirmed
+live against a real account with 26+ crew members and dozens of opportunities — firing those with
+no pacing hit SmartMoving's `429 Too Many Requests` almost immediately. `smartmovingClient.js`
+handles this two ways, transparently, no action needed normally: every call is paced at least
+`SMARTMOVING_MIN_REQUEST_INTERVAL_MS` (default 350ms) apart, and any `429` is automatically retried
+after waiting however long SmartMoving's own error message says to ("Try again in N seconds"), up
+to 6 retries per call. If a sync summary still shows `429` errors after that, raise
+`SMARTMOVING_MIN_REQUEST_INTERVAL_MS` in `.env` — larger fleets need more headroom.
 
 ## What it does
 
@@ -57,11 +112,16 @@ booking (`opp-direct-004`) that exists only via the opportunity-details endpoint
    devices stay in sync with each other.
 2. **Webhook receiver** (`POST /webhooks/smartmoving`) — SmartMoving POSTs here on `job-created`,
    `opportunity-created`, `opportunity-status-changed`, or `opportunity-changed`. On a relevant
-   event, fetches `GET /api/opportunities/{id}` (and, best-effort, the older
-   `GET /api/premium/opportunities/{id}/jobs` for exact start/end times) and upserts the result
-   into the `jobs` table.
-3. **Poll sweep** (fallback, every `POLL_INTERVAL_MINUTES`) — walks `GET /api/leads` for a rolling
-   date window and hydrates each one the same way, so nothing depends solely on webhooks arriving.
+   event with an opportunity id, fetches `GET /api/opportunities/{id}` (and, best-effort,
+   `GET /api/opportunities/{id}/jobs` for exact start/end times) and upserts the result into the
+   `jobs` table. `job-created` payloads only carry a job id with no opportunity id and nothing
+   resolves one from the other, so that event is left for the poll sweep to pick up instead.
+3. **Poll sweep** (fallback/backfill, every `POLL_INTERVAL_MINUTES`) — merges three discovery
+   sources: `GET /api/leads`, `GET /api/crew-members/{id}/jobs` for every crew member, and
+   `GET /api/customers` — all over the same rolling date window (the latter two find already-booked
+   jobs the first structurally cannot, and `/api/customers` finds them even with no crew assigned
+   yet — see "Webhooks vs. polling" above) — then hydrates each opportunity found by any source the
+   same way, so nothing depends solely on webhooks arriving.
 4. Syncing a job that's already in the database (matched by SmartMoving's internal job ID) only
    refreshes its SmartMoving-owned fields (customer, date, time, addresses, crew size) — truck
    assignments and status a dispatcher has set locally are left alone, so a sync can't undo their
@@ -76,12 +136,14 @@ the automatic interval sweep) keep things current on their own.
 ## Setup
 
 Requires **Node 22.5 or newer** — this uses the built-in `node:sqlite` module (experimental as of
-this Node line), not a separate database server or an npm package. No npm install needed — zero
-dependencies. Check your version with `node -v`; if you're on an older Node, upgrade first (e.g.
-via nvm: `nvm install 22 && nvm use 22`).
+this Node line), not a separate database server. Almost everything else is dependency-free too;
+`nodemailer` (for the password-reset email — see "Login & accounts") is the one real npm package,
+so `npm install` is a one-time step now. Check your version with `node -v`; if you're on an older
+Node, upgrade first (e.g. via nvm: `nvm install 22 && nvm use 22`).
 
 ```bash
 cd server
+npm install
 cp .env.example .env
 # edit .env and paste in your SmartMoving API key
 npm start
@@ -89,11 +151,11 @@ npm start
 
 This starts the backend on `http://localhost:8787`, creates `server/data/atm.db` on first run
 (seeded with sample trucks/drivers/jobs), and — if `ADMIN_EMAIL` is set in `.env` — grants the
-first admin account (no password to set; they'll sign in with that address via Microsoft). See
-"Login & accounts" below before you do anything else — without `MICROSOFT_CLIENT_ID`/
-`MICROSOFT_CLIENT_SECRET`/`MICROSOFT_TENANT_ID` configured, nobody can sign in at all. Then start
-the frontend (`cd ../frontend && npm install && npm run dev`) — it talks to `http://localhost:8787`
-by default. To point it at a different backend (e.g. once you've deployed one), open it with
+first admin account. See "Login & accounts" below before you do anything else — set `ADMIN_PASSWORD`
+too if you want to sign in immediately, or configure `SMTP_USER`/`SMTP_PASS` so the account can set
+its own password via the emailed one-time code. Then start the frontend
+(`cd ../frontend && npm install && npm run dev`) — it talks to `http://localhost:8787` by default.
+To point it at a different backend (e.g. once you've deployed one), open it with
 `?api=https://your-deployed-host` in the URL, or use the retry field that appears in the red banner
 if it can't reach the backend.
 
@@ -125,19 +187,24 @@ npm run test-webhook   # defaults to opp-direct-004 / job-created
 SmartMoving API keys are issued from the Developer Portal
 (`api-public.smartmoving.com`). Two tiers:
 
-- **Basic** — free, read-only, 20,000 calls/month. Enough to run the poll-sweep-only path (no
-  webhooks) — `GET /api/opportunities/{id}` is tagged "basic" in the docs, not premium.
+- **Basic** — free, read-only, 20,000 calls/month. Enough to run the whole poll-sweep path
+  (no webhooks) — `GET /api/opportunities/{id}`, `GET /api/opportunities/{id}/jobs` (exact
+  `startTimeUtc`/`endTimeUtc` per job), `GET /api/leads`, `GET /api/crew-members`,
+  `GET /api/crew-members/{id}/jobs`, and `GET /api/customers` are all tagged "basic" in the dev
+  portal, confirmed 2026-08-10 — none of them need Premium.
 - **Premium** — $149/month, adds write access and webhooks. Needed for the webhook path described
-  above, and for the more precise `startTimeUtc`/`endTimeUtc` timing from
-  `GET /api/premium/opportunities/{id}/jobs` (falls back to the basic tier's `arrivalWindow` when
-  that call isn't available).
+  above, and for `GET /api/premium/opportunities/{id}/jobs/{jobId}` (richer per-job detail: exact
+  stop lat/lng, dispatcher/crew notes, charges — not currently used by `mapOpportunity.js`, which
+  gets by on the basic tier's `jobAddresses`/`crewMembers`/exact timing already).
 
 ### Testing without a real API key
 
 `server/mock-smartmoving-server.js` fakes SmartMoving's `/api/leads`, `/api/opportunities/{id}`,
-and `/api/premium/opportunities/{id}/jobs` endpoints with a few sample bookings — including one
-that only exists via the opportunity-details endpoint, to exercise the webhook-only path — so you
-can verify the whole pipeline without live credentials:
+`/api/opportunities/{id}/jobs`, `/api/crew-members`, `/api/crew-members/{id}/jobs`, and
+`/api/customers` endpoints with a few sample bookings — including one absent from `/api/leads`
+entirely (a direct booking), one assigned only to an `Inactive`-status crew member, and one Booked
+with a job created but no crew assigned at all — to exercise every discovery source described in
+"Webhooks vs. polling" above — so you can verify the whole pipeline without live credentials:
 
 ```bash
 # terminal 1
@@ -153,85 +220,116 @@ directly to see what would be imported.
 
 ## Login & accounts
 
-There are no passwords anywhere in this app. Every route except `/api/health`,
-`/api/auth/microsoft/login`, `/api/auth/microsoft/callback`, and the SmartMoving webhook receiver
-requires a logged-in session, and the only way to get one is signing in with a real Around Town
-Movers Microsoft 365 account (`@aroundtownmovers.com`, case-insensitive). Microsoft itself refuses
-any account outside the configured tenant before an authorization code is ever issued — this
-backend never sees a Microsoft password. On top of that, this app also keeps its own allowlist (the
-`users` table): even a real `@aroundtownmovers.com` account gets rejected at the callback if an
-admin hasn't explicitly granted it access.
+Every route except `/api/health`, `/api/auth/login`, `/api/auth/forgot-password`,
+`/api/auth/reset-password`, `/api/auth/status`, and the SmartMoving webhook receiver requires a
+logged-in session. Sign-in is email + password, restricted to an allowlist (the `users` table) of
+`@aroundtownmovers.com` addresses (case-insensitive) — an admin has to explicitly grant an address
+access before it can ever sign in, same as before.
 
-### One-time setup: registering the app in Microsoft Entra ID
+**Passwords are never stored in plaintext.** `auth.js` hashes them with `crypto.scryptSync` (built
+into Node — no `bcrypt` package needed), salted per account, before anything touches the database.
 
-Someone with admin rights on Around Town Movers' Microsoft 365 tenant needs to do this once:
+**There's no admin-set temp password.** A brand new account (created by an admin with just an email
+and role) starts with no password at all, and the *only* way to set one — for a new account or one
+that's actually locked out — is the same self-service flow: click "Forgot password?" on the login
+screen, get a 6-digit code emailed to that address (valid 10 minutes, single-use), and submit it
+along with a new password. This means the same code path covers both "first time signing in" and
+"actually forgot it," and an admin never needs to think up or transmit a temporary password.
 
-1. Go to [entra.microsoft.com](https://entra.microsoft.com) → **Identity → Applications → App
-   registrations → New registration**.
-2. Name it something like `ATM Scheduler`. Under **Supported account types**, choose **"Accounts in
-   this organizational directory only (Around Town Movers only — Single tenant)"** — this is what
-   makes the tenant restriction real; don't pick "any organizational directory" or "personal
-   Microsoft accounts."
-3. Under **Redirect URI**, pick **Web** and enter this backend's callback URL exactly:
-   `http://localhost:8787/api/auth/microsoft/callback` for local dev, or
-   `https://your-deployed-host/api/auth/microsoft/callback` once deployed (must match `BACKEND_URL`
-   in `.env` — see Configuration below). You can add both as separate redirect URIs later once you
-   deploy.
-4. Click **Register**. On the app's **Overview** page, copy the **Application (client) ID** and the
-   **Directory (tenant) ID** — these go into `MICROSOFT_CLIENT_ID` and `MICROSOFT_TENANT_ID`.
-5. Go to **Certificates & secrets → Client secrets → New client secret**. Give it a description and
-   an expiry, then copy the secret's **Value** immediately (it's hidden after you leave the page) —
-   this goes into `MICROSOFT_CLIENT_SECRET`.
-6. Go to **API permissions** and confirm `Microsoft Graph → openid`, `profile`, and `email` (under
-   **Delegated permissions**) are present — they're added by default for new registrations. No
-   admin consent should be needed for these three.
-7. Paste all three values into `server/.env` (see Configuration below), restart the backend, and the
-   startup log will confirm `Microsoft sign-in is configured (tenant ...)`.
+### One-time setup: email delivery
+
+The forgot-password/first-time-setup flow needs somewhere to send the 6-digit code. Rather than a
+third-party transactional email service (which needs a verified sending domain — DNS records added
+by whoever controls `aroundtownmovers.com`'s DNS, which may not be readily available), this sends
+through a real mailbox over SMTP. Uses `nodemailer` (`server/emailer.js`) — the one deliberate
+exception to this backend's otherwise zero-npm-dependency approach; see that file's header comment
+for why.
+
+**Default: a personal/free Gmail account.** Chosen as the default over a company Microsoft 365
+mailbox because it's entirely self-service:
+
+1. Turn on 2-Step Verification for the Gmail account, if it isn't already:
+   [myaccount.google.com/security](https://myaccount.google.com/security) → 2-Step Verification.
+   Required before Google allows app passwords.
+2. Generate an app password: [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
+   → name it e.g. "ATM Scheduler" → copy the 16-character password.
+3. In `server/.env`, set `SMTP_USER` to that Gmail address and `SMTP_PASS` to the app password
+   (`SMTP_HOST`/`SMTP_PORT` already default to `smtp.gmail.com:465` — no need to set them for
+   Gmail).
+4. Restart the backend — the startup log confirms `Password-reset emails are configured (SMTP).`
+5. Note the emails will show as coming from that Gmail address, not `@aroundtownmovers.com` — fine
+   for an internal tool, but worth telling your team so a code from an unfamiliar address doesn't
+   look suspicious.
+
+**Alternative: a Microsoft 365 mailbox.** Set `SMTP_HOST=smtp.office365.com` and
+`SMTP_PORT=587` in `.env`, with `SMTP_USER`/`SMTP_PASS` for that mailbox. **Confirmed against
+aroundtownmovers.com's own tenant**: this fails out of the box with
+`535 5.7.139 ... SmtpClientAuthentication is disabled for the Tenant` — most Microsoft 365 tenants
+disable basic SMTP AUTH organization-wide by default. A tenant admin needs to re-enable it for that
+one mailbox: Microsoft 365 admin center → **Users → Active users** → select the mailbox → **Mail**
+tab → **Manage email apps** → check **Authenticated SMTP** (or via PowerShell:
+`Set-CASMailbox -Identity user@aroundtownmovers.com -SmtpClientAuthenticationDisabled $false`). If
+that admin access isn't available, the Gmail path above sidesteps this entirely.
+
+Until one of these is set up, `/api/auth/forgot-password` still responds successfully (so it never
+reveals whether an email is configured or which addresses exist) but no email actually goes out —
+check `GET /api/health`'s `recentEvents` for `otp-send-failed` entries (with the exact SMTP error),
+or the server log, to confirm. Set an `ADMIN_PASSWORD` (see below) to get into the app immediately
+without waiting on this.
 
 ### Accounts
 
 **The first admin account** is granted automatically the first time the server starts with an empty
-`users` table, from `ADMIN_EMAIL` in `.env` — no password, they just need to sign in with Microsoft
-using that exact address afterward. After that first run, `ADMIN_EMAIL` is ignored (only consulted
-while zero accounts exist) — safe to leave in `.env` or remove it.
+`users` table, from `ADMIN_EMAIL` in `.env`. If `ADMIN_PASSWORD` is also set, that account can sign
+in with it right away (change it via "Forgot password?" afterward); if not, it's created with no
+password and needs email delivery configured (see above) to set one. After that first run, both
+`ADMIN_EMAIL` and `ADMIN_PASSWORD` are ignored (only consulted while zero accounts exist) — safe to
+leave in `.env` or remove them.
 
-**Adding more accounts** — once signed in as an admin, use Admin → Trucks & Drivers → Users to grant
-access to an `@aroundtownmovers.com` address and assign a role, or remove access. There's nothing to
-share with the new user except "you now have access" — they sign in with their own Microsoft
-account, which they already have.
+**Adding more accounts** — once signed in as an admin, use Admin → Users to grant access to an
+`@aroundtownmovers.com` address and assign a role. There's no password field in that form on
+purpose — the new person sets their own via "Forgot password?" the first time they sign in. The
+Users panel flags any account that hasn't done this yet with a "NO PASSWORD YET" badge.
 
-**From the terminal** — `node create-admin.js <email> [admin|dispatcher|crew]` grants access to a
-new address or changes an existing one's role. Useful for the very first admin, for adding a second
-admin, or for recovering access if the only admin's account is somehow removed:
+**From the terminal** — `node create-admin.js <email> [admin|dispatcher|crew] [password]` grants
+access to a new address or changes an existing one's role (and password, if you give one). Useful
+for the very first admin, for adding a second admin, or for recovering access without waiting on
+email delivery:
 ```bash
 node create-admin.js csr4@aroundtownmovers.com admin
+node create-admin.js csr4@aroundtownmovers.com admin "a strong temp password"
 ```
 
 **Roles** map directly to what a route allows:
 | Role | Can do |
 |---|---|
 | `admin` | Everything — trucks/drivers CRUD, job assignment, SmartMoving sync, the Users panel. |
-| `dispatcher` | Assign/move jobs (`PATCH /api/jobs/:id`) and view everything. Can't edit truck/driver records, can't reach `/api/users`, `/api/trucks`, `/api/drivers`, sync, or reset-to-sample-data. |
+| `dispatcher` | Assign/move jobs (`PATCH /api/jobs/:id`) and view everything. Can't edit truck/driver records, can't reach `/api/users`, `/api/trucks`, `/api/drivers`, sync, reset-to-sample-data, or clear-jobs. |
 | `crew` | Read-only — `GET /api/state` only. Any write attempt gets a 403. |
 
 **Sessions** are a signed httpOnly cookie (`atm_session`), not a database table — after a successful
-Microsoft sign-in, this backend signs its own token containing just the user's id and an expiry (7
-days); every request re-reads that user's *current* role from the database, so changing someone's
-role (or removing their access) takes effect on their very next request rather than waiting out
-their existing session. Restarting the server without a stable `SESSION_SECRET` invalidates every
-session at once (see the table below) — that's a deliberate simplicity tradeoff, not a bug: there's
-no server-side session store to manage.
+login (or password reset), this backend signs its own token containing just the user's id and an
+expiry (7 days); every request re-reads that user's *current* role from the database, so changing
+someone's role (or removing their access) takes effect on their very next request rather than
+waiting out their existing session. Restarting the server without a stable `SESSION_SECRET`
+invalidates every session at once (see the table below) — that's a deliberate simplicity tradeoff,
+not a bug: there's no server-side session store to manage.
 
 The last remaining admin can't demote or delete themselves (or be demoted/deleted by anyone else)
 via the API — promote a second admin first if you need to step down.
 
-**Trust boundary note**: the authorization-code-to-token exchange happens server-to-server (this
-backend talks directly to Microsoft's token endpoint using the client secret), so the returned ID
-token is trusted without full JWKS signature verification — that exchange is itself the proof it
-came from Microsoft. `aud`/`tid`/`exp`/`iss` claims are still checked as defense in depth
-(`auth.validateMicrosoftIdToken`). This avoids hand-implementing RSA/JWKS verification in a
-zero-dependency codebase; if that tradeoff ever needs revisiting (e.g. adding a client-side
-implicit-flow login), full signature verification would need to be added first.
+### Working on the app without email configured
+
+Set `DEV_BYPASS_LOGIN=true` in `.env` (see `.env.example`) to add
+`GET /api/auth/dev-login?role=admin|dispatcher|crew`, which signs you in as an existing account
+with that role without a real password. The login screen shows "admin / dispatcher / crew" buttons
+automatically whenever this is active. Never set `DEV_BYPASS_LOGIN` on anything reachable outside
+your own machine — it has no automatic self-disable the way the old Microsoft-only bypass did, so
+remove it from `.env` before deploying anywhere real.
+
+**One-time codes are HMAC'd, not stored raw.** `auth.hashOtp` runs the 6-digit code through
+HMAC-SHA256 keyed on `SESSION_SECRET` before it ever reaches `db.setUserOtp` — a database read alone
+can't recover a usable code, same idea as the password hashing above.
 
 ## Configuration
 
@@ -245,14 +343,18 @@ Environment variables (set in `.env`, or via your hosting platform):
 | `POLL_LOOKBACK_DAYS` | `7` | How far back the poll sweep's date window starts. |
 | `POLL_LOOKAHEAD_DAYS` | `60` | How far forward the poll sweep's date window extends. |
 | `SMARTMOVING_BASE_URL` | `https://api-public.smartmoving.com/v1` | Override to point at the mock server for testing. |
+| `SMARTMOVING_MIN_REQUEST_INTERVAL_MS` | `350` | Minimum gap between consecutive SmartMoving API calls. Raise this if you have a large fleet/branch (many crew members, many opportunities) and still see `429` errors in the sync summary despite the built-in retry — see "Rate limits" below. |
 | `PORT` | `8787` | Port the backend listens on. |
 | `SQLITE_PATH` | `server/data/atm.db` | Where the database file lives. Must be a normal local-disk path — SQLite needs real file locking, which doesn't work over some network drives or FUSE-style mounts. |
-| `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET` / `MICROSOFT_TENANT_ID` | — | From the Entra ID app registration (see "Login & accounts"). Required — nobody can sign in without all three set. |
-| `BACKEND_URL` | `http://localhost:${PORT}` | This backend's own public URL — must exactly match the redirect URI registered in Entra ID. |
-| `FRONTEND_URL` | `http://localhost:5173` | Where the browser gets sent back to after a sign-in attempt (success or failure). |
-| `ADMIN_EMAIL` | — | Only used to grant the very first admin account (see "Login & accounts") — no password. |
-| `SESSION_SECRET` | random, regenerated each restart | Signs session cookies. Set this to a stable random string, or every restart logs everyone out. Generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. |
+| `SMTP_USER` / `SMTP_PASS` | — | The mailbox that sends the forgot-password/first-time-setup one-time code (see "Login & accounts" → "One-time setup: email delivery"). Without these, that flow's emails silently don't go out. |
+| `SMTP_HOST` / `SMTP_PORT` | `smtp.gmail.com` / `465` | Override for a different mailbox, e.g. Microsoft 365 (`smtp.office365.com` / `587` — see the tenant SMTP AUTH caveat above). |
+| `SMTP_FROM` | `SMTP_USER` | Override only if the mailbox has "send as" delegation set up for a different address. |
+| `ADMIN_EMAIL` | — | Only used to grant the very first admin account (see "Login & accounts"). |
+| `ADMIN_PASSWORD` | — | Optional — lets the first admin sign in immediately instead of waiting on email delivery. Only consulted alongside `ADMIN_EMAIL` while zero accounts exist. |
+| `FRONTEND_URL` | `http://localhost:5173` | Where the browser gets sent back to after using the dev-login bypass (a full-page redirect, unlike the regular fetch-based login). |
+| `SESSION_SECRET` | random, regenerated each restart | Signs session cookies and one-time codes. Set this to a stable random string, or every restart logs everyone out (and invalidates any outstanding reset code). Generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. |
 | `COOKIE_SECURE` | unset | Set to `true` once served over HTTPS, to add the `Secure` flag to the session cookie. Leave unset for local `http://` development. |
+| `DEV_BYPASS_LOGIN` | unset | Local dev only — see "Working on the app without email configured." Never set on a publicly reachable server. |
 
 The scheduler picks up the backend URL from a `?api=` query parameter (falls back to
 `http://localhost:8787`) — there's nothing to configure in the browser's storage, since the app no
@@ -263,13 +365,12 @@ longer uses any.
 The backend is a single dependency-free Node process, so it runs anywhere Node 22.5+ runs: a small
 VM, Render, Railway, Fly.io, or a container. Whatever you use:
 
-- Set `SMARTMOVING_API_KEY`, `WEBHOOK_SECRET`, `SESSION_SECRET`, and the three `MICROSOFT_*` values
-  as real environment variables, not committed to a repo. `SESSION_SECRET` especially — an
+- Set `SMARTMOVING_API_KEY`, `WEBHOOK_SECRET`, `SESSION_SECRET`, `SMTP_USER`, and `SMTP_PASS` as
+  real environment variables, not committed to a repo. `SESSION_SECRET` especially — an
   auto-generated one changes on every restart, logging everyone out each time you deploy.
-- Set `BACKEND_URL` to the real deployed URL and add the matching redirect URI
-  (`https://your-deployed-host/api/auth/microsoft/callback`) in the Entra ID app registration —
-  Microsoft rejects the callback if it doesn't match exactly. Set `FRONTEND_URL` to wherever the
-  built frontend is hosted.
+- Run `npm install` before `npm start` — this backend now has one real dependency (`nodemailer`),
+  unlike before.
+- Make sure `DEV_BYPASS_LOGIN` is unset on anything reachable outside your own machine.
 - Set `COOKIE_SECURE=true` once this is served over HTTPS (it should be, for anything beyond local
   dev — the session cookie is otherwise sent in the clear).
 - `/api/*` routes require a logged-in session now (see "Login & accounts" above), so they're safe
@@ -294,12 +395,12 @@ VM, Render, Railway, Fly.io, or a container. Whatever you use:
 
 - **`arrivalWindow` unit is an assumption.** SmartMoving's docs list `arrivalWindow.startTime`/
   `endTime` only as `number (double)`, no unit specified. `mapOpportunity.js` treats it as an
-  hour-of-day decimal (8.5 → 8:30am). This only matters when the Premium-tier
-  `startTimeUtc`/`endTimeUtc` isn't available for a job — double check this is right once tested
-  against a real account.
-- **Time zone**: the premium endpoint's `startTimeUtc`/`endTimeUtc` come back in UTC, and no
-  endpoint found exposes the branch's local time zone, so imported start times (when sourced from
-  there) are the raw UTC clock time. Fix once a timezone source is confirmed (could be a manual
+  hour-of-day decimal (8.5 → 8:30am). This only matters when `GET /api/opportunities/{id}/jobs`
+  (basic tier, exact timing — see "Webhooks vs. polling" above) has no entry for a given job —
+  double check the hour-decimal assumption is right once tested against a real account.
+- **Time zone**: `GET /api/opportunities/{id}/jobs`'s `startTimeUtc`/`endTimeUtc` come back in
+  UTC, and no endpoint found exposes the branch's local time zone, so imported start times (when
+  sourced from there) are the raw UTC clock time. Fix once a timezone source is confirmed (could be a manual
   per-branch config value in `mapJobs.js`/`mapOpportunity.js`).
 - **No write-back**: covered above — this is the big one, and needs a conversation with
   SmartMoving, not more code on our end.

@@ -1,20 +1,23 @@
 /**
- * Auth primitives — Microsoft (Entra ID) sign-in, session tokens, cookie parsing, and the company-
- * email domain check. Built on Node's built-in `crypto`/`fetch` only (no `msal`/`jsonwebtoken`/
- * etc.), matching this backend's zero-npm-dependency approach everywhere else.
+ * Auth primitives — email+password sign-in, OTP-based password reset, session tokens, cookie
+ * parsing, and the company-email domain check. Built on Node's built-in `crypto`/`fetch` only (no
+ * `bcrypt`/`jsonwebtoken`/etc.), matching this backend's zero-npm-dependency approach everywhere
+ * else.
  *
- * There are no passwords anywhere in this app — every account signs in with their real Around Town
- * Movers Microsoft 365 account. The OAuth "authorization code" exchange happens server-to-server
- * (this backend <-> Microsoft's token endpoint, authenticated with a client secret), so the ID
- * token we get back is trusted without doing full JWKS signature verification — but see
- * `validateMicrosoftIdToken` for the claim checks done anyway as defense in depth.
+ * Passwords are hashed with `crypto.scryptSync` (built into Node, no npm package needed) — a
+ * random salt per password, stored alongside the hash as `salt:hash` in one column. There is no
+ * "forgot password" secret question or admin-set temp password: a locked-out user (or a brand new
+ * account with no password yet) requests a one-time 6-digit code emailed to their address, and
+ * that code — combined with knowing the account's email — is what authorizes setting a new
+ * password. See `generateOtp`/`hashOtp`/`verifyOtp` below and server.js's
+ * `/api/auth/forgot-password` and `/api/auth/reset-password` routes.
  *
  * Sessions: a small HMAC-SHA256-signed token (same idea as a JWT, hand-rolled) carried in an
  * httpOnly cookie — stateless, so restarting the server doesn't need a sessions table, but it does
  * mean every session is invalidated if SESSION_SECRET changes (including an auto-generated one
  * regenerating on restart — see the warning server.js logs if you haven't set one). The same
- * signing scheme also protects the OAuth `state` parameter against CSRF, without needing anywhere
- * to store it server-side.
+ * signing scheme (via `hashOtp`, an HMAC keyed on SESSION_SECRET) is what turns a 6-digit OTP into
+ * something safe to store in the database — never the raw code.
  */
 
 const crypto = require('crypto');
@@ -22,7 +25,8 @@ const crypto = require('crypto');
 const EMAIL_DOMAIN = 'aroundtownmovers.com';
 const COOKIE_NAME = 'atm_session';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes — just needs to outlive the Microsoft login screen
+const OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes — long enough to check email, short enough to limit guessing
+const SCRYPT_KEYLEN = 64;
 
 function isCompanyEmail(email) {
   if (!email || typeof email !== 'string') return false;
@@ -33,7 +37,7 @@ function normalizeEmail(email) {
   return (email || '').trim().toLowerCase();
 }
 
-/* ---------- Signing (shared by session tokens and OAuth state) ---------- */
+/* ---------- Signing (used by session tokens) ---------- */
 function base64url(input) {
   return Buffer.from(input).toString('base64url');
 }
@@ -97,75 +101,66 @@ function clearSessionCookieHeader(secure) {
   return `${COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure ? '; Secure' : ''}`;
 }
 
-/* ---------- Microsoft (Entra ID) OAuth ----------
-   Standard OAuth 2.0 authorization code flow, tenant-restricted: the authorize URL is scoped to
-   your specific tenant (not the generic "common"/"organizations" endpoints), so Microsoft itself
-   refuses to let anyone outside your Around Town Movers tenant even reach the point of granting an
-   authorization code — the email-domain check in server.js is a second layer on top of that, not
-   the only line of defense. */
-
-function createOAuthState(secret) {
-  return sign({ nonce: crypto.randomBytes(16).toString('hex'), exp: Date.now() + OAUTH_STATE_TTL_MS }, secret);
+/* ---------- Passwords ----------
+   `crypto.scryptSync` is deliberately synchronous — every call here happens inside a single HTTP
+   request handler in server.js with nothing else in flight for that request, so there's no event-
+   loop-blocking concern that would justify the added complexity of the async variant. Stored as
+   `salt:hash` (both hex) in one TEXT column — no separate salt column needed. */
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(String(password), salt, SCRYPT_KEYLEN).toString('hex');
+  return `${salt}:${hash}`;
 }
 
-function verifyOAuthState(state, secret) {
-  return verify(state, secret);
-}
-
-function buildMicrosoftAuthorizeUrl({ tenantId, clientId, redirectUri, state }) {
-  const url = new URL(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize`);
-  url.searchParams.set('client_id', clientId);
-  url.searchParams.set('response_type', 'code');
-  url.searchParams.set('redirect_uri', redirectUri);
-  url.searchParams.set('response_mode', 'query');
-  url.searchParams.set('scope', 'openid profile email');
-  url.searchParams.set('state', state);
-  return url.toString();
-}
-
-async function exchangeMicrosoftCode({ tenantId, clientId, clientSecret, redirectUri, code }) {
-  const res = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      code,
-      redirect_uri: redirectUri,
-      grant_type: 'authorization_code',
-      scope: 'openid profile email',
-    }),
-  });
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.error_description || data.error || 'Microsoft token exchange failed');
+/** Constant-time compare (via `timingSafeEqual`) so a mistyped password can't be distinguished by
+    response-time from a correct one that just happens to differ in a later byte. Returns false
+    (rather than throwing) for a missing/malformed stored value — covers brand-new accounts that
+    have no password set yet, which should behave like "wrong password", not crash the request. */
+function verifyPassword(password, stored) {
+  if (!stored || !stored.includes(':')) return false;
+  const [salt, hashHex] = stored.split(':');
+  let hashBuf, candidateBuf;
+  try {
+    hashBuf = Buffer.from(hashHex, 'hex');
+    candidateBuf = crypto.scryptSync(String(password), salt, SCRYPT_KEYLEN);
+  } catch {
+    return false;
   }
-  return data; // { access_token, id_token, ... }
+  return hashBuf.length === candidateBuf.length && crypto.timingSafeEqual(hashBuf, candidateBuf);
 }
 
-function decodeJwtPayload(jwt) {
-  const parts = (jwt || '').split('.');
-  if (parts.length !== 3) throw new Error('Malformed token');
-  return JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+/* ---------- One-time passcodes (password reset / first-time password setup) ----------
+   A 6-digit numeric code is short enough to type from an email on a phone, and long enough (1 in a
+   million per guess) to be safe given the 10-minute expiry and that each request overwrites any
+   previous code (so there's never more than one valid code per account, and no way to "stack up"
+   guesses across multiple outstanding codes). Only the HMAC of the code is ever stored — see
+   `hashOtp` — so a database read alone can't recover a usable code. */
+function generateOtp() {
+  return String(crypto.randomInt(0, 1000000)).padStart(6, '0');
 }
 
-/** Checks the claims we can verify without doing full JWKS signature verification — reasonable
-    here since the token came directly from Microsoft's token endpoint in response to our own
-    client-secret-authenticated request, not handed to us by the browser. Still checked as defense
-    in depth against a misconfigured client or a substituted token. */
-function validateMicrosoftIdToken(claims, { clientId, tenantId }) {
-  if (claims.aud !== clientId) throw new Error('Token audience mismatch');
-  if (claims.tid !== tenantId) throw new Error('Token tenant mismatch');
-  if (!claims.exp || Date.now() / 1000 > claims.exp) throw new Error('Token expired');
-  if (!(claims.iss || '').includes(tenantId)) throw new Error('Token issuer mismatch');
-  return claims;
+/** Keyed on the same SESSION_SECRET used for session tokens — reusing it here (rather than storing
+    OTPs in plaintext, or adding a second secret to configure) is safe because an HMAC key is fine
+    to use for more than one purpose as long as the *inputs* are domain-separated, which they are
+    here (a 6-digit code vs. a JSON session payload look nothing alike to an attacker trying to
+    reuse one context against the other). */
+function hashOtp(code, secret) {
+  return crypto.createHmac('sha256', secret).update(String(code)).digest('hex');
+}
+
+function verifyOtp(code, storedHash, secret) {
+  if (!storedHash) return false;
+  const expected = hashOtp(code, secret);
+  const expectedBuf = Buffer.from(expected);
+  const storedBuf = Buffer.from(storedHash);
+  return expectedBuf.length === storedBuf.length && crypto.timingSafeEqual(expectedBuf, storedBuf);
 }
 
 module.exports = {
-  EMAIL_DOMAIN, COOKIE_NAME,
+  EMAIL_DOMAIN, COOKIE_NAME, OTP_TTL_MS,
   isCompanyEmail, normalizeEmail,
   createSessionToken, verifySessionToken,
   parseCookies, sessionCookieHeader, clearSessionCookieHeader,
-  createOAuthState, verifyOAuthState,
-  buildMicrosoftAuthorizeUrl, exchangeMicrosoftCode, decodeJwtPayload, validateMicrosoftIdToken,
+  hashPassword, verifyPassword,
+  generateOtp, hashOtp, verifyOtp,
 };

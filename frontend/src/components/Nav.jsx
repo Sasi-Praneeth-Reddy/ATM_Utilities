@@ -11,6 +11,8 @@ const TABS_BY_ROLE = {
     { id: 'board', label: 'Truck Board' },
     { id: 'ld', label: 'Long Distance Planner' },
     { id: 'admin', label: 'Trucks & Drivers' },
+    { id: 'assignments', label: 'Job Assignments' },
+    { id: 'users', label: 'Users' },
   ],
 };
 

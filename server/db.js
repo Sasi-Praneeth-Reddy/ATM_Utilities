@@ -84,19 +84,22 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_jobs_smartMovingJobId ON jobs(smartMovingJobId);
 `);
 
-// Migration: the users table originally had a NOT NULL passwordHash column, from before login
-// switched to Microsoft sign-in (no passwords anywhere anymore). Drop it if it's still there on an
-// existing database file — SQLite has supported DROP COLUMN since 3.35 (2021), which every Node
-// version new enough to have node:sqlite bundles. Wrapped defensively in case of an older SQLite
-// build; worst case the column just sits there unused.
-try {
-  const userColumns = db.prepare("PRAGMA table_info(users)").all();
-  if (userColumns.some(c => c.name === 'passwordHash')) {
-    db.exec('ALTER TABLE users DROP COLUMN passwordHash');
+// Migration: add the columns login (password + OTP-based reset) needs, if they aren't already on
+// an existing database file. Guarded with PRAGMA table_info rather than a plain ALTER TABLE so this
+// is safe to run on every startup, not just once. `passwordHash` starts NULL for every account —
+// there is no admin-set temp password anywhere in this app; a brand new account (or one that's
+// locked out) sets its own password via the OTP flow in server.js's `/api/auth/forgot-password` +
+// `/api/auth/reset-password`. `otpHash`/`otpExpiresAt` hold at most one outstanding one-time code
+// per account — a new request overwrites whatever was there before.
+function ensureColumn(table, column, type) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some(c => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
   }
-} catch (err) {
-  console.warn('Could not drop the old users.passwordHash column (safe to ignore — it just goes unused):', err.message);
 }
+ensureColumn('users', 'passwordHash', 'TEXT');
+ensureColumn('users', 'otpHash', 'TEXT');
+ensureColumn('users', 'otpExpiresAt', 'TEXT');
 
 /* ---------- Sample data (used to seed an empty database on first run) ---------- */
 const SAMPLE_TRUCKS = [
@@ -197,6 +200,18 @@ function unassignDriverTruck(driverId) {
   if (truck) db.prepare('UPDATE trucks SET driverId = NULL WHERE id = ?').run(truck.id);
 }
 
+/** Deletes a truck. `job_trucks` rows referencing it clean up on their own via that table's
+ * ON DELETE CASCADE foreign key (so any job assigned to this truck becomes unassigned, same as
+ * removing the truck by hand from every job first). `drivers.truckId` has no such FK — it's a
+ * plain string column — so any driver still linked to this truck is explicitly unlinked here too,
+ * otherwise it'd be left pointing at a truck id that no longer exists. */
+const deleteTruckStmt = db.prepare('DELETE FROM trucks WHERE id = ?');
+function deleteTruck(id) {
+  db.prepare('UPDATE drivers SET truckId = NULL WHERE truckId = ?').run(id);
+  deleteTruckStmt.run(id);
+  return getState();
+}
+
 /* ---------- Writes: drivers ---------- */
 const insertDriverStmt = db.prepare(`
   INSERT INTO drivers (id, name, phone, cdl, truckId) VALUES (@id, @name, @phone, @cdl, @truckId)
@@ -225,6 +240,18 @@ function updateDriver(id, fields) {
   return db.prepare('SELECT * FROM drivers WHERE id = ?').get(id);
 }
 
+/** Deletes a driver. Mirrors deleteTruck's cleanup on the other side of that same link: whichever
+ * truck row has `driverId` pointing at this driver gets it cleared first (plain string column, no
+ * FK to cascade it automatically) so no truck is left referencing a driver id that no longer
+ * exists. Doesn't touch jobs — drivers aren't directly assigned to jobs in this schema, only to
+ * trucks, and trucks stay assigned to jobs regardless of who's currently driving them. */
+const deleteDriverStmt = db.prepare('DELETE FROM drivers WHERE id = ?');
+function deleteDriver(id) {
+  db.prepare('UPDATE trucks SET driverId = NULL WHERE driverId = ?').run(id);
+  deleteDriverStmt.run(id);
+  return getState();
+}
+
 /* ---------- Writes: jobs ---------- */
 const insertJobStmt = db.prepare(`
   INSERT INTO jobs (id, customer, type, date, endDate, startTime, duration, origin, destination,
@@ -242,7 +269,10 @@ function jobParams(job) {
     id: job.id, customer: job.customer || null, type: job.type || 'local',
     date: job.date, endDate: job.endDate || job.date,
     startTime: job.startTime || null, duration: job.duration ?? null,
-    origin: job.origin || null, destination: job.destination || null,
+    // `??` (not `||`): mapOpportunity.js legitimately sends '' when SmartMoving has no address
+    // data for a job. `||` would silently coerce that '' into a real NULL, which then crashes
+    // every frontend spot that calls `.split(',')` on origin/destination assuming it's a string.
+    origin: job.origin ?? null, destination: job.destination ?? null,
     crewSize: job.crewSize ?? null, trucksNeeded: job.trucksNeeded || 1,
     status: job.status || null, miles: job.miles ?? null, transitDays: job.transitDays ?? null,
     stage: job.stage || null, source: job.source || null,
@@ -313,20 +343,23 @@ function upsertSmartMovingJob(job) {
 }
 
 /* ---------- Users (login accounts) ----------
-   No passwords anywhere — accounts sign in with their real Microsoft 365 account (see auth.js).
-   A row here is really just "this email is allowed in, with this role"; an admin creates it
-   in advance (via the Users panel or create-admin.js), and signing in with Microsoft only
-   succeeds if the authenticated email matches a row that already exists. */
+   Email + password login (see auth.js) with an allowlist-and-invite model: an admin creates a row
+   here in advance (via the Users panel or create-admin.js) with just an email and role — that
+   grants access, but `passwordHash` starts NULL, so the account can't sign in yet. The new user
+   (or anyone locked out later) uses "Forgot password?" on the login screen, which emails a one-time
+   code and lets them set a password themselves — the same flow serves both "first time setting a
+   password" and "actually forgot it," so there's only one code path to reason about instead of two. */
 const insertUserStmt = db.prepare(`
   INSERT INTO users (id, email, role, createdAt) VALUES (@id, @email, @role, @createdAt)
 `);
-function createUser({ id, email, role }) {
+function createUser({ id, email, role, passwordHash }) {
   insertUserStmt.run({ id, email, role: role || 'dispatcher', createdAt: new Date().toISOString() });
+  if (passwordHash) db.prepare('UPDATE users SET passwordHash = ? WHERE id = ?').run(passwordHash, id);
   return getUserById(id);
 }
 
 function listUsers() {
-  return db.prepare('SELECT id, email, role, createdAt FROM users ORDER BY createdAt').all();
+  return db.prepare('SELECT id, email, role, createdAt, (passwordHash IS NOT NULL) AS hasPassword FROM users ORDER BY createdAt').all();
 }
 
 function getUserByEmail(email) {
@@ -351,6 +384,23 @@ function countAdmins() {
   return db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'").get().n;
 }
 
+/** Sets a new password and clears any outstanding OTP in the same call — used both by the
+    reset-password route (OTP flow) and create-admin.js (direct CLI password set). */
+function setUserPassword(id, passwordHash) {
+  db.prepare('UPDATE users SET passwordHash = ?, otpHash = NULL, otpExpiresAt = NULL WHERE id = ?').run(passwordHash, id);
+  return getUserById(id);
+}
+
+/** Stores the (hashed) one-time code for a password reset/first-time-setup request. Overwrites
+    whatever code was previously outstanding for this account, so at most one is ever valid. */
+function setUserOtp(id, otpHash, otpExpiresAt) {
+  db.prepare('UPDATE users SET otpHash = ?, otpExpiresAt = ? WHERE id = ?').run(otpHash, otpExpiresAt, id);
+}
+
+function clearUserOtp(id) {
+  db.prepare('UPDATE users SET otpHash = NULL, otpExpiresAt = NULL WHERE id = ?').run(id);
+}
+
 /* ---------- Reset ---------- */
 function clearAll() {
   db.exec('DELETE FROM job_trucks; DELETE FROM jobs; DELETE FROM drivers; DELETE FROM trucks;');
@@ -368,6 +418,26 @@ function resetToSampleData() {
   return getState();
 }
 
+/** Empties jobs ONLY — trucks and drivers (the fleet) are left alone. For going live with real job
+    data (e.g. once SmartMoving sync or manual entry is the actual source of jobs) without having to
+    re-enter trucks/drivers that are already set up correctly. */
+function clearJobs() {
+  db.exec('DELETE FROM job_trucks; DELETE FROM jobs;');
+  return getState();
+}
+
+const deleteJobStmt = db.prepare('DELETE FROM jobs WHERE id = ?');
+/** Permanently removes one job — currently only exposed in the UI for manually-created
+    "placeholder" jobs (source = 'placeholder'), not SmartMoving-sourced ones, which would just
+    reappear on the next poll sweep anyway since the backend has no way to tell SmartMoving "stop
+    syncing this." The route itself doesn't enforce that restriction (nothing SQL-level ties a
+    delete to source), so it's a UI-level choice, not a data-layer one — see server.js's DELETE
+    /api/jobs/:id. `job_trucks` rows clean up on their own via the table's ON DELETE CASCADE. */
+function deleteJob(id) {
+  deleteJobStmt.run(id);
+  return getState();
+}
+
 // Seed on first run only — an existing database (with real dispatcher work in it) is never
 // silently overwritten.
 const truckCount = db.prepare('SELECT COUNT(*) AS n FROM trucks').get().n;
@@ -378,9 +448,10 @@ if (truckCount === 0) {
 module.exports = {
   DB_FILE,
   getState, getJob,
-  createTruck, updateTruck, linkTruckDriver, unassignDriverTruck,
-  createDriver, updateDriver,
-  createJob, updateJob, setJobTrucks, upsertSmartMovingJob,
-  resetToSampleData,
+  createTruck, updateTruck, deleteTruck, linkTruckDriver, unassignDriverTruck,
+  createDriver, updateDriver, deleteDriver,
+  createJob, updateJob, deleteJob, setJobTrucks, upsertSmartMovingJob,
+  resetToSampleData, clearJobs,
   createUser, listUsers, getUserByEmail, getUserById, updateUserRole, deleteUser, countAdmins,
+  setUserPassword, setUserOtp, clearUserOtp,
 };

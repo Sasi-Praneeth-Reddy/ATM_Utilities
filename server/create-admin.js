@@ -1,21 +1,25 @@
 /**
- * One-off CLI for granting (or changing the role of) a login account from the terminal — no server
- * restart needed. There's no password to set: this app signs everyone in with their real Around
- * Town Movers Microsoft 365 account, so this script just decides who's *allowed* to, and with what
- * role. Useful for the very first admin, adding a second admin, or granting access without going
- * through the Users panel in the UI.
+ * One-off CLI for granting (or changing the role/password of) a login account from the terminal —
+ * no server restart needed. Useful for the very first admin, adding a second admin, recovering
+ * access if email sending isn't configured yet, or granting access without going through the Users
+ * panel in the UI.
  *
  * Usage:
- *   node create-admin.js <email> [role]
+ *   node create-admin.js <email> [role] [password]
  *
- * role defaults to "admin" (hence the filename) but accepts admin | dispatcher | crew. If the
- * email already has an account, this updates its role instead of failing.
+ * role defaults to "admin" (hence the filename) but accepts admin | dispatcher | crew. password is
+ * optional — if omitted, the account is created (or left) with no password, and whoever owns that
+ * email needs to use "Forgot password?" on the login screen to set one (requires email sending to
+ * be configured — see server/README.md). If the email already has an account, this updates its
+ * role (and password, if one is given) instead of failing.
  *
  * Examples:
  *   node create-admin.js csr4@aroundtownmovers.com
  *   node create-admin.js jsmith@aroundtownmovers.com dispatcher
+ *   node create-admin.js csr4@aroundtownmovers.com admin "a strong temp password"
  */
 
+require('./load-env');
 const db = require('./db');
 const auth = require('./auth');
 
@@ -25,10 +29,10 @@ function nextId(rows, prefix) {
   return prefix + (max + 1);
 }
 
-const [, , rawEmail, rawRole] = process.argv;
+const [, , rawEmail, rawRole, rawPassword] = process.argv;
 
 if (!rawEmail) {
-  console.error('Usage: node create-admin.js <email> [admin|dispatcher|crew]');
+  console.error('Usage: node create-admin.js <email> [admin|dispatcher|crew] [password]');
   process.exit(1);
 }
 
@@ -40,13 +44,21 @@ if (!auth.isCompanyEmail(email)) {
   process.exit(1);
 }
 
+if (rawPassword !== undefined && rawPassword.length < 8) {
+  console.error('Password must be at least 8 characters.');
+  process.exit(1);
+}
+
 const existing = db.getUserByEmail(email);
+const passwordSuffix = rawPassword ? ' with the password you gave' : ' — no password set yet, use "Forgot password?" on the login screen to set one';
 
 if (existing) {
   db.updateUserRole(existing.id, role);
-  console.log(`Updated ${email} — role set to "${role}". They sign in with Microsoft using this address.`);
+  if (rawPassword) db.setUserPassword(existing.id, auth.hashPassword(rawPassword));
+  console.log(`Updated ${email} — role set to "${role}"${passwordSuffix}.`);
 } else {
   const id = nextId(db.listUsers(), 'U');
-  db.createUser({ id, email, role });
-  console.log(`Granted ${email} access with role "${role}". They sign in with Microsoft using this address.`);
+  const passwordHash = rawPassword ? auth.hashPassword(rawPassword) : undefined;
+  db.createUser({ id, email, role, passwordHash });
+  console.log(`Granted ${email} access with role "${role}"${passwordSuffix}.`);
 }

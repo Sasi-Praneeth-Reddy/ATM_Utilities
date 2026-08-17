@@ -2,16 +2,13 @@ import { useState } from 'react';
 import SyncPanel from './SyncPanel';
 import TruckAdminList from './TruckAdminList';
 import DriverAdminList from './DriverAdminList';
-import JobAssignments from './JobAssignments';
-import UsersAdmin from './UsersAdmin';
 
 export default function AdminTab({
-  trucks, drivers, jobs, conflictIds,
-  syncStatus, onSyncNow, lastSyncedAt, onResetToSampleData,
+  trucks, drivers, jobs,
+  syncStatus, onSyncNow, lastSyncedAt, onResetToSampleData, onClearJobs,
   onCreateTruck, onCreateDriver,
   onUpdateTruckField, onUpdateTruckStatus, onLinkDriver, onUpdateDriverField, onUnassignDriverTruck,
-  onSetJobSingleTruck, onToggleJobTruck, onUpdateJobField,
-  users, currentUserId, onCreateUser, onChangeUserRole, onDeleteUser,
+  onDeleteTruck, onDeleteDriver,
 }) {
   const [showAddTruckForm, setShowAddTruckForm] = useState(false);
   const [showAddDriverForm, setShowAddDriverForm] = useState(false);
@@ -50,6 +47,14 @@ export default function AdminTab({
           >
             Reset to sample data
           </button>
+          <button
+            className="btn secondary"
+            style={{ color: 'var(--red)' }}
+            onClick={onClearJobs}
+            title="Remove all jobs — including the sample jobs — but leave trucks and drivers untouched"
+          >
+            Clear all jobs
+          </button>
         </div>
       </div>
 
@@ -57,13 +62,14 @@ export default function AdminTab({
         <div>
           <h2 className="section-title">Trucks</h2>
           <TruckAdminList
-            trucks={trucks} drivers={drivers}
+            trucks={trucks} drivers={drivers} jobs={jobs}
             showAddForm={showAddTruckForm}
             onSaveNewTruck={saveNewTruck}
             onCancelAddTruck={() => setShowAddTruckForm(false)}
             onUpdateField={onUpdateTruckField}
             onUpdateStatus={onUpdateTruckStatus}
             onLinkDriver={onLinkDriver}
+            onDeleteTruck={onDeleteTruck}
           />
         </div>
         <div>
@@ -76,26 +82,9 @@ export default function AdminTab({
             onUpdateField={onUpdateDriverField}
             onLinkDriver={onLinkDriver}
             onUnassignDriverTruck={onUnassignDriverTruck}
+            onDeleteDriver={onDeleteDriver}
           />
         </div>
-      </div>
-
-      <h2 className="section-title" style={{ marginTop: 22 }}>Job Assignments — assign a truck &amp; driver to each job</h2>
-      <JobAssignments
-        trucks={trucks} drivers={drivers} jobs={jobs} conflictIds={conflictIds}
-        onSetJobSingleTruck={onSetJobSingleTruck}
-        onToggleJobTruck={onToggleJobTruck}
-        onUpdateJobField={onUpdateJobField}
-      />
-
-      <div style={{ marginTop: 22 }}>
-        <UsersAdmin
-          users={users}
-          currentUserId={currentUserId}
-          onCreateUser={onCreateUser}
-          onChangeRole={onChangeUserRole}
-          onDeleteUser={onDeleteUser}
-        />
       </div>
     </section>
   );

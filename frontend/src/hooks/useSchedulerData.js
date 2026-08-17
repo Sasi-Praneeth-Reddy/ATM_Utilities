@@ -6,6 +6,14 @@ function sameJSON(a, b) {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+/** Formats the yyyymmdd integer format the backend uses (e.g. 20260812) as a short human date
+ * (e.g. "Aug 12, 2026") for the sync status message. */
+function yyyymmddToLabel(yyyymmdd) {
+  const s = String(yyyymmdd);
+  const d = new Date(`${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}T00:00:00`);
+  return isNaN(d.getTime()) ? String(yyyymmdd) : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
 /**
  * All scheduler data (trucks/drivers/jobs) plus every mutation the UI can make. Mirrors the
  * original atm-scheduler.html's global-state + persist() pattern: every mutation updates local
@@ -113,10 +121,31 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
       .catch((err) => window.alert(`Couldn't reset: ${err.message}`));
   }, [call]);
 
-  const syncNow = useCallback(async () => {
+  const clearJobs = useCallback(() => {
+    if (
+      !window.confirm(
+        "Remove every job (including the sample jobs and anything imported from SmartMoving) for every device using this backend? Trucks and drivers are left exactly as they are — only jobs are cleared. Cannot be undone."
+      )
+    ) {
+      return;
+    }
+    call('POST', '/api/clear-jobs')
+      .then((state) => {
+        setTrucks(state.trucks);
+        setDrivers(state.drivers);
+        setJobs(state.jobs);
+      })
+      .catch((err) => window.alert(`Couldn't clear jobs: ${err.message}`));
+  }, [call]);
+
+  const syncNow = useCallback(async ({ from, to } = {}) => {
     setSyncStatus({ loading: true, message: '', error: null });
     try {
-      const result = await call('POST', '/api/sync-now');
+      const params = new URLSearchParams();
+      if (from) params.set('from', from);
+      if (to) params.set('to', to);
+      const query = params.toString();
+      const result = await call('POST', `/api/sync-now${query ? `?${query}` : ''}`);
       setTrucks(result.state.trucks);
       setDrivers(result.state.drivers);
       setJobs(result.state.jobs);
@@ -125,9 +154,30 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
           ? ` ${result.errors.length} opportunit${result.errors.length > 1 ? 'ies' : 'y'} couldn't be read — see console.`
           : '';
       if (result.errors && result.errors.length) console.warn('SmartMoving sync errors:', result.errors);
+      // Three independent sources feed this, confirmed live against SmartMoving's dev portal
+      // 2026-08-10: /api/leads (only ever New/InProgress, never Booked+), crew members' assigned
+      // jobs (bypasses /api/leads, but needs a crew member to enumerate from), and /api/customers
+      // (finds a job regardless of lead-pipeline stage OR crew assignment — added after a real
+      // report of jobs missing even with nobody staffed on them yet). Reporting leadCount alone
+      // used to read as "success" even when jobCount was 0 — spell out all three sources instead
+      // of leaving the dispatcher to wonder.
+      const leadCount = result.leadCount ?? 0;
+      const crewJobOpportunityCount = result.crewJobOpportunityCount ?? 0;
+      const customerJobOpportunityCount = result.customerJobOpportunityCount ?? 0;
+      const jobCount = result.jobCount ?? 0;
+      const sourceBits = [];
+      if (crewJobOpportunityCount > 0) sourceBits.push(`${crewJobOpportunityCount} already-booked opportunit${crewJobOpportunityCount === 1 ? 'y' : 'ies'} assigned to crew`);
+      if (customerJobOpportunityCount > 0) sourceBits.push(`${customerJobOpportunityCount} more found via customer records (no crew assigned yet)`);
+      const sourceNote = sourceBits.length ? ` Also checked ${sourceBits.join(' and ')} — these never show up in the leads list.` : '';
+      const jobNote = jobCount === 0
+        ? (leadCount === 0 && crewJobOpportunityCount === 0 && customerJobOpportunityCount === 0
+          ? ''
+          : ` Nothing had a dispatched job yet, so nothing was added to the board.`)
+        : ` ${jobCount} job${jobCount === 1 ? '' : 's'} added/updated on the board.`;
+      const rangeNote = result.from && result.to ? ` Range: ${yyyymmddToLabel(result.from)} – ${yyyymmddToLabel(result.to)}.` : '';
       setSyncStatus({
         loading: false,
-        message: `Synced ${result.leadCount ?? 0} lead${result.leadCount === 1 ? '' : 's'} from SmartMoving.${errNote}`,
+        message: `Synced ${leadCount} lead${leadCount === 1 ? '' : 's'} from SmartMoving.${rangeNote}${sourceNote}${jobNote}${errNote}`,
         error: null,
       });
     } catch (err) {
@@ -147,6 +197,17 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
     const driver = await call('POST', '/api/drivers', fields);
     setDrivers((prev) => [...prev, driver]);
     return driver;
+  }, [call]);
+
+  /** Quick-add "placeholder" job from the day view (JobCreateModal) — just a name/date/time stub,
+      unassigned, for penciling in something that isn't in SmartMoving (yet or ever). The backend
+      returns the full state (same pattern as syncNow/resetToSampleData) rather than just the new
+      job, since it's a cheap single round trip and keeps this in lockstep with the same
+      "set from server state" pattern the rest of this file uses after any bulk-ish change. */
+  const createJob = useCallback(async (fields) => {
+    const result = await call('POST', '/api/jobs', fields);
+    setJobs(result.state.jobs);
+    return result;
   }, [call]);
 
   const updateTruckField = useCallback((id, field, value) => {
@@ -183,19 +244,33 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
     persist('POST', `/api/drivers/${driverId}/unassign-truck`, {});
   }, [persist]);
 
+  /** Deleting a truck can ripple into jobs (any job assigned to it becomes unassigned) and the
+      linked driver (unlinked, not deleted) — the backend's DELETE handles both and hands back the
+      full resulting state (same shape as resetToSampleData/syncNow), so this just adopts that
+      instead of trying to replicate the cross-table cleanup logic here too. */
+  const deleteTruck = useCallback(async (id) => {
+    const state = await call('DELETE', `/api/trucks/${id}`);
+    setTrucks(state.trucks);
+    setDrivers(state.drivers);
+    setJobs(state.jobs);
+  }, [call]);
+
+  /** Deleting a driver only ever ripples into whichever truck they're linked to (unlinked, not
+      deleted) — jobs aren't touched, drivers aren't assigned to jobs directly in this schema. Same
+      "adopt the server's full state" approach as deleteTruck, for the same reason. */
+  const deleteDriver = useCallback(async (id) => {
+    const state = await call('DELETE', `/api/drivers/${id}`);
+    setTrucks(state.trucks);
+    setDrivers(state.drivers);
+  }, [call]);
+
   /* ---------- Job assignment ---------- */
 
   const setJobSingleTruck = useCallback((jobId, truckId) => {
     const truckIds = truckId ? [truckId] : [];
     setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, truckIds } : j)));
-    const truck = truckId ? trucks.find((t) => t.id === truckId) : null;
-    const truckStatusChanged = !!(truck && truck.status === 'available');
-    if (truckStatusChanged) {
-      setTrucks((prev) => prev.map((t) => (t.id === truckId ? { ...t, status: 'onjob' } : t)));
-    }
     persist('PATCH', `/api/jobs/${jobId}`, { truckIds });
-    if (truckStatusChanged) persist('PATCH', `/api/trucks/${truckId}`, { status: 'onjob' });
-  }, [trucks, persist]);
+  }, [persist]);
 
   const toggleJobTruck = useCallback((jobId, truckId, checked) => {
     const job = jobs.find((j) => j.id === jobId);
@@ -205,19 +280,37 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
       ? (current.includes(truckId) ? current : [...current, truckId])
       : current.filter((id) => id !== truckId);
     setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, truckIds } : j)));
-    const truck = checked ? trucks.find((t) => t.id === truckId) : null;
-    const truckStatusChanged = !!(truck && truck.status === 'available');
-    if (truckStatusChanged) {
-      setTrucks((prev) => prev.map((t) => (t.id === truckId ? { ...t, status: 'onjob' } : t)));
-    }
     persist('PATCH', `/api/jobs/${jobId}`, { truckIds });
-    if (truckStatusChanged) persist('PATCH', `/api/trucks/${truckId}`, { status: 'onjob' });
-  }, [jobs, trucks, persist]);
+  }, [jobs, persist]);
 
   const updateJobField = useCallback((jobId, field, value) => {
     setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, [field]: value } : j)));
     persist('PATCH', `/api/jobs/${jobId}`, { [field]: value });
   }, [persist]);
+
+  /** Same as updateJobField but for several fields at once in a single PATCH — used by the "edit
+      date/time" modal (JobEditModal) so saving date+endDate+startTime doesn't fire three separate
+      round trips (and three separate optimistic-update flickers) for one save action. */
+  const updateJobFields = useCallback((jobId, fields) => {
+    setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, ...fields } : j)));
+    persist('PATCH', `/api/jobs/${jobId}`, fields);
+  }, [persist]);
+
+  /** Permanently deletes a job — wired up in the UI only for placeholder jobs (source ===
+      'placeholder'; see JobVisuals.jsx/JobEditModal.jsx), not SmartMoving-sourced ones, which
+      would just come back on the next poll sweep anyway. Optimistic like everything else here:
+      removes it from local state immediately, and if the DELETE call fails, restores it and
+      surfaces an alert rather than leaving the UI showing a job that's still on the server. */
+  const deleteJob = useCallback(async (jobId) => {
+    const removed = jobs.find((j) => j.id === jobId);
+    setJobs((prev) => prev.filter((j) => j.id !== jobId));
+    try {
+      await call('DELETE', `/api/jobs/${jobId}`);
+    } catch (err) {
+      if (removed) setJobs((prev) => [...prev, removed]);
+      throw err;
+    }
+  }, [jobs, call]);
 
   /** Unassigned-tray drop, and the × button on a multi-truck job block. */
   const removeTruckFromJob = useCallback((jobId, truckId) => {
@@ -233,28 +326,47 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
     persist('PATCH', `/api/jobs/${jobId}`, { truckIds: [] });
   }, [persist]);
 
-  /** Day-view timeline drop — add-only: dropping onto a truck adds it to the job's assigned
-      trucks (needed for multi-truck LD jobs); use removeTruckFromJob or drag to Unassigned to
-      remove one. `newStartTime` is only applied to non-LD jobs — pass null/undefined to leave
-      the job's start time unchanged. */
+  /** Day-view timeline drop. Long-distance jobs can need more than one truck, so dropping onto a
+      new truck there ADDS to the job's assigned trucks (remove one via removeTruckFromJob or drag
+      to Unassigned to clear all). Local jobs are single-truck only — mirroring the single-select
+      dropdown in Admin → Job Assignments — so dropping one onto a different truck MOVES it there
+      instead of stacking a second assignment. `newStartTime` is applied to any job type, including
+      long-distance — a trip's departure time still matters even though its bar always spans the
+      full day width; pass null/undefined to leave the job's start time unchanged (e.g. when
+      DayBoard.jsx computes no time because the drop wasn't on the timeline itself). */
   const addTruckToJob = useCallback((jobId, truckId, newStartTime) => {
     const job = jobs.find((j) => j.id === jobId);
     if (!job) return;
     const current = job.truckIds || [];
-    const truckIds = current.includes(truckId) ? current : [...current, truckId];
+    const truckIds = job.type === 'long_distance'
+      ? (current.includes(truckId) ? current : [...current, truckId])
+      : [truckId];
     const fields = { truckIds };
-    if (newStartTime !== undefined && newStartTime !== null && job.type !== 'long_distance') {
+    if (newStartTime !== undefined && newStartTime !== null) {
       fields.startTime = newStartTime;
     }
     setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, ...fields } : j)));
-    const truck = trucks.find((t) => t.id === truckId);
-    const truckStatusChanged = !!(truck && truck.status === 'available');
-    if (truckStatusChanged) {
-      setTrucks((prev) => prev.map((t) => (t.id === truckId ? { ...t, status: 'onjob' } : t)));
-    }
     persist('PATCH', `/api/jobs/${jobId}`, fields);
-    if (truckStatusChanged) persist('PATCH', `/api/trucks/${truckId}`, { status: 'onjob' });
-  }, [jobs, trucks, persist]);
+  }, [jobs, persist]);
+
+  /** Explicit "this job needs another truck" action — a deliberate button/picker in the
+      scheduler board and Admin → Job Assignments, distinct from addTruckToJob (which is only the
+      day-board drag-and-drop and stays type-restricted so local jobs can't get silently
+      double-assigned by dragging). Works for any job type: a local job can need a second truck
+      too if the load doesn't fit, not just long-distance ones. Also bumps trucksNeeded up to the
+      new truck count so the "needs N more truck(s)" badge reflects reality instead of showing
+      "over" once assigned trucks exceed a stale trucksNeeded value. */
+  const addExtraTruckToJob = useCallback((jobId, truckId) => {
+    const job = jobs.find((j) => j.id === jobId);
+    if (!job) return;
+    const current = job.truckIds || [];
+    if (current.includes(truckId)) return;
+    const truckIds = [...current, truckId];
+    const trucksNeeded = Math.max(job.trucksNeeded || 1, truckIds.length);
+    const fields = { truckIds, trucksNeeded };
+    setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, ...fields } : j)));
+    persist('PATCH', `/api/jobs/${jobId}`, fields);
+  }, [jobs, persist]);
 
   /** Month-view date-cell drop — shifts both date and endDate by the same delta so a multi-day
       job's length is preserved. */
@@ -272,11 +384,11 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
     backendConnected, backendErrorMsg,
     lastSyncedAt,
     syncStatus, syncNow,
-    resetToSampleData,
+    resetToSampleData, clearJobs,
     createTruck, createDriver,
     updateTruckField, updateDriverField, updateTruckStatus,
-    linkTruckDriver, unassignDriverTruck,
-    setJobSingleTruck, toggleJobTruck, updateJobField,
-    removeTruckFromJob, unassignJob, addTruckToJob, moveJobDate,
+    linkTruckDriver, unassignDriverTruck, deleteTruck, deleteDriver,
+    setJobSingleTruck, toggleJobTruck, updateJobField, updateJobFields, createJob, deleteJob,
+    removeTruckFromJob, unassignJob, addTruckToJob, addExtraTruckToJob, moveJobDate,
   };
 }
