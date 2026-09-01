@@ -10,7 +10,8 @@ This talks to the `server/` backend over its REST API — it holds no data of it
 ## Setup
 
 Requires Node 18+ (any reasonably recent Node works here — the version requirement that matters for
-this project is on the backend, which needs 22.5+ for SQLite).
+this project is on the backend, which needs 22.5+, though only for the one-off local migration
+script now — see `server/README.md`).
 
 ```bash
 cd frontend
@@ -22,7 +23,10 @@ This starts a dev server (prints the local URL, usually `http://localhost:5173`)
 The backend needs to be running separately (`cd ../server && npm start`) — the app is a thin client
 and has nothing to show without it.
 
-By default the frontend talks to `http://localhost:8787`. To point it at a different backend, open
+In local dev (`npm run dev`), the frontend talks to `http://localhost:8787` by default. In
+production, the built frontend is served by `server.js` itself (same AWS App Runner container as
+the API — see `server/README.md` "AWS deployment"), so it defaults to the same origin instead and
+there's nothing to configure there. Either way, you can point it at a different backend by opening
 it with a `?api=` query param, e.g. `http://localhost:5173/?api=https://your-deployed-backend`. If
 the backend can't be reached, the app shows a banner with a field to retry a different URL for the
 rest of that session — nothing is saved to local storage.

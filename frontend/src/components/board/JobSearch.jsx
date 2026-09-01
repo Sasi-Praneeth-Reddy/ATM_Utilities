@@ -3,14 +3,42 @@ import { fmtRange } from '../../utils/dates';
 import { jobTruckIds, jobTruckLabel } from '../../utils/jobs';
 
 /** Matches a job against a lowercased search term across every field a dispatcher would
- * plausibly search by — customer name, either SmartMoving id, and both addresses — not just the
+ * plausibly search by — customer name, any SmartMoving id, and both addresses — not just the
  * customer name, since "where's the Larimer St job" is as likely a search as a customer's name. */
 function matchesQuery(job, q) {
   const haystack = [
     job.customer, job.id, job.origin, job.destination,
-    job.smartMovingJobId, job.smartMovingOpportunityId,
+    job.smartMovingJobId, job.smartMovingOpportunityId, job.smartInsightsQuoteNumber,
   ].filter(Boolean).join(' ').toLowerCase();
   return haystack.includes(q);
+}
+
+/** The customer-facing job/opportunity number to show next to a result, if this job has one worth
+ * showing — a plain generated Firestore doc id isn't meaningful to a dispatcher, but the number
+ * SmartMoving itself uses for the job is. Matters most now that one opportunity can produce
+ * several jobs on the board with the SAME customer name (see mapSmartInsightsRow.js's file header
+ * — e.g. "24100-1"/"24100-2"/"24100-3" all "Brown, Byron") — without this, those look like
+ * indistinguishable duplicate rows in the results list. Returns null for placeholder jobs, which
+ * have no such number.
+ *
+ * Bug fixed 2026-08-31 (reported: the SI number disappeared from search results for jobs that
+ * clearly have one): this used to branch on `job.source` alone — smartInsightsQuoteNumber only
+ * for 'smartmoving-insights', smartMovingJobId/smartMovingOpportunityId only for 'smartmoving'.
+ * But db.js's calendar merge (mergeCalendarDataOntoExistingJob/upsertSmartMovingJob) deliberately
+ * flips a Smart-Insights-originated job's `source` to 'smartmoving' the moment the calendar sync
+ * enriches it — "an upgrade, not a demotion" — while leaving smartInsightsQuoteNumber itself
+ * untouched (smFields never includes it). Once that flip happened, this function stopped looking
+ * at smartInsightsQuoteNumber and fell back to smartMovingJobId instead — which, for a job that
+ * came from Smart Insights and was only ever merged with CALENDAR data (never the REST poll), is
+ * actually the Google Calendar event's iCal UID (see mapIcalEvent.js's mapIcalEventToJob), not a
+ * real job number — so the truly meaningful number silently stopped showing. This got more visible
+ * after the 2026-08-31 branch-filter removal (server.js), since more jobs now get calendar-merged
+ * than before. Fix: check smartInsightsQuoteNumber first regardless of source — it's set once and
+ * never overwritten, so it stays valid and meaningful even after a job's source label changes. */
+function jobIdNumber(job) {
+  if (job.smartInsightsQuoteNumber) return job.smartInsightsQuoteNumber;
+  if (job.source === 'smartmoving') return job.smartMovingJobId || job.smartMovingOpportunityId || null;
+  return null;
 }
 
 /**
@@ -68,7 +96,10 @@ export default function JobSearch({ jobs, trucks, onJumpToJob }) {
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => handlePick(j)}
             >
-              <span className="jsr-customer">{j.customer}</span>
+              <span className="jsr-title">
+                <span className="jsr-customer">{j.customer}</span>
+                {jobIdNumber(j) && <span className="jsr-id">#{jobIdNumber(j)}</span>}
+              </span>
               <span className="jsr-meta">
                 {j.type === 'long_distance' ? `Long distance · ${fmtRange(j)}` : j.date}
                 {' · '}{jobTruckIds(j).length ? jobTruckLabel(trucks, j) : 'Unassigned'}

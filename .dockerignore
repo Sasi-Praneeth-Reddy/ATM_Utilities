@@ -1,0 +1,20 @@
+node_modules
+frontend/node_modules
+server/node_modules
+frontend/dist
+npm-debug.log
+
+# Real secrets — never bake these into an image. AWS App Runner config comes from env vars /
+# Secrets Manager set on the service itself, not from a file in the image (see server/README.md).
+server/.env
+server/.env.*
+!server/.env.example
+
+# The old local SQLite database file/directory — irrelevant now (data lives in Firestore) and must
+# never be baked into a container image, since it holds real customer/user data.
+server/data/
+
+# Local-only scratch/dev files
+*.log
+.DS_Store
+.git/

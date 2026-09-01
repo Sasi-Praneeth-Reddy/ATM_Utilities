@@ -1,5 +1,5 @@
 import { jobActiveOn, fmtRange, hourToLabel, timeToHour, daysBetween } from '../../utils/dates';
-import { jobTruckIds, statusLabel, ldStageLabels, deriveTruckStatus } from '../../utils/jobs';
+import { jobTruckIds, statusLabel, ldStageLabels, deriveTruckStatus, jobTruckDriver } from '../../utils/jobs';
 
 function jobTimeLabel(j, date) {
   if (j.type === 'long_distance') {
@@ -49,7 +49,9 @@ export default function DayPrintSheet({ id, date, trucks, drivers, jobs, conflic
 
       {trucks.map((t) => {
         const truckJobs = sortForPrint(activeJobs.filter((j) => jobTruckIds(j).includes(t.id)));
-        const driver = t.driverId ? drivers.find((d) => d.id === t.driverId) : null;
+        // Driver is assigned per job now, not permanently to the truck (see db.js's file header) —
+        // shows whichever active job's driver is set first.
+        const driver = truckJobs.map((j) => jobTruckDriver(drivers, j, t.id)).find(Boolean) || null;
         return (
           <div className="print-truck" key={t.id}>
             <div className="print-truck-head">

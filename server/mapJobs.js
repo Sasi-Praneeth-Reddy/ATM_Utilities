@@ -16,6 +16,16 @@ const OPPORTUNITY_STATUS = {
   50: 'BadLead',
 };
 
+/** The statuses that count as "an actual job to dispatch," not just a quote or an inquiry — this
+ * is the filter behind the 2026-08-18 "booked jobs only" sync redesign (see server.js's
+ * hydrateOpportunity and README's "Webhooks vs. polling"). Deliberately excludes 0/1 (still pure
+ * pipeline, nothing to schedule yet), 3 (quoted but not confirmed — could still fall through),
+ * and the three negative-terminal statuses (20 Cancelled/30 Lost/50 BadLead — never should have
+ * been on a live board). Includes 10 Completed/11 Closed alongside 4 Booked so a job that's
+ * already been imported doesn't just vanish once it wraps up — those are still real jobs that
+ * happened, useful for a dispatcher looking back at a recent day. */
+const BOOKED_STATUSES = new Set([4, 10, 11]);
+
 /** SmartMoving's `From`/`To`/date fields use a yyyyMMdd integer, e.g. 20260805 -> "2026-08-05". */
 function smartMovingIntDateToIso(n) {
   if (!n && n !== 0) return null;
@@ -50,24 +60,27 @@ function pickStop(stops, predicate) {
   return (stops || []).find(predicate) || null;
 }
 
+const { classifyJob } = require('./jobTypeInference');
+
 /**
  * SmartMoving doesn't expose a direct "is this long-distance" flag on the job itself — that
  * lives on the opportunity's `opportunityType` (0 Local, 1 Intrastate, 2 Interstate), which
- * would need an extra `Get opportunity details` call per job. To keep this to one call per job,
- * this falls back to comparing origin/destination state — good enough to seed the scheduler's
- * local/long_distance split, but swap in opportunityType once it's wired up for accuracy.
+ * would need an extra `Get opportunity details` call per job (see mapOpportunity.js, which has
+ * that field). To keep this to one call per job, this instead hands whatever address text is
+ * available to jobTypeInference.js's classifyJob — real ZIP-based mileage where it can be
+ * computed, falling back to the state-difference heuristic otherwise (see that module's header).
  *
  * The per-job `stops` array (from GET .../opportunities/{id}/jobs) doesn't reliably carry a
- * `state` field on each stop — confirmed by running this against sample data, where stop
- * objects only had an address string. The lead record (GET /api/leads) DOES carry
- * originState/destinationState, so that's used as the primary source, with the stop-level
- * field kept as a fallback in case a future job shape includes it.
+ * `state` field or a full address string on each stop — confirmed by running this against sample
+ * data, where stop objects only had a bare address string in some cases. The lead record
+ * (GET /api/leads) DOES carry originAddressFull/destinationAddressFull, so those are preferred
+ * when present.
  */
-function inferJobType(origin, destination, lead) {
-  const originState = lead?.originState || origin?.state;
-  const destState = lead?.destinationState || destination?.state;
-  if (originState && destState && originState !== destState) return 'long_distance';
-  return 'local';
+function classifyFromStops(origin, destination, lead) {
+  return classifyJob({
+    originAddress: (lead && lead.originAddressFull) || (origin && origin.addressFullAddress) || null,
+    destinationAddress: (lead && lead.destinationAddressFull) || (destination && destination.addressFullAddress) || null,
+  });
 }
 
 /**
@@ -80,7 +93,7 @@ function mapSmartMovingJob(lead, job) {
   const destination = pickStop(stops, s => s.isDestination) || {};
 
   const date = smartMovingIntDateToIso(job.jobDate) || smartMovingIntDateToIso(lead.serviceDate);
-  const type = inferJobType(origin, destination, lead);
+  const { type, serviceCategory, miles } = classifyFromStops(origin, destination, lead);
   const duration = hoursBetween(job.startTimeUtc, job.endTimeUtc);
 
   return {
@@ -101,10 +114,11 @@ function mapSmartMovingJob(lead, job) {
     truckIds: [],       // truck/driver assignment always happens locally in the scheduler
     trucksNeeded: 1,    // bump manually in Job Assignments for jobs that need more than one truck
     status: 'scheduled',
-    miles: undefined,   // not returned by these endpoints; leave for manual entry if needed
+    miles,              // computed from address ZIPs — see jobTypeInference.js; null if unreadable
+    serviceCategory,
     source: 'smartmoving',
     smartMovingStatus: OPPORTUNITY_STATUS[lead.status] || lead.status,
   };
 }
 
-module.exports = { mapSmartMovingJob, smartMovingIntDateToIso, utcIsoToHHMM, hoursBetween, OPPORTUNITY_STATUS };
+module.exports = { mapSmartMovingJob, smartMovingIntDateToIso, utcIsoToHHMM, hoursBetween, OPPORTUNITY_STATUS, BOOKED_STATUSES };

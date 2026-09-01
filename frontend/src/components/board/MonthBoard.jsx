@@ -107,6 +107,7 @@ function Week({ week, monthStr, jobs, trucks, drivers, role, currentCrewTruck, c
               trucks={trucks}
               drivers={drivers}
               conflict={conflictIds.has(ev.job.id)}
+              conflicts={conflicts}
               mine={role === 'crew' && (ev.job.truckIds || []).includes(currentCrewTruck)}
               draggable={draggable}
               onDragStart={(e, jobId) => e.dataTransfer.setData('text/plain', jobId)}
@@ -120,6 +121,8 @@ function Week({ week, monthStr, jobs, trucks, drivers, role, currentCrewTruck, c
             jobsArr={g.jobs}
             dayIndex={g.dayIndex}
             lane={g.lane}
+            trucks={trucks}
+            conflicts={conflicts}
             mine={role === 'crew' && g.jobs.some((j) => (j.truckIds || []).includes(currentCrewTruck))}
           />
         ))}
@@ -160,6 +163,7 @@ function Week({ week, monthStr, jobs, trucks, drivers, role, currentCrewTruck, c
                     trucks={trucks}
                     drivers={drivers}
                     conflict={conflictIds.has(j.id)}
+                    conflicts={conflicts}
                     mine={role === 'crew' && (j.truckIds || []).includes(currentCrewTruck)}
                     draggable={draggable}
                     onDragStart={(e, jobId) => e.dataTransfer.setData('text/plain', jobId)}
@@ -173,6 +177,7 @@ function Week({ week, monthStr, jobs, trucks, drivers, role, currentCrewTruck, c
                     trucks={trucks}
                     drivers={drivers}
                     conflict={conflictIds.has(j.id)}
+                    conflicts={conflicts}
                     mine={role === 'crew' && (j.truckIds || []).includes(currentCrewTruck)}
                     draggable={draggable}
                     onDragStart={(e, jobId) => e.dataTransfer.setData('text/plain', jobId)}

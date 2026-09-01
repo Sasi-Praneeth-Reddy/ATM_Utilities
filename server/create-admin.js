@@ -29,36 +29,43 @@ function nextId(rows, prefix) {
   return prefix + (max + 1);
 }
 
-const [, , rawEmail, rawRole, rawPassword] = process.argv;
+async function main() {
+  const [, , rawEmail, rawRole, rawPassword] = process.argv;
 
-if (!rawEmail) {
-  console.error('Usage: node create-admin.js <email> [admin|dispatcher|crew] [password]');
+  if (!rawEmail) {
+    console.error('Usage: node create-admin.js <email> [admin|dispatcher|crew] [password]');
+    process.exit(1);
+  }
+
+  const email = auth.normalizeEmail(rawEmail);
+  const role = ['admin', 'dispatcher', 'crew'].includes(rawRole) ? rawRole : 'admin';
+
+  if (!auth.isCompanyEmail(email)) {
+    console.error(`"${rawEmail}" is not a @${auth.EMAIL_DOMAIN} address — refusing to grant it access.`);
+    process.exit(1);
+  }
+
+  if (rawPassword !== undefined && rawPassword.length < 8) {
+    console.error('Password must be at least 8 characters.');
+    process.exit(1);
+  }
+
+  const existing = await db.getUserByEmail(email);
+  const passwordSuffix = rawPassword ? ' with the password you gave' : ' — no password set yet, use "Forgot password?" on the login screen to set one';
+
+  if (existing) {
+    await db.updateUserRole(existing.id, role);
+    if (rawPassword) await db.setUserPassword(existing.id, auth.hashPassword(rawPassword));
+    console.log(`Updated ${email} — role set to "${role}"${passwordSuffix}.`);
+  } else {
+    const id = nextId(await db.listUsers(), 'U');
+    const passwordHash = rawPassword ? auth.hashPassword(rawPassword) : undefined;
+    await db.createUser({ id, email, role, passwordHash });
+    console.log(`Granted ${email} access with role "${role}"${passwordSuffix}.`);
+  }
+}
+
+main().catch((err) => {
+  console.error(err);
   process.exit(1);
-}
-
-const email = auth.normalizeEmail(rawEmail);
-const role = ['admin', 'dispatcher', 'crew'].includes(rawRole) ? rawRole : 'admin';
-
-if (!auth.isCompanyEmail(email)) {
-  console.error(`"${rawEmail}" is not a @${auth.EMAIL_DOMAIN} address — refusing to grant it access.`);
-  process.exit(1);
-}
-
-if (rawPassword !== undefined && rawPassword.length < 8) {
-  console.error('Password must be at least 8 characters.');
-  process.exit(1);
-}
-
-const existing = db.getUserByEmail(email);
-const passwordSuffix = rawPassword ? ' with the password you gave' : ' — no password set yet, use "Forgot password?" on the login screen to set one';
-
-if (existing) {
-  db.updateUserRole(existing.id, role);
-  if (rawPassword) db.setUserPassword(existing.id, auth.hashPassword(rawPassword));
-  console.log(`Updated ${email} — role set to "${role}"${passwordSuffix}.`);
-} else {
-  const id = nextId(db.listUsers(), 'U');
-  const passwordHash = rawPassword ? auth.hashPassword(rawPassword) : undefined;
-  db.createUser({ id, email, role, passwordHash });
-  console.log(`Granted ${email} access with role "${role}"${passwordSuffix}.`);
-}
+});

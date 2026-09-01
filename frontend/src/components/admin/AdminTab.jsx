@@ -1,14 +1,13 @@
 import { useState } from 'react';
-import SyncPanel from './SyncPanel';
 import TruckAdminList from './TruckAdminList';
 import DriverAdminList from './DriverAdminList';
 
 export default function AdminTab({
   trucks, drivers, jobs,
-  syncStatus, onSyncNow, lastSyncedAt, onResetToSampleData, onClearJobs,
+  onResetToSampleData, onClearJobs,
   onCreateTruck, onCreateDriver,
-  onUpdateTruckField, onUpdateTruckStatus, onLinkDriver, onUpdateDriverField, onUnassignDriverTruck,
-  onDeleteTruck, onDeleteDriver,
+  onUpdateTruckField, onUpdateTruckStatus, onUpdateDriverField,
+  onDeleteTruck, onDeleteDriver, onReorderTrucks,
 }) {
   const [showAddTruckForm, setShowAddTruckForm] = useState(false);
   const [showAddDriverForm, setShowAddDriverForm] = useState(false);
@@ -33,8 +32,6 @@ export default function AdminTab({
 
   return (
     <section>
-      <SyncPanel syncStatus={syncStatus} onSyncNow={onSyncNow} lastSyncedAt={lastSyncedAt} />
-
       <div className="toolbar">
         <h2 className="section-title">Trucks &amp; Drivers</h2>
         <div style={{ display: 'flex', gap: 8 }}>
@@ -62,26 +59,24 @@ export default function AdminTab({
         <div>
           <h2 className="section-title">Trucks</h2>
           <TruckAdminList
-            trucks={trucks} drivers={drivers} jobs={jobs}
+            trucks={trucks} jobs={jobs}
             showAddForm={showAddTruckForm}
             onSaveNewTruck={saveNewTruck}
             onCancelAddTruck={() => setShowAddTruckForm(false)}
             onUpdateField={onUpdateTruckField}
             onUpdateStatus={onUpdateTruckStatus}
-            onLinkDriver={onLinkDriver}
             onDeleteTruck={onDeleteTruck}
+            onReorder={onReorderTrucks}
           />
         </div>
         <div>
           <h2 className="section-title">Drivers</h2>
           <DriverAdminList
-            trucks={trucks} drivers={drivers}
+            drivers={drivers}
             showAddForm={showAddDriverForm}
             onSaveNewDriver={saveNewDriver}
             onCancelAddDriver={() => setShowAddDriverForm(false)}
             onUpdateField={onUpdateDriverField}
-            onLinkDriver={onLinkDriver}
-            onUnassignDriverTruck={onUnassignDriverTruck}
             onDeleteDriver={onDeleteDriver}
           />
         </div>

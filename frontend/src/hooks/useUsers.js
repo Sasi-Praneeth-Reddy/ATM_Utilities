@@ -5,6 +5,7 @@ import { apiCall } from '../api';
     only slice of data with no need for background polling — just refetch after each mutation. */
 export function useUsers(backendUrl, enabled) {
   const [users, setUsers] = useState([]);
+  const [allowedExternalEmails, setAllowedExternalEmails] = useState([]);
 
   const call = useCallback((method, path, body) => apiCall(backendUrl, method, path, body), [backendUrl]);
 
@@ -18,9 +19,21 @@ export function useUsers(backendUrl, enabled) {
     }
   }, [call]);
 
+  // Emails outside @aroundtownmovers.com that an admin has explicitly allowed — see db.js's
+  // allowedExternalEmails doc comment and server.js's POST /api/users check. Fetched alongside
+  // users since both live on the same admin-only Users page.
+  const refreshAllowedExternalEmails = useCallback(async () => {
+    try {
+      const list = await call('GET', '/api/allowed-external-emails');
+      setAllowedExternalEmails(list);
+    } catch (err) {
+      // Same reasoning as refresh() above — admin-only, fails silently if role changed mid-session.
+    }
+  }, [call]);
+
   useEffect(() => {
-    if (enabled) refresh();
-  }, [enabled, refresh]);
+    if (enabled) { refresh(); refreshAllowedExternalEmails(); }
+  }, [enabled, refresh, refreshAllowedExternalEmails]);
 
   const createUser = useCallback(async (fields) => {
     await call('POST', '/api/users', fields);
@@ -37,5 +50,18 @@ export function useUsers(backendUrl, enabled) {
     await refresh();
   }, [call, refresh]);
 
-  return { users, refresh, createUser, changeRole, deleteUser };
+  const addAllowedExternalEmail = useCallback(async (email, note) => {
+    await call('POST', '/api/allowed-external-emails', { email, note });
+    await refreshAllowedExternalEmails();
+  }, [call, refreshAllowedExternalEmails]);
+
+  const removeAllowedExternalEmail = useCallback(async (email) => {
+    await call('DELETE', `/api/allowed-external-emails/${encodeURIComponent(email)}`);
+    await refreshAllowedExternalEmails();
+  }, [call, refreshAllowedExternalEmails]);
+
+  return {
+    users, refresh, createUser, changeRole, deleteUser,
+    allowedExternalEmails, addAllowedExternalEmail, removeAllowedExternalEmail,
+  };
 }

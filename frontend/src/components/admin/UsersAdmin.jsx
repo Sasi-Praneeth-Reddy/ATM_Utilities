@@ -7,11 +7,25 @@ function isCompanyEmail(email) {
   return /\S+@\S+/.test(email) && email.trim().toLowerCase().endsWith('@' + EMAIL_DOMAIN);
 }
 
+function looksLikeEmail(email) {
+  return /^\S+@\S+\.\S+$/.test(email);
+}
+
 export function matchesUserQuery(user, q) {
   return user.email.toLowerCase().includes(q) || user.role.toLowerCase().includes(q);
 }
 
-function AddUserForm({ onSave, onCancel }) {
+/** An email can be granted a user account if it's either a company address, or was explicitly
+ * allowed by an admin via the External Access panel below (see db.js's allowedExternalEmails doc
+ * comment) — e.g. a partner/subcontractor like paul@campbellmoving.com. `allowedExternalEmails` is
+ * the array of {email, ...} entries from that panel. */
+function isAllowedEmail(email, allowedExternalEmails) {
+  const trimmed = email.trim().toLowerCase();
+  if (isCompanyEmail(trimmed)) return true;
+  return allowedExternalEmails.some((e) => e.email === trimmed);
+}
+
+function AddUserForm({ onSave, onCancel, allowedExternalEmails }) {
   const [email, setEmail] = useState('');
   const [role, setRole] = useState('dispatcher');
   const [error, setError] = useState('');
@@ -19,7 +33,10 @@ function AddUserForm({ onSave, onCancel }) {
 
   async function save() {
     const trimmed = email.trim();
-    if (!isCompanyEmail(trimmed)) { setError(`Email must be a @${EMAIL_DOMAIN} address.`); return; }
+    if (!isAllowedEmail(trimmed, allowedExternalEmails)) {
+      setError(`Email must be a @${EMAIL_DOMAIN} address, or added under "External Access" below first.`);
+      return;
+    }
     setError('');
     setSaving(true);
     try {
@@ -47,6 +64,83 @@ function AddUserForm({ onSave, onCancel }) {
         <button className="btn secondary" onClick={onCancel}>Cancel</button>
         <button className="btn" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Grant Access'}</button>
       </div>
+    </div>
+  );
+}
+
+/** Lets an admin allow a specific outside-the-company email (e.g. a partner/subcontractor at a
+ * different company) to be granted a user account above — adding it here doesn't grant access by
+ * itself, it just lifts the @aroundtownmovers.com restriction for that one address so "+ Grant
+ * Access" will accept it. See db.js's allowedExternalEmails doc comment for the full reasoning. */
+function ExternalAccessPanel({ allowedExternalEmails, onAdd, onRemove }) {
+  const [showForm, setShowForm] = useState(false);
+  const [email, setEmail] = useState('');
+  const [note, setNote] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    const trimmed = email.trim();
+    if (!looksLikeEmail(trimmed)) { setError('Enter a valid email address.'); return; }
+    if (isCompanyEmail(trimmed)) { setError(`@${EMAIL_DOMAIN} addresses are already allowed — no need to add them here.`); return; }
+    setError('');
+    setSaving(true);
+    try {
+      await onAdd(trimmed, note.trim());
+      setEmail(''); setNote(''); setShowForm(false);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleRemove(entryEmail) {
+    if (!window.confirm(`Remove ${entryEmail} from the allowed list? Their existing account (if any) is untouched — this only blocks granting that email a NEW account later.`)) return;
+    try {
+      await onRemove(entryEmail);
+    } catch (err) {
+      window.alert(`Couldn't remove it: ${err.message}`);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 24 }}>
+      <div className="toolbar">
+        <h2 className="section-title">External Access — emails outside @{EMAIL_DOMAIN}</h2>
+        <button className="btn secondary" onClick={() => setShowForm((v) => !v)}>+ Allow an Email</button>
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
+        Every account above needs a @{EMAIL_DOMAIN} address, except for the ones listed here — a
+        one-off allowance for someone outside the company who legitimately needs access, like a
+        partner or subcontractor. Adding an email here only lifts that restriction; it doesn't grant
+        access by itself — use "+ Grant Access" above afterward to actually create their account and
+        pick a role.
+      </div>
+      {showForm && (
+        <div className="admin-card add-form">
+          <div className="row"><span className="field-label">Email</span><input type="email" value={email} placeholder="name@theircompany.com" onChange={(e) => setEmail(e.target.value)} /></div>
+          <div className="row"><span className="field-label">Note</span><input type="text" value={note} placeholder="e.g. Campbell Moving — partner (optional)" onChange={(e) => setNote(e.target.value)} /></div>
+          {error && <div className="sync-msg err">{error}</div>}
+          <div className="row" style={{ justifyContent: 'flex-end' }}>
+            <button className="btn secondary" onClick={() => setShowForm(false)}>Cancel</button>
+            <button className="btn" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Allow Email'}</button>
+          </div>
+        </div>
+      )}
+      {allowedExternalEmails.length === 0 ? (
+        <div className="empty">No external emails allowed yet.</div>
+      ) : (
+        allowedExternalEmails.map((entry) => (
+          <div className="admin-card" key={entry.email}>
+            <h3>{entry.email}</h3>
+            {entry.note && <div style={{ fontSize: 12, color: 'var(--muted)' }}>{entry.note}</div>}
+            <div className="row" style={{ justifyContent: 'flex-end' }}>
+              <button className="btn secondary" style={{ color: 'var(--red)' }} onClick={() => handleRemove(entry.email)}>Remove from list</button>
+            </div>
+          </div>
+        ))
+      )}
     </div>
   );
 }
@@ -94,7 +188,10 @@ function UserRow({ user, isSelf, onChangeRole, onDelete }) {
   );
 }
 
-export default function UsersAdmin({ users, currentUserId, onCreateUser, onChangeRole, onDeleteUser }) {
+export default function UsersAdmin({
+  users, currentUserId, onCreateUser, onChangeRole, onDeleteUser,
+  allowedExternalEmails, onAddAllowedExternalEmail, onRemoveAllowedExternalEmail,
+}) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [query, setQuery] = useState('');
 
@@ -129,12 +226,13 @@ export default function UsersAdmin({ users, currentUserId, onCreateUser, onChang
       </div>
       <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
         Everyone signs in with an email + password — only @{EMAIL_DOMAIN} addresses can be granted
-        access. New accounts start with no password; the person sets their own via "Forgot
-        password?" on the sign-in screen (a 6-digit code is emailed to them). <b>Admin</b> has full
-        access including this panel. <b>Dispatcher</b> can assign/move jobs but not edit
-        truck/driver records or users. <b>Crew</b> is read-only.
+        access, unless the email's been added under "External Access" below. New accounts start
+        with no password; the person sets their own via "Forgot password?" on the sign-in screen (a
+        6-digit code is emailed to them). <b>Admin</b> has full access including this panel.
+        <b>Dispatcher</b> can assign/move jobs but not edit truck/driver records or users.
+        <b>Crew</b> is read-only.
       </div>
-      {showAddForm && <AddUserForm onSave={handleSave} onCancel={() => setShowAddForm(false)} />}
+      {showAddForm && <AddUserForm onSave={handleSave} onCancel={() => setShowAddForm(false)} allowedExternalEmails={allowedExternalEmails} />}
       {query.trim() && !filteredUsers.length ? (
         <div className="empty">No users match "{query}".</div>
       ) : (
@@ -148,6 +246,11 @@ export default function UsersAdmin({ users, currentUserId, onCreateUser, onChang
           />
         ))
       )}
+      <ExternalAccessPanel
+        allowedExternalEmails={allowedExternalEmails}
+        onAdd={onAddAllowedExternalEmail}
+        onRemove={onRemoveAllowedExternalEmail}
+      />
     </div>
   );
 }

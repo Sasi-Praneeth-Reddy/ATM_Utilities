@@ -13,8 +13,8 @@
 const fs = require('fs');
 const path = require('path');
 
-function loadDotEnv() {
-  const envPath = path.join(__dirname, '.env');
+function loadFile(filename) {
+  const envPath = path.join(__dirname, filename);
   if (!fs.existsSync(envPath)) return;
   fs.readFileSync(envPath, 'utf8').split('\n').forEach(line => {
     const match = line.match(/^\s*([\w.-]+)\s*=\s*(.*)?\s*$/);
@@ -24,6 +24,15 @@ function loadDotEnv() {
     if (value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1);
     if (!(key in process.env)) process.env[key] = value;
   });
+}
+
+function loadDotEnv() {
+  loadFile('.env');
+  // Deliberately a separate, differently-named file (not .env.<anything>) — see its header comment
+  // in server/local.secrets. Holds the three values that also exist as real Firebase secrets
+  // (SESSION_SECRET, SMTP_PASS, SMARTMOVING_API_KEY); keeping them out of .env/.env.* avoids
+  // `firebase deploy`'s own env scan seeing them and colliding with the secret-backed versions.
+  loadFile('local.secrets');
 }
 
 loadDotEnv();

@@ -32,9 +32,9 @@ function AddTruckForm({ onSave, onCancel, truckCount }) {
   );
 }
 
-function TruckCard({ t, drivers, jobs, onUpdateField, onUpdateStatus, onLinkDriver, onDeleteTruck }) {
+function TruckCard({ t, jobs, onUpdateField, onUpdateStatus, onDeleteTruck, drag }) {
   async function handleDelete() {
-    if (!window.confirm(`Delete truck "${t.name}"? Any job currently assigned to it will become unassigned, and its driver (if any) will be unlinked. This can't be undone.`)) return;
+    if (!window.confirm(`Delete truck "${t.name}"? Any job currently assigned to it will become unassigned. This can't be undone.`)) return;
     try {
       await onDeleteTruck(t.id);
     } catch (err) {
@@ -50,8 +50,21 @@ function TruckCard({ t, drivers, jobs, onUpdateField, onUpdateStatus, onLinkDriv
   const outOfService = t.status === 'maintenance';
 
   return (
-    <div className="admin-card">
+    <div
+      className="admin-card"
+      draggable={Boolean(drag)}
+      onDragStart={drag?.onDragStart}
+      onDragOver={drag?.onDragOver}
+      onDrop={drag?.onDrop}
+      onDragEnd={drag?.onDragEnd}
+      style={{
+        opacity: drag?.isDragging ? 0.4 : 1,
+        borderTop: drag?.isDropTarget ? '2px solid var(--blue)' : undefined,
+        cursor: drag ? 'grab' : undefined,
+      }}
+    >
       <h3>
+        {drag && <span className="drag-handle" title="Drag to reorder" style={{ color: 'var(--muted)', marginRight: 4, cursor: 'grab' }}>⠿</span>}
         <input
           type="text" value={t.name}
           style={{ fontWeight: 700, fontSize: 13, width: 110 }}
@@ -80,16 +93,28 @@ function TruckCard({ t, drivers, jobs, onUpdateField, onUpdateStatus, onLinkDriv
         <span className="field-label">Capacity</span>
         <input type="text" value={t.capacity} onChange={(e) => onUpdateField(t.id, 'capacity', e.target.value)} />
       </div>
-      <div className="row">
-        <span className="field-label">Driver</span>
-        <select value={t.driverId || ''} onChange={(e) => onLinkDriver(t.id, e.target.value)}>
-          <option value="">— Unassigned —</option>
-          {drivers.map((d) => <option value={d.id} key={d.id}>{d.name}</option>)}
-        </select>
-      </div>
+      {/* No "Driver" field here anymore — a truck's driver changes job to job now instead of being
+          a standing assignment (see db.js's file header). Set it per job in Admin → Job
+          Assignments instead. */}
       <div className="row">
         <span className="field-label">Home Base</span>
         <input type="text" value={t.homeBase} onChange={(e) => onUpdateField(t.id, 'homeBase', e.target.value)} />
+      </div>
+      <div className="row">
+        <span className="field-label" title="How this truck is labeled in SmartMoving's dispatch info (e.g. &quot;ARC 130-2&quot;) — used to auto-assign this truck when a synced job lists it. Separate multiple aliases with commas.">SmartMoving label</span>
+        {/* defaultValue + onBlur (not value + onChange like every other field here) is deliberate:
+            this holds an array, and re-splitting/rejoining on every keystroke eats the trailing
+            ", " the instant you type a comma, making it impossible to type a second alias. Committing
+            once on blur avoids fighting the user while they type. */}
+        <input
+          type="text"
+          defaultValue={(t.smartMovingLabels || []).join(', ')}
+          placeholder="e.g. ARC 130-2"
+          onBlur={(e) => {
+            const labels = e.target.value.split(',').map((s) => s.trim()).filter(Boolean);
+            onUpdateField(t.id, 'smartMovingLabels', labels);
+          }}
+        />
       </div>
       {onDeleteTruck && (
         <div className="row" style={{ justifyContent: 'flex-end' }}>
@@ -100,20 +125,61 @@ function TruckCard({ t, drivers, jobs, onUpdateField, onUpdateStatus, onLinkDriv
   );
 }
 
-export default function TruckAdminList({ trucks, drivers, jobs, showAddForm, onSaveNewTruck, onCancelAddTruck, onUpdateField, onUpdateStatus, onLinkDriver, onDeleteTruck }) {
+export default function TruckAdminList({ trucks, jobs, showAddForm, onSaveNewTruck, onCancelAddTruck, onUpdateField, onUpdateStatus, onDeleteTruck, onReorder }) {
+  const [dragIndex, setDragIndex] = useState(null);
+  const [overIndex, setOverIndex] = useState(null);
+
+  function handleDragStart(e, index) {
+    setDragIndex(index);
+    // Firefox requires data to be set for drag to actually start.
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(index));
+  }
+
+  function handleDragOver(e, index) {
+    e.preventDefault(); // required to allow a drop
+    e.dataTransfer.dropEffect = 'move';
+    if (index !== overIndex) setOverIndex(index);
+  }
+
+  function handleDrop(e, index) {
+    e.preventDefault();
+    const from = dragIndex;
+    const to = index;
+    setDragIndex(null);
+    setOverIndex(null);
+    if (from === null || from === to) return;
+
+    const reordered = trucks.map((t) => t.id);
+    const [moved] = reordered.splice(from, 1);
+    reordered.splice(to, 0, moved);
+    onReorder(reordered);
+  }
+
+  function handleDragEnd() {
+    setDragIndex(null);
+    setOverIndex(null);
+  }
+
   return (
     <div>
       {showAddForm && <AddTruckForm onSave={onSaveNewTruck} onCancel={onCancelAddTruck} truckCount={trucks.length} />}
-      {trucks.map((t) => (
+      {trucks.map((t, index) => (
         <TruckCard
           key={t.id}
           t={t}
-          drivers={drivers}
           jobs={jobs}
           onUpdateField={onUpdateField}
           onUpdateStatus={onUpdateStatus}
-          onLinkDriver={onLinkDriver}
           onDeleteTruck={onDeleteTruck}
+          drag={onReorder ? {
+            onDragStart: (e) => handleDragStart(e, index),
+            onDragOver: (e) => handleDragOver(e, index),
+            onDrop: (e) => handleDrop(e, index),
+            onDragEnd: handleDragEnd,
+            isDragging: dragIndex === index,
+            isDropTarget: overIndex === index && dragIndex !== null && dragIndex !== index,
+          } : null}
         />
       ))}
     </div>

@@ -23,7 +23,14 @@
 const crypto = require('crypto');
 
 const EMAIL_DOMAIN = 'aroundtownmovers.com';
-const COOKIE_NAME = 'atm_session';
+// Must be exactly "__session" — Firebase Hosting's rewrite proxy to a Cloud Function strips every
+// cookie from the incoming request EXCEPT one with this exact name (a hard, documented Hosting
+// limitation, not something this app can configure around). Using anything else means the Set-
+// Cookie response reaches the browser fine, but the Cookie header never survives the trip back to
+// the function on the next request — exactly the "login works, then every request 401s" symptom
+// this was renamed to fix. Irrelevant on AWS (no Hosting proxy in between), so this name works
+// identically on both platforms — no environment-specific branching needed.
+const COOKIE_NAME = '__session';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes — long enough to check email, short enough to limit guessing
 const SCRYPT_KEYLEN = 64;

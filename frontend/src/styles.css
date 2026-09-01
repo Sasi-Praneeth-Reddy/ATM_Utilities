@@ -12,6 +12,16 @@
 
   --green:#2e9e5b; --amber:#d69b1f; --red:#d0453c; --blue:#3672d9;
 
+  /* Service-category color grading (day board + print board) — added 2026-08-28. 'moving' and
+     'long_distance' deliberately have no entry here: 'moving' is the majority/default case and
+     keeps the board's plain default styling, 'long_distance' already has its own long-standing
+     orange (--orange-dk, via .job-block.ld/.pt-block.ld) — see utils/jobs.js's
+     serviceCategoryLabels for the full rationale. Not reused from DRIVER_COLORS (utils/jobs.js) —
+     different visual channel (fill vs. a job block's border-left accent) but picked to stay
+     visually distinct from that palette anyway. Fixed across light/dark (like --green/--amber/
+     --red/--blue above), since these sit on a solid, always-white-text job block either theme. */
+  --cat-delivery-unpack:#0c8599; --cat-load:#6d4aa6; --cat-other:#5b6472;
+
   /* Tinted surfaces for job blocks, chips and banners — replace what used to be hardcoded pale
      hex values sprinkled through this file, so the whole app (not just the base page/cards)
      follows the theme. */
@@ -84,15 +94,39 @@ h2.section-title{font-size:15px;margin:0 0 12px;color:var(--heading);}
 .view-toggle .btn.secondary.active{background:var(--card);box-shadow:var(--shadow-sm);}
 .monthpick{display:flex;align-items:center;gap:10px;font-size:13px;}
 .monthpick .btn.secondary{padding:5px 10px;}
+/* Month view's local/long-distance/conflicts filter (BoardTab.jsx) — same .view-toggle pill-group
+   look already used for the Day/Month/Overlapped Alerts switch above it, just a second instance for
+   a different, narrower choice (what to show WITHIN month view, not which view to show). */
+.month-filter{margin-left:2px;}
+.month-filter-note{font-size:12px;color:var(--muted);margin:-6px 0 12px;}
 
 /* CONFLICTS */
 .conflict-banner{background:var(--tint-red-bg);border:1px solid var(--tint-red-border);color:var(--tint-red-text);padding:10px 12px;border-radius:8px;font-size:12px;margin-bottom:12px;}
+/* Same shape as .conflict-banner (a scheduling clash) but amber, matching .placeholder-badge — a
+   duplicate is a heads-up to reconcile two records, not a scheduling problem, so it reads distinct
+   from a real truck-double-booked conflict at a glance. */
+.duplicate-banner{background:var(--tint-amber-bg);border:1px solid var(--tint-amber-border);color:var(--tint-amber-text);}
 .conflict-banner .cb-title{font-weight:700;margin-bottom:6px;display:flex;align-items:center;gap:6px;font-size:13px;}
 .conflict-banner ul{margin:0;padding-left:18px;}
 .conflict-banner li{margin-bottom:4px;}
-.job-block.conflict,.month-chip.conflict,.chip.conflict,.week-bar.conflict{box-shadow:0 0 0 2px var(--red);}
+.job-block.conflict,.chip.conflict{box-shadow:0 0 0 2px var(--conflict-color, var(--red));}
 .conflict-flag{color:var(--red);font-weight:700;margin-left:4px;font-size:11px;}
 .assign-row.conflict{border-color:var(--red);background:var(--tint-red-bg);}
+
+/* OVERLAPPED ALERTS TAB — full-page version of what .conflict-banner used to show inline above the
+   day board (moved out to its own Truck Board tab 2026-08-28, see OverlappedAlertsTab.jsx). Each
+   row keeps the same red "conflict" tint as the old banner so it still reads as the same kind of
+   alert, just with room to actually show all of them instead of a cramped scrolling list. */
+.oa-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;}
+.oa-row{background:var(--tint-red-bg);border:1px solid var(--tint-red-border);color:var(--tint-red-text);border-radius:8px;padding:10px 12px;font-size:13px;display:flex;flex-wrap:wrap;gap:6px 8px;align-items:baseline;}
+.oa-truck{font-weight:700;flex-shrink:0;}
+.oa-sentence{color:var(--tint-red-text);}
+.oa-job-link{display:inline;border:none;background:none;padding:0;margin:0;font:inherit;color:inherit;font-weight:700;text-decoration:underline;text-underline-offset:2px;cursor:pointer;}
+.oa-job-link:hover{opacity:0.75;}
+.oa-job-meta{font-weight:400;text-decoration:none;}
+.oa-empty{color:var(--muted);font-size:13px;}
+.view-toggle .btn.secondary.oa-toggle-btn{display:flex;align-items:center;gap:5px;}
+.oa-count-badge{background:var(--red);color:#fff;border-radius:999px;font-size:10px;font-weight:700;padding:1px 6px;line-height:1.5;}
 .aj-conflict-tag{display:inline-block;background:var(--red);color:#fff;font-size:9px;padding:2px 6px;border-radius:10px;margin-left:6px;font-weight:700;vertical-align:middle;}
 .crew-job.conflict{border-color:var(--red);}
 .crew-job .cj-conflict{color:var(--red);font-size:11px;font-weight:700;margin-top:8px;}
@@ -102,10 +136,16 @@ h2.section-title{font-size:15px;margin:0 0 12px;color:var(--heading);}
 .needs-badge.ok{background:var(--tint-green-bg);color:var(--tint-green-text);}
 .needs-badge.over{background:var(--card-alt-2);color:var(--muted);}
 .jb-remove{position:absolute;top:2px;right:2px;width:14px;height:14px;line-height:12px;text-align:center;border-radius:50%;background:rgba(255,255,255,.85);color:var(--red);font-size:11px;font-weight:800;cursor:pointer;border:1px solid var(--red);padding:0;}
-/* Delete affordance for manually-created placeholder jobs only (see PlaceholderBadge) — sits on
-   the opposite corner from .jb-remove ("remove from this truck") so both can show at once for a
-   placeholder that's already assigned to a truck. */
-.jb-delete{position:absolute;top:2px;left:2px;width:14px;height:14px;line-height:13px;text-align:center;border-radius:50%;background:rgba(255,255,255,.85);color:var(--red);font-size:9px;cursor:pointer;border:1px solid var(--red);padding:0;}
+/* Delete affordance for manually-created placeholder jobs only (see PlaceholderBadge). Was sitting
+   at top-LEFT (the opposite corner from .jb-remove) — but that put it directly on top of the
+   customer name's own top-left starting position with no space reserved, visually covering the
+   first character(s) of the name. Moved to the same top-right corner as .jb-remove instead
+   (.job-block.jb-inset — see styles further down — reserves room across the whole block so text
+   never renders under either icon); .jb-delete-offset shifts it further left, beside .jb-remove
+   instead of under it, for the one case both can show at once — a placeholder already assigned to
+   more than one truck. */
+.jb-delete{position:absolute;top:2px;right:2px;width:14px;height:14px;line-height:13px;text-align:center;border-radius:50%;background:rgba(255,255,255,.85);color:var(--red);font-size:9px;cursor:pointer;border:1px solid var(--red);padding:0;}
+.jb-delete-offset{right:18px;}
 .chip{position:relative;}
 .chip-delete{position:absolute;top:4px;right:6px;width:14px;height:14px;line-height:12px;text-align:center;border-radius:50%;background:var(--card);color:var(--red);font-size:11px;font-weight:800;cursor:pointer;border:1px solid var(--red);padding:0;}
 .chip-delete + b{padding-right:16px;}
@@ -114,6 +154,12 @@ h2.section-title{font-size:15px;margin:0 0 12px;color:var(--heading);}
    month-view chips' overflow:hidden. */
 .jb-add-truck{display:none;position:absolute;bottom:2px;right:2px;z-index:1000;max-width:80px;font-size:9px;padding:0 2px;border-radius:3px;border:1px solid var(--blue);background:var(--card);color:var(--blue);cursor:pointer;}
 .job-block:hover .jb-add-truck,.week-bar:hover .jb-add-truck,.month-chip:hover .jb-add-truck{display:inline-block;}
+/* Same hover-reveal treatment, opposite bottom corner so it doesn't collide with "+ truck" — sets
+   the driver for THIS truck on THIS job (see AddDriverControl in JobVisuals.jsx). Only rendered on
+   day-view job blocks (which always have a specific truck in context); month/week views assign
+   trucks but don't have a single-truck context to hang a driver picker on. */
+.jb-add-driver{display:none;position:absolute;bottom:2px;left:2px;z-index:1000;max-width:80px;font-size:9px;padding:0 2px;border-radius:3px;border:1px solid var(--blue);background:var(--card);color:var(--blue);cursor:pointer;}
+.job-block:hover .jb-add-driver{display:inline-block;}
 .week-bar:hover,.month-chip:hover{overflow:visible;}
 /* Same hover-reveal treatment for the grouped-opportunity job picker in month view — the chip is
    too small to show a dropdown at rest without covering the customer name. */
@@ -134,6 +180,9 @@ h2.section-title{font-size:15px;margin:0 0 12px;color:var(--heading);}
 .truck-multiselect-panel label{display:flex;align-items:center;gap:6px;font-size:11px;padding:4px 6px;border-radius:5px;cursor:pointer;}
 .truck-multiselect-panel label:hover{background:var(--card-alt);}
 .needed-input{width:34px;text-align:center;}
+.truck-driver-list{margin-top:6px;display:flex;flex-direction:column;gap:4px;}
+.truck-driver-picker{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);}
+.truck-driver-picker select{font-size:11px;}
 
 /* DRIVER COLOR LEGEND */
 .driver-legend{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px;font-size:11px;color:var(--muted);align-items:center;}
@@ -159,37 +208,67 @@ h2.section-title{font-size:15px;margin:0 0 12px;color:var(--heading);}
    meant scrolling the timeline over to its default 5am view also dragged the unrelated "Unassigned"
    tray sideways with it, hiding job chips that had nothing to do with which hours were in view. */
 .board-wrap{position:relative;z-index:0;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-md);transition:background-color .2s ease,border-color .2s ease;}
-.unassigned-tray{display:flex;gap:8px;overflow-x:auto;padding:8px 12px 10px;margin-bottom:2px;border-bottom:2px dashed var(--border);align-items:center;min-width:920px;}
+/* position:sticky top offset is set inline from DayBoard.jsx (measured at runtime — see its
+   pinOffsets comment for why a hardcoded CSS px value isn't reliable here). z-index:1002, one above
+   the 1001 used by .truck-col-spacer/.truck-info below, since this is a sibling of .timeline within
+   the same .board-wrap stacking context and needs to paint above job blocks scrolling up under it,
+   same reasoning as those two. background is required once sticky — without it, job blocks
+   scrolling underneath would show through the tray's otherwise-transparent background. */
+.unassigned-tray{display:flex;gap:8px;overflow-x:auto;padding:8px 12px 10px;margin-bottom:2px;border-bottom:2px dashed var(--border);align-items:center;min-width:920px;position:sticky;z-index:1002;background:var(--card);}
 .unassigned-tray.dragover{background:var(--tint-orange-bg);}
 .unassigned-tray .tray-label{font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;white-space:nowrap;padding-right:6px;}
 .tray-add-btn{font-size:11px;padding:4px 9px;flex:0 0 auto;}
-.chip{background:var(--card);border:1px solid var(--border);border-left:4px solid var(--blue);border-radius:8px;padding:6px 9px;font-size:11px;min-width:160px;cursor:grab;box-shadow:var(--shadow-sm);}
+.chip{background:var(--card);border:1px solid var(--border);border-left:4px solid var(--blue);border-radius:8px;padding:6px 9px;font-size:11px;font-weight:600;min-width:160px;cursor:grab;box-shadow:var(--shadow-sm);}
 .chip.ld{border-left-color:var(--orange);}
 .chip.grouped{min-width:190px;}
 .chip-job-select{font-size:10px;padding:2px 4px;border-radius:5px;border:1px solid var(--border);background:var(--card-alt);color:var(--text);max-width:100%;cursor:pointer;}
-.chip b{display:block;color:var(--heading);font-size:12px;}
+.chip b{display:block;color:var(--heading);font-size:12px;font-weight:800;}
+.chip .chip-addr{display:block;color:var(--muted);font-size:10px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px;}
 .chip:active{cursor:grabbing;}
 
-/* 24-hour timeline (was 12, 7am-7pm). DayBoard.jsx's default-scroll effect opens the board scrolled
-   to DEFAULT_VISIBLE_START_HOUR (5am) instead of midnight, so the ~14 hours that matter (5am-7pm)
-   fill the screen by default and the rarely-used overnight hours are a scroll away.
+/* Full 24-hour scrollable timeline — reverted 2026-08-27 after a first attempt wrongly shrank the
+   underlying range itself to 6am-6pm; the actual request was for the full day to stay reachable by
+   scrolling, with 6am-6pm just being what fills the screen BY DEFAULT (see DayBoard.jsx's
+   DEFAULT_VISIBLE_START_HOUR). Stretched to show HALF of the 24-hour range — 12 hours — on screen
+   at once (was ~14 before this round), so each hour column is noticeably wider than the original
+   design and a dense single-line job block (see .job-block below) has real room for its full text
+   instead of truncating immediately; 24/12 lines up exactly with a 6am start filling the viewport
+   through 6pm.
    .timeline is the scroll VIEWPORT (sized to match .board-wrap, own overflow-x) — deliberately
    separate from .unassigned-tray's scrolling above it, so scrolling the hours never drags the job
    tray sideways too (see .board-wrap's comment). The actual oversized content lives one level
    deeper, in .timeline-inner, which is what needs to be wider than the viewport for there to be
-   anything to scroll through in the first place. */
-.timeline{width:100%;overflow-x:auto;}
+   anything to scroll through in the first place.
+   overflow-y:auto is explicit here on purpose, not left implicit — CSS silently forces overflow-y
+   to `auto` on any element whose overflow-x is non-visible regardless of what overflow-y is
+   authored as, so it was ALREADY happening; writing it out avoids relying on that easy-to-miss
+   platform behavior. max-height is set inline from DayBoard.jsx's measured pinOffsets
+   (viewport height minus header+nav+tray) so this element becomes a REAL bounded scroll container
+   with its own scrollbar for the (potentially long) truck list — needed for .timeline-header's
+   sticky top:0 below to work at all; see DayBoard.jsx's pinOffsets comment for the full story of
+   why an unbounded .timeline (just auto-growing to fit content, never actually scrolling itself)
+   silently broke that. */
+.timeline{width:100%;overflow-x:auto;overflow-y:auto;}
 /* IMPORTANT: this only works if .timeline-inner is reliably WIDER than .timeline's viewport — a
    flat pixel min-width (tried first) failed on wide monitors, because a plain `width:100%` always
    won once the container itself was already wider than that floor, so all 24 columns fit with room
-   to spare and there was nothing to scroll past. Using a container-relative width instead (24/14 of
-   the viewport's own width, i.e. 24 hours' worth of column at the same per-hour width 14 visible
-   hours would need to exactly fill the screen) means .timeline-inner is ALWAYS ~1.7x wider than
-   whatever .timeline's viewport width happens to be, on any monitor — so there's always genuine
-   overflow to scroll through, and the "5am-7pm fills the screen" default view holds regardless of
-   screen size. */
-.timeline-inner{width:calc(100% * 24 / 14);min-width:900px;}
-.timeline-header{display:flex;border-bottom:1px solid var(--border);}
+   to spare and there was nothing to scroll past. Using a container-relative width instead (24/12 of
+   the viewport's own width, i.e. 24 hours' worth of column at the same per-hour width 12 visible
+   hours would need to exactly fill the screen) means .timeline-inner is ALWAYS exactly 2x wider
+   than whatever .timeline's viewport width happens to be, on any monitor — so there's always
+   genuine overflow to scroll through, and the "6am-6pm fills the screen" default view holds
+   regardless of screen size. */
+.timeline-inner{width:calc(100% * 24 / 12);min-width:900px;}
+/* Vertically pinned (position:sticky, top:0) so the hour labels stay visible while scrolling
+   through a long truck list — this is ADDITIONAL to .truck-col-spacer's own horizontal sticky
+   below; the two compose fine since they pin on different axes (top vs. left). top:0 (not a
+   measured value like .unassigned-tray uses) is correct here because .timeline now has a real
+   bounded max-height + overflow-y:auto (see its comment) making IT .timeline-header's actual
+   scrolling ancestor — 0 relative to .timeline's own scrollport is always right, no measurement
+   needed. background+z-index needed for the same reason as .unassigned-tray: truck rows/job blocks
+   scroll up underneath this within .timeline's scrollport, and would show through/paint over it
+   without an opaque background and a high enough z-index. */
+.timeline-header{display:flex;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:1002;background:var(--card);}
 /* Pinned to the left edge of .timeline's horizontal scroll (position:sticky) with a z-index high
    enough to paint above job blocks (which get inline z-index up to ~500, 999 on hover — see
    stackZIndex() in utils/jobs.js) — otherwise, now that the board routinely opens scrolled past
@@ -204,18 +283,69 @@ h2.section-title{font-size:15px;margin:0 0 12px;color:var(--heading);}
 .truck-row .truck-info{width:160px;flex:0 0 auto;padding:5px 10px;border-right:1px solid var(--border);display:flex;flex-direction:column;justify-content:center;gap:1px;position:sticky;left:0;z-index:1001;background:var(--card);}
 .truck-info .tname{font-weight:700;font-size:12px;color:var(--heading);display:flex;align-items:center;line-height:1.3;}
 .truck-info .meta{font-size:10px;color:var(--muted);line-height:1.3;}
-.truck-row .track{flex:1;position:relative;min-height:38px;background-image:repeating-linear-gradient(to right, var(--border) 0, var(--border) 1px, transparent 1px, transparent calc(100%/24));}
+/* min-height dropped 70px -> 44px 2026-08-27, alongside the switch to a dense SINGLE-LINE job
+   block (see .job-block below) at the user's request — a stacked multi-line block needed a tall
+   row to fit name + time + address + driver as separate lines; one flat-colored line with
+   everything packed onto it side by side needs far less vertical room. Gridline spacing stays at
+   24 columns (calc(100%/24)) — the underlying timeline is still the full 24-hour day (see
+   DayBoard.jsx's TIMELINE_START/END), only what's visible BY DEFAULT narrowed to 6am-6pm via the
+   stretch on .timeline-inner above. */
+.truck-row .track{flex:1;position:relative;min-height:44px;background-image:repeating-linear-gradient(to right, var(--border) 0, var(--border) 1px, transparent 1px, transparent calc(100%/24));}
 .track.dragover{background-color:var(--tint-orange-bg);}
 .now-line{position:absolute;top:0;bottom:0;width:2px;background:var(--red);z-index:2;}
 .now-line::after{content:'now';position:absolute;top:-13px;left:-13px;font-size:9px;color:var(--red);font-weight:700;}
 
-.job-block{position:absolute;top:3px;bottom:3px;border-radius:5px;background:var(--tint-blue-bg);border:2px solid var(--blue);border-left:4px solid var(--blue);padding:2px 6px;font-size:9px;overflow:hidden;cursor:grab;box-shadow:var(--shadow-sm);}
-.job-block.ld{background:var(--tint-orange-bg);border-color:var(--orange);border-left-color:var(--orange);}
+/* Dense single-line job block — replaced the earlier stacked-lines design 2026-08-27 at the user's
+   request, after reviewing local mockups (name/type/time/addresses/trucks-crew/driver/conflict all
+   packed onto one row instead of stacked as separate lines) so a job block reads at a glance
+   without a tall box. A real flex row now (was block+absolute children only) — everything below
+   (badge, name, detail run, conflict tag) lays out left-to-right and only the corner controls
+   (.jb-remove/.jb-delete/.jb-add-truck/.jb-add-driver/.jb-resize-handle) stay position:absolute,
+   same as before, since a flex row doesn't otherwise give them a natural corner to sit in.
+   Flat background color instead of the old light tint + colored border — default is local-job
+   blue, long-distance overrides to orange, and conflict overrides either to red (see .ld/.conflict
+   below); this is the app's own existing type-based color convention carried into the new dense
+   look, not a new palette, so it stays consistent with every other conflict/type indicator already
+   on the board (chips, month view chips/bars, the print board). White text throughout for contrast
+   against all three flat fill colors. */
+/* Bumped 11px->12px (and .jb-detail 10px->11px below) on 2026-08-28 at the user's request — the
+   dense single-line block still truncates with an ellipsis when a line is too long for its width
+   (the hover tooltip always has the full text regardless — see JobVisuals.jsx's tip), so a block
+   that already fit comfortably on one line just reads bigger now; a block that was already tight
+   simply truncates a little sooner. The row itself (.truck-row .track's 44px min-height) has
+   plenty of headroom for either size, so no other layout change was needed. */
+.job-block{position:absolute;top:3px;bottom:3px;display:flex;align-items:center;gap:6px;border-radius:4px;background:var(--blue);border:none;border-left:4px solid rgba(0,0,0,.22);padding:0 8px;font-size:12px;color:#fff;overflow:hidden;cursor:grab;box-shadow:var(--shadow-sm);}
+.job-block.ld{background:var(--orange-dk);}
+/* Service-category color grading — added 2026-08-28, see utils/jobs.js's serviceCategoryClass for
+   which categories get a class here (delivery_unpack/load/other only — 'moving' keeps the default
+   blue above, 'long_distance' keeps .ld's orange above and is never also given a .cat-* class). */
+.job-block.cat-delivery_unpack{background:var(--cat-delivery-unpack);}
+.job-block.cat-load{background:var(--cat-load);}
+.job-block.cat-other{background:var(--cat-other);}
+/* Conflict overrides EITHER type OR category color to red, with a white ring so it still reads as
+   "conflict" distinctly from a plain saturated type/category block at a glance. */
+.job-block.conflict{background:var(--red);box-shadow:0 0 0 2px var(--card),0 0 0 3px var(--red);}
 .job-block:hover{z-index:999 !important;}
 .job-block:active{cursor:grabbing;}
-.job-block.resizing{box-shadow:0 0 0 2px var(--blue);}
-.job-block b{display:block;color:var(--heading);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;}
-.job-block .jb-time{color:var(--muted);font-size:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.job-block.resizing{box-shadow:0 0 0 2px var(--card),0 0 0 3px var(--blue);}
+/* Extra right padding when the remove/delete corner buttons are showing (role !== 'crew'), so the
+   truncated detail run's ellipsis never renders underneath them — was applied to just the name
+   `<b>` before (.jb-name-inset); now applied to the whole block, since the corner buttons sit above
+   the entire flex row, not just the name. */
+.job-block.jb-inset{padding-right:26px;}
+/* Name gets first claim on space (up to 42% of the block) so it's never the first thing to get
+   squeezed out when a bar is narrow; the detail run (type/time/addresses/trucks-crew/driver/job id
+   — see JobVisuals.jsx's detailBits) fills whatever's left and truncates independently. Both still
+   fall back to the block's `title` tooltip for the full text when either one runs out of room —
+   same "nothing is ever fully hidden, just visually condensed" approach used on the print board. */
+.jb-line-wrap{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:5px;overflow:hidden;}
+.jb-name{flex:0 1 auto;max-width:42%;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.jb-detail{flex:1 1 auto;min-width:0;font-size:11px;font-weight:600;color:rgba(255,255,255,.92);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+/* Names of the OTHER job(s) a block conflicts with on the same truck (see JobVisuals.jsx's
+   otherConflictNames/conflictNamesLabel) — a small trailing pill on the same line now rather than
+   its own stacked row below, matching the rest of this block's single-line layout. Dark instead of
+   the block's own red-tint so it still stands out even on an already-red .conflict background. */
+.jb-conflict-names{flex:0 0 auto;background:rgba(0,0,0,.24);border-radius:3px;padding:1px 6px;font-size:9.5px;font-weight:800;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px;}
 /* Thin strip along the right edge — drag it to change a local job's duration. Only rendered for
    local (non-LD) jobs; a bit wider on hover so it's easy to grab without needing pixel-perfect
    aim. cursor:ew-resize is the standard "resize horizontally" affordance. */
@@ -224,16 +354,47 @@ h2.section-title{font-size:15px;margin:0 0 12px;color:var(--heading);}
 
 /* Click-to-edit date/time modal (JobEditModal) */
 .job-edit-overlay{position:fixed;inset:0;background:rgba(10,14,25,.45);display:flex;align-items:center;justify-content:center;z-index:2000;padding:16px;}
-.job-edit-modal{background:var(--card);border-radius:var(--radius-md);box-shadow:var(--shadow-md);padding:20px 22px;width:100%;max-width:340px;display:flex;flex-direction:column;gap:12px;}
+/* max-height + overflow-y so a modal taller than the viewport scrolls WITHIN its own card instead
+   of overflowing past the top of the fixed overlay — without this, tall content (the field list on
+   a small screen, or JobConflictChooser below with several overlapping jobs) pushed the top of the
+   card up past y:0, i.e. off-screen above/behind the sticky header, with no way to scroll back up
+   to it. 32px matches .job-edit-overlay's 16px top+bottom padding, so the card never quite touches
+   the viewport edge. */
+.job-edit-modal{background:var(--card);border-radius:var(--radius-md);box-shadow:var(--shadow-md);padding:20px 22px;width:100%;max-width:340px;display:flex;flex-direction:column;gap:12px;max-height:calc(100vh - 32px);overflow-y:auto;}
 .job-edit-modal h3{margin:0 0 2px;font-size:14px;color:var(--heading);}
+.job-edit-sm-link{font-size:11px;color:var(--blue);font-weight:600;text-decoration:none;align-self:flex-start;margin-top:-6px;}
+.job-edit-sm-link:hover{text-decoration:underline;}
 .job-edit-field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text);font-weight:600;}
 .job-edit-field input{font-weight:400;padding:7px 9px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--card-alt);color:var(--text);}
+/* Local/Long Distance picker in JobCreateModal — reuses .btn.secondary.active (already used for
+   this exact "toggle between two exclusive options" look elsewhere, e.g. the board/LD-planner
+   nav) rather than introducing a new radio-button style. */
+.job-type-toggle{display:flex;gap:6px;}
+.job-type-toggle .btn{flex:1;padding:7px 9px;font-size:12px;}
 .job-edit-hint{font-size:10px;color:var(--muted);font-weight:400;}
 .job-edit-error{font-size:12px;color:var(--red);background:var(--tint-red-bg);border:1px solid var(--tint-red-border);border-radius:6px;padding:6px 9px;}
 .job-edit-actions{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:4px;}
 .job-edit-actions-spacer{flex:1;}
 .btn.danger{background:var(--card);color:var(--red);border:1px solid var(--red);}
 .btn.danger:hover{background:var(--tint-red-bg);}
+
+/* "Which job?" chooser (JobConflictChooser) — shown instead of JobEditModal when a clicked job
+   block overlaps another job on the same truck (see stackZIndex's doc comment: overlapping jobs
+   stack, so a plain click used to always resolve to whichever one was drawn on top, leaving the
+   other unreachable). Reuses .job-edit-overlay/.job-edit-modal for the backdrop+card shell so it
+   reads as the same kind of dialog as JobEditModal; only the body content differs. */
+.jc-sub{font-size:12px;color:var(--muted);margin-top:-8px;}
+/* Scrolls on its own (separate from .job-edit-modal's own overflow-y above) once there are more
+   than a handful of overlapping jobs on one truck, so the heading/subtitle and Cancel button stay
+   put and only the job list scrolls — same shape as .job-search-results' own max-height+scroll. */
+.jc-options{display:flex;flex-direction:column;gap:8px;max-height:min(50vh, 420px);overflow-y:auto;padding-right:2px;}
+.jc-option{display:flex;flex-direction:column;align-items:flex-start;gap:2px;border:1px solid var(--border);border-radius:8px;padding:9px 11px;cursor:pointer;background:var(--card-alt);text-align:left;font:inherit;color:inherit;width:100%;}
+.jc-option:hover{border-color:var(--blue);background:var(--tint-blue-bg);}
+.jc-name{font-weight:700;color:var(--heading);font-size:13px;}
+.jc-meta{font-size:11px;color:var(--muted);}
+/* JobEditModal's optional "back to which-job list" link (only rendered when reached via the
+   chooser above — see JobEditModal.jsx's onBack prop). */
+.jc-back-link{font-size:11px;color:var(--blue);cursor:pointer;background:none;border:none;padding:0;text-align:left;font-weight:600;align-self:flex-start;}
 
 /* Job search (BoardTab toolbar) */
 .job-search{position:relative;min-width:240px;flex:1;max-width:360px;}
@@ -242,7 +403,12 @@ h2.section-title{font-size:15px;margin:0 0 12px;color:var(--heading);}
 .job-search-result{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;text-align:left;padding:8px 10px;border:none;border-bottom:1px solid var(--border);background:none;cursor:pointer;font-size:12px;color:var(--text);}
 .job-search-result:last-child{border-bottom:none;}
 .job-search-result:hover{background:var(--card-alt);}
+.jsr-title{display:flex;align-items:baseline;gap:6px;}
 .jsr-customer{font-weight:700;color:var(--heading);}
+/* Distinguishes sibling jobs under one opportunity (same customer, different job number — see
+   JobSearch.jsx's jobIdNumber()) at a glance — monospace so a run of digits reads as a single
+   scannable number rather than blending into the customer name next to it. */
+.jsr-id{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:10px;font-weight:600;color:var(--muted);}
 .jsr-meta{font-size:10px;color:var(--muted);}
 .job-search-empty{padding:10px;font-size:12px;color:var(--muted);}
 
@@ -269,7 +435,26 @@ h2.section-title{font-size:15px;margin:0 0 12px;color:var(--heading);}
 .month-weeks-wrap{display:flex;flex-direction:column;gap:6px;min-width:840px;}
 .month-week{position:relative;}
 .month-week-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;}
-.month-day{background:var(--card-alt);border:1px solid var(--border);border-radius:8px;padding:5px 6px;transition:background-color .2s ease,border-color .2s ease;}
+/* min-width:0 overrides the grid item's default automatic minimum size, which otherwise equals its
+   CONTENT's min-content width — normally harmless, but .month-chip's job/reference text
+   (white-space:nowrap, so it never wraps) can have a long unbroken min-content width of its own
+   (e.g. "BGA0724314" or a long customer name). Without this override, a single busy day full of
+   such chips stretches ITS ONE column far past its fair 1/7 share of the row, while the other 6
+   columns shrink to fit around it — so the 7 day cells end up rendering at 7 different widths
+   instead of the equal columns repeat(7,1fr) implies. That wouldn't just look uneven: .week-bars
+   (the long-distance job bars layered on top, see below) is a SEPARATE grid using the same
+   repeat(7,1fr) template over the same row, but its bars have overflow:hidden, which already zeroes
+   out that same automatic-minimum-size behavior for THEM — so .week-bars' 7 columns stay evenly
+   divided regardless of content. Two grids sharing one template but sized by different rules landed
+   at different actual pixel widths per column, so a bar addressed by column NUMBER (e.g. "column 3")
+   no longer lined up with that same-numbered day cell once that cell's column had been stretched —
+   the bar could visually land under the wrong day, or half into the day before it, purely from
+   another day's content being long that week. min-width:0 here means .month-day never contributes
+   more than its fair share to the row's sizing — .month-chip's own overflow:hidden/text-overflow:
+   ellipsis (already in place) is what actually keeps long text from spilling past the now-fixed-width
+   cell. This is what actually keeps the LD bars aligned with the correct day, not just what makes
+   the calendar look tidier. */
+.month-day{background:var(--card-alt);border:1px solid var(--border);border-radius:8px;padding:5px 6px;min-width:0;transition:background-color .2s ease,border-color .2s ease;}
 .month-day.pad{background:var(--card-alt-2);}
 .month-day.pad .day-num{color:var(--muted);opacity:.6;}
 .month-day.today{border-color:var(--orange);border-width:2px;}
@@ -281,13 +466,23 @@ h2.section-title{font-size:15px;margin:0 0 12px;color:var(--heading);}
 .month-chip{position:relative;font-size:10px;padding:3px 5px;border-radius:5px;background:var(--tint-blue-bg);border-left:3px solid var(--blue);cursor:grab;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .month-chip.unassigned{background:var(--card-alt-2);border-left-color:var(--muted);}
 .month-chip.mine{box-shadow:0 0 0 2px var(--green);}
+/* Fills the whole chip with the per-truck conflict color (see conflictColorForTruck in
+   utils/jobs.js) instead of just outlining it, so conflicting jobs on the same truck are
+   identifiable at a glance across the month board. Falls back to plain red when no per-truck
+   color was resolved (e.g. --conflict-color wasn't set). White text keeps the customer name
+   readable against every color in the palette. */
+.month-chip.conflict{background:var(--conflict-color, var(--red));border-left-color:var(--conflict-color, var(--red));color:#fff;}
 
 .week-bars{position:absolute;top:0;left:0;right:0;display:grid;grid-template-columns:repeat(7,1fr);gap:6px;grid-auto-rows:17px;row-gap:3px;pointer-events:none;z-index:3;}
 .week-bar{position:relative;background:var(--tint-orange-bg);border:2px solid var(--orange);border-radius:5px;font-size:10px;padding:1px 7px;color:var(--heading);font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:grab;pointer-events:auto;display:flex;align-items:center;}
+.week-bar.understaffed{border-style:dashed;}
+/* Same full-bar per-truck conflict fill as .month-chip.conflict above — covers both LD bars and
+   the local-job overlay marker (.overlay-chip always carries this class too, so it no longer
+   needs its own separate red-tint rule; every conflict marker in month view now shares one color
+   source). */
+.week-bar.conflict{background:var(--conflict-color, var(--red));border-color:var(--conflict-color, var(--red));color:#fff;}
 .week-bar.mine{box-shadow:0 0 0 2px var(--green) inset;}
 .week-bar:hover{z-index:999 !important;}
-.week-bar.overlay-chip{background:var(--tint-red-bg);border-color:var(--red) !important;color:var(--tint-red-text);}
-.week-bar.understaffed{border-style:dashed;}
 
 /* LD PLANNER */
 .ld-list{display:flex;flex-direction:column;gap:10px;}
@@ -320,6 +515,7 @@ h2.section-title{font-size:15px;margin:0 0 12px;color:var(--heading);}
 .sync-panel .sync-msg.ok{color:var(--green);}
 .oneway-note{background:var(--tint-blue-bg);border:1px solid var(--tint-blue-border);color:var(--tint-blue-text);padding:8px 12px;border-radius:8px;font-size:11px;margin-top:10px;}
 .sm-badge{display:inline-block;background:var(--tint-blue-bg);color:var(--tint-blue-text);border:1px solid var(--tint-blue-border);font-size:9px;font-weight:700;padding:1px 6px;border-radius:9px;margin-left:5px;vertical-align:middle;}
+.si-badge{display:inline-block;background:var(--tint-green-bg);color:var(--tint-green-text);font-size:9px;font-weight:700;padding:1px 6px;border-radius:9px;margin-left:5px;vertical-align:middle;}
 .placeholder-badge{display:inline-block;background:var(--tint-amber-bg);color:var(--tint-amber-text);border:1px solid var(--tint-amber-border);font-size:9px;font-weight:700;padding:1px 6px;border-radius:9px;margin-left:5px;vertical-align:middle;}
 select, input[type=text]{padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--card);color:var(--text);}
 .field-label{font-size:11px;color:var(--muted);min-width:90px;}
@@ -334,6 +530,7 @@ select, input[type=text]{padding:6px 8px;border:1px solid var(--border);border-r
 .crew-truck-header .t-driver{font-size:12px;color:#c6d2e8;margin-top:4px;}
 .crew-job{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px;margin-bottom:12px;transition:background-color .2s ease,border-color .2s ease;}
 .crew-job .cj-date{font-size:11px;color:var(--orange-dk);font-weight:700;text-transform:uppercase;margin-bottom:6px;}
+.crew-job .cj-driver{font-size:12px;color:var(--muted);margin-bottom:6px;}
 .crew-job .cj-customer{font-size:15px;font-weight:700;color:var(--heading);}
 .crew-job .cj-addr{font-size:13px;color:var(--text);margin-top:8px;line-height:1.5;}
 .crew-job .cj-addr .lbl{color:var(--muted);font-size:11px;text-transform:uppercase;display:block;}
@@ -344,6 +541,88 @@ select, input[type=text]{padding:6px 8px;border:1px solid var(--border);border-r
   .grid-2{grid-template-columns:1fr;}
   header .brand h1{font-size:14px;}
   .ld-row{grid-template-columns:1fr;}
+
+  /* DAY VIEW — MOBILE. Keeps the same horizontal-scroll-through-24-hours structure as desktop (see
+     DayBoard.jsx's timeline-inner comment for why — it's the same pattern a phone calendar app
+     already uses, not something to redesign here) but fixes what actually breaks it on a narrow
+     screen: bigger text/tap targets, a narrower sticky truck column so more of the timeline is
+     visible without scrolling, and hover-only controls made tap-visible since touch has no hover. */
+  main{padding:8px;}
+
+  /* Bug fix, not just a size tweak: .unassigned-tray's min-width:920px (see its own rule above) is
+     meant to keep the tray from looking bare with just a couple of chips on a wide desktop window —
+     but a hardcoded min-width always wins over how much space its container actually has, so below
+     ~950px it was forcing the TRAY ITSELF wider than the viewport with nothing scrolling it at that
+     level. Since .unassigned-tray is `position:sticky` (not absolute), that doesn't just clip — it
+     pushes the whole PAGE wider, so scrolling right to see the rest of the tray dragged the sticky
+     header/nav sideways with it too (sticky only pins vertically, not horizontally). Dropping the
+     min-width here lets the tray match its container's actual width again, so its own
+     overflow-x:auto (unchanged) is what scrolls the chips — contained inside the tray, exactly as
+     already happens on desktop once there are enough chips to overflow 920px.
+     .job-search's min/max-width are loosened the same way below, for the same reason: a fixed
+     240-360px range fought the toolbar for room on a narrow screen instead of just taking the full
+     width of its own row. */
+  .unassigned-tray{min-width:0;width:100%;}
+  .toolbar{flex-direction:column;align-items:stretch;}
+  .job-search{min-width:0;max-width:none;}
+  .board-controls{justify-content:space-between;}
+  .datepick,.monthpick{flex-wrap:wrap;row-gap:6px;}
+
+  /* Sticky truck column: 160px on desktop leaves plenty of room either side, but eats over a third
+     of a phone's width before the actual timeline even starts — narrowed here (with matching
+     smaller text so the truck name/status still fit) to leave more of the screen for the hours.
+     DayBoard.jsx's default-scroll-to-5am effect measures this column's REAL rendered width at
+     runtime rather than assuming a fixed number, so it stays correct at this width automatically —
+     see its own comment. */
+  .timeline-header .truck-col-spacer,.truck-row .truck-info{width:108px;}
+  .truck-info .tname{font-size:12px;}
+  .truck-info .meta{font-size:10px;}
+  .timeline-header .hour{font-size:10px;padding:5px 0 5px 3px;}
+
+  /* Taller rows + bigger text than the desktop baseline (44px/11px — see .track's and .job-block's
+     own comments) reads fine on a desktop monitor at arm's length, not on a phone a few inches from
+     your face with a finger for a pointer, so mobile still gets extra height/size on top of the
+     desktop values rather than matching them 1:1. */
+  .truck-row .track{min-height:56px;}
+  .job-block{font-size:12px;padding:0 8px;}
+  .jb-name{font-size:13px;}
+  .jb-detail{font-size:11px;}
+
+  /* "+ truck"/"+ driver" pickers (AddTruckControl/AddDriverControl in JobVisuals.jsx) are plain
+     <select> dropdowns — perfectly touch-friendly once visible — but styles.css only reveals them
+     on :hover, which a touchscreen never triggers. Shown unconditionally here instead of gated on a
+     gesture mobile doesn't have; still just a tap-to-open select, not drag-and-drop. */
+  .jb-add-truck,.jb-add-driver{display:inline-block;font-size:10px;max-width:64px;padding:2px 3px;}
+
+  /* Delete/remove affordances (14x14px) are hard to hit precisely with a finger — bumped toward the
+     ~40px+ touch-target guideline without them taking over the whole corner of a small job block. */
+  .jb-remove,.jb-delete,.chip-delete{width:20px;height:20px;line-height:18px;font-size:12px;}
+
+  .chip{min-width:132px;font-size:12px;padding:8px 10px;}
+  .chip b{font-size:13px;}
+  .chip .chip-addr{font-size:11px;max-width:170px;}
+
+  /* MONTH VIEW — MOBILE.
+     "+truck" (AddTruckControl) sits inside a month-view chip/bar that's already a small fraction of
+     a scrolling calendar row — the rule right above this one just made it permanently visible there
+     too (same fix as Day view's job blocks), which on a phone-sized chip is an easy target to
+     mis-tap into reassigning a truck by accident. Reassignment already has a real workflow (Job
+     Assignments, or Day view) — Month view is meant as an at-a-glance overview, not where you'd
+     deliberately go to change a truck — so it's switched back off here, after the shared rule above
+     turned it on for every context. */
+  .month-chip .jb-add-truck,.week-bar .jb-add-truck{display:none!important;}
+
+  /* Squeezing all 7 days into a phone's ~350-400px width (month-week-grid's repeat(7,1fr) has no
+     floor of its own) leaves each day column too narrow to read anything in it — every job chip
+     truncates to a few characters. Rather than shrink text further to fit (already tried for Day
+     view's columns; there's a floor to how small "readable" gets), Month view gets WIDER columns
+     than it would naturally have on a narrow screen and leans on .month-board's existing
+     overflow-x:auto to scroll sideways through the week — same "readable over cramped" tradeoff as
+     Day view's timeline above, just applied to 7 day-columns instead of many hour-columns.
+     .month-weekdays and .month-weeks-wrap must move together — they're two separate elements
+     (weekday labels vs. the actual week rows) that only stay column-aligned because both share the
+     same min-width and grid-template-columns; changing one without the other would desync them. */
+  .month-weekdays,.month-weeks-wrap{min-width:1360px;}
 }
 
 /* PRINT — day view's "🖨 Print" button prints a clean manifest (DayPrintSheet.jsx) instead of the
@@ -353,14 +632,14 @@ select, input[type=text]{padding:6px 8px;border:1px solid var(--border);border-r
 .print-sheet{display:none;}
 .print-header{margin-bottom:14px;}
 .print-title{font-size:18px;font-weight:800;color:#000;}
-.print-date{font-size:13px;color:#333;margin-top:2px;}
+.print-date{font-size:13px;color:#111;font-weight:600;margin-top:2px;}
 .print-truck{margin-bottom:14px;break-inside:avoid;}
 .print-truck-head{border-bottom:2px solid #000;padding-bottom:3px;margin-bottom:5px;}
 .print-truck-name{font-weight:800;font-size:13px;color:#000;margin-right:8px;}
-.print-truck-meta{font-size:11px;color:#333;}
-.print-table{width:100%;border-collapse:collapse;font-size:11px;}
-.print-table th{text-align:left;border-bottom:1px solid #999;padding:3px 6px;font-size:10px;text-transform:uppercase;color:#333;}
-.print-table td{padding:3px 6px;border-bottom:1px solid #ddd;vertical-align:top;color:#000;}
+.print-truck-meta{font-size:11px;color:#222;font-weight:600;}
+.print-table{width:100%;border-collapse:collapse;font-size:12px;}
+.print-table th{text-align:left;border-bottom:1px solid #999;padding:3px 6px;font-size:10px;text-transform:uppercase;color:#000;font-weight:800;}
+.print-table td{padding:3px 6px;border-bottom:1px solid #ddd;vertical-align:top;color:#000;font-weight:500;}
 .print-empty{font-size:11px;color:#777;font-style:italic;padding:4px 0;}
 .print-unassigned .print-truck-head{border-bottom-color:#c0392b;}
 .print-unassigned .print-truck-name{color:#c0392b;}
@@ -370,22 +649,89 @@ select, input[type=text]{padding:6px 8px;border:1px solid var(--border);border-r
    on-screen day board (trucks on the left, colored bars across an hours header), as opposed to
    DayPrintSheet's plain table. print-color-adjust is a hint some browsers honor without it, but
    whether background colors actually print also depends on the browser's own print-dialog
-   "background graphics" option — CSS alone can't force that on. */
-.pt-timeline{width:100%;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
-.pt-timeline-header{display:flex;border-bottom:1px solid #999;}
-.pt-truck-col-spacer{width:110px;flex:0 0 auto;}
-.pt-hours{flex:1;display:flex;}
-.pt-hour{flex:1;font-size:8px;color:#555;padding:2px 0 2px 3px;border-left:1px solid #ccc;}
-.pt-truck-row{display:flex;border-bottom:1px solid #ddd;break-inside:avoid;}
-.pt-truck-info{width:110px;flex:0 0 auto;padding:4px 6px 4px 0;}
-.pt-truck-name{font-weight:800;font-size:10px;color:#000;}
-.pt-truck-meta{font-size:8px;color:#555;}
-.pt-track{flex:1;position:relative;min-height:26px;background-image:repeating-linear-gradient(to right, #eee 0, #eee 1px, transparent 1px, transparent calc(100%/24));}
-.pt-block{position:absolute;top:2px;bottom:2px;overflow:hidden;border-radius:3px;background:#e7effc;border:1px solid #c7d9fb;border-left:3px solid #3672d9;padding:1px 4px;font-size:8px;color:#000;}
-.pt-block.ld{background:#fff3ea;border-color:#ffd9c2;border-left-color:#ff6b35;}
+   "background graphics" option — CSS alone can't force that on.
+   A real <table> now, not stacked <div>s — table-layout:fixed makes the truck column and the 24
+   hour columns a consistent width down the WHOLE table (colgroup below sets the truck column;
+   the hour columns split the rest evenly), and critically, <thead> is the one plain-HTML mechanism
+   browsers already repeat at the top of every page a table breaks across when printed — needed
+   once a fleet has enough trucks to overflow one page. See DayPrintTimeline.jsx's own comment. */
+.pt-table{width:100%;border-collapse:collapse;table-layout:fixed;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+.pt-table thead{display:table-header-group;}
+col.pt-col-truck{width:calc(150px * var(--pt-scale, 1));}
+.pt-truck-col-spacer{border-bottom:2px solid #000;background:#fff;}
+/* Sizes bumped a second time (9px->11px->14px for hours, 8px->10px->13px for block text, etc.) —
+   the first pass still printed too small to read at a glance. These are the largest sizes that
+   still fit a 24-column full day on one landscape page WHEN there are few enough trucks that no
+   shrinking is needed — --pt-scale (set inline on the print-sheet root by BoardTab.jsx's
+   printSheet(), computed from the day's truck count — see truckPrintScale() there) uniformly
+   shrinks every value below via calc(base * var(--pt-scale, 1)) only as much as it takes to fit
+   every truck on one Letter-landscape page, so a small fleet still prints at full size and only a
+   large one gets smaller (never below a readable floor — see MIN_SCALE in BoardTab.jsx). The
+   `, 1` fallback means anything printed without JS setting the variable (or any other .print-sheet)
+   renders at these exact original sizes, unchanged. */
+.pt-hour{font-size:calc(14px * var(--pt-scale, 1));color:#000;font-weight:800;padding:calc(4px * var(--pt-scale, 1)) 0 calc(4px * var(--pt-scale, 1)) calc(4px * var(--pt-scale, 1));border-bottom:2px solid #000;border-left:1px solid #ccc;text-align:left;background:#fff;}
+.pt-truck-row{break-inside:avoid;}
+.pt-truck-info{width:calc(150px * var(--pt-scale, 1));padding:calc(6px * var(--pt-scale, 1)) calc(8px * var(--pt-scale, 1)) calc(6px * var(--pt-scale, 1)) 0;vertical-align:top;border-bottom:1px solid #ddd;}
+.pt-track-cell{padding:0;position:relative;vertical-align:top;border-bottom:1px solid #ddd;}
+.pt-truck-name{font-weight:800;font-size:calc(16px * var(--pt-scale, 1));color:#000;}
+.pt-truck-meta{font-size:calc(12px * var(--pt-scale, 1));color:#222;font-weight:700;}
+/* Shrunk from 96px to 50px on 2026-08-28, now that the hybrid dense/wrap block layout (see
+   .pt-block-line below) puts the name and every detail bit on ONE line for most jobs instead of
+   always stacking name-then-wrapped-details on separate rows — a fixed height generous enough for
+   that old always-multi-line layout left a lot of visibly empty space under a block that only
+   ever needed one line now. Bumped again to 54px the same day, alongside .pt-block-name/.pt-bit's
+   own font-size increase below — still comfortably fits a block that wraps to 2 lines (a
+   fully-detailed multi-truck LD job with several bits) at the larger text without clipping; only a
+   rare 3-line block would start to feel tight. Scales with --pt-scale like everything else here —
+   BASE_ROW_HEIGHT_PX in BoardTab.jsx mirrors this 54px (plus the row's 1px border) when computing
+   how much a big fleet needs to shrink to fit one page. Box WIDTH is untouched by this — it's tied
+   to how many hours the job actually runs, which needs to stay accurate on a timeline, not to how
+   much text is in it. */
+/* Gridline spacing matches DayPrintTimeline.jsx's TIMELINE_START/END span — 12 columns (6am-6pm)
+   since that was narrowed from a 24-hour grid to business hours only, 2026-08-27. Update this
+   alongside that component if the printed board's hour range ever changes again. */
+.pt-track{position:relative;min-height:calc(54px * var(--pt-scale, 1));background-image:repeating-linear-gradient(to right, #eee 0, #eee 1px, transparent 1px, transparent calc(100%/12));}
+.pt-block{position:absolute;top:2px;bottom:2px;overflow:hidden;border-radius:3px;background:#e7effc;border:1px solid #a9c2f5;border-left:5px solid #2557b8;padding:calc(3px * var(--pt-scale, 1)) calc(7px * var(--pt-scale, 1));color:#000;display:flex;flex-direction:column;justify-content:center;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+.pt-block.ld{background:#fff3ea;border-color:#ffbf94;border-left-color:#d94e10;}
+/* Service-category color grading (print) — added 2026-08-28, same pale-tint-plus-accent-border
+   pattern as .pt-block.ld above; only delivery_unpack/load/other get one, see .job-block.cat-*'s
+   comment for why. */
+.pt-block.cat-delivery_unpack{background:#e3f6f6;border-color:#a8d8d8;border-left-color:#0c8599;}
+.pt-block.cat-load{background:#f0ebf8;border-color:#cdb8e8;border-left-color:#6d4aa6;}
+.pt-block.cat-other{background:#eef0f2;border-color:#ccd2d9;border-left-color:#5b6472;}
 .pt-block.conflict{border-color:#d0453c;box-shadow:0 0 0 1px #d0453c;}
-.pt-block b{display:block;font-size:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.pt-block span{color:#555;font-size:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+/* Hybrid dense/wrap layout — replaced the old "name on its own row, details always stacked below"
+   print style 2026-08-28 at the user's request, to match the on-screen board's new dense single-
+   line job block (see .jb-line-wrap in JobVisuals.jsx). The name and every detail bit are separate
+   flex items in ONE flex-wrap row: when the block is wide enough (most jobs), everything reads as
+   one compact line, same feel as the screen version. When it isn't wide enough, the browser's own
+   wrapping simply carries whichever bits don't fit onto a second (or third) line for THAT box only
+   — plain flex-wrap, no JS measurement or per-box class needed. Deliberately never an ellipsis
+   here: paper has no hover to recover text the way the on-screen tooltip does, so nothing is ever
+   silently cut off — a short job stays one line, a fully-detailed one just uses more of the row's
+   already-generous fixed height (see .pt-track's min-height comment above) automatically. */
+.pt-block-line{display:flex;flex-wrap:wrap;align-items:baseline;column-gap:6px;row-gap:1px;overflow:hidden;}
+/* Bumped 15px->17px / 12px->14px on 2026-08-28 at the user's request, alongside .pt-track's
+   matching min-height increase above — a box with room to stay on one line now reads bigger; a
+   box that doesn't have room just wraps sooner (see .pt-block-line's flex-wrap above), same
+   hybrid behavior as before, just with a larger baseline size. */
+.pt-block-name{font-size:calc(17px * var(--pt-scale, 1));font-weight:800;color:#000;white-space:nowrap;line-height:1.25;}
+.pt-bit{font-size:calc(14px * var(--pt-scale, 1));font-weight:700;color:#111;white-space:nowrap;line-height:1.3;max-width:100%;overflow:hidden;text-overflow:ellipsis;}
+.pt-bit::before{content:'· ';color:#666;}
+
+/* Full-detail conflict panel printed directly under a truck's bars when it has overlapping jobs —
+   added 2026-08-27 (see DayPrintTimeline.jsx's conflictClusters). Deliberately its own row rather
+   than squeezed into the .pt-block itself: paper has no hover/click-through, and .pt-block's fixed
+   row height + overflow:hidden leaves no room to grow, so the only reliable way to guarantee every
+   conflicting job's full details are readable on the printout is to spell them out separately. */
+.pt-conflict-row{break-inside:avoid;}
+.pt-conflict-cell{padding:2px 0 8px;}
+.pt-conflict-panel{background:#fdecea;border:1px solid #f2b6b0;border-radius:4px;padding:6px 10px;margin:0 4px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+.pt-conflict-panel-title{font-weight:800;font-size:11px;color:#8a1f18;margin-bottom:4px;}
+.pt-conflict-cluster{margin-bottom:5px;padding-bottom:5px;border-bottom:1px dashed #f2b6b0;}
+.pt-conflict-cluster:last-child{margin-bottom:0;padding-bottom:0;border-bottom:none;}
+.pt-conflict-entry{font-size:11px;color:#111;line-height:1.4;}
+.pt-conflict-entry b{color:#000;}
 
 @media print{
   /* Force a plain white page no matter which day/night theme was active on screen — body's own
@@ -406,8 +752,11 @@ select, input[type=text]{padding:6px 8px;border:1px solid var(--border);border-r
   .print-sheet.print-active,.print-sheet.print-active *{visibility:visible;}
   .print-sheet.print-active{display:block;position:absolute;top:0;left:0;width:100%;padding:20px;background:#fff;}
   .print-sheet-timeline.print-active{page:pt-landscape;}
-  @page{size:A4;margin:14mm;}
+  @page{size:letter;margin:14mm;}
   /* Best-effort — named @page + orientation isn't universally supported; if a browser ignores it,
-     the print dialog's own paper-size/orientation options still let you pick A4 landscape by hand. */
-  @page pt-landscape{size:A4 landscape;margin:10mm;}
+     the print dialog's own paper-size/orientation options still let you pick Letter landscape by
+     hand. Kept in sync with BoardTab.jsx's setPrintOrientation(), which injects the same rule with
+     the actual requested orientation right before window.print() — that's the one that reliably
+     takes effect across browsers; this @page block is the fallback for anything that ignores it. */
+  @page pt-landscape{size:letter landscape;margin:10mm;}
 }

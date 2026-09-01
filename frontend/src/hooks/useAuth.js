@@ -35,7 +35,10 @@ export function useAuth(backendUrl) {
       // err.status is only set for a real HTTP response (e.g. 401 "not logged in", which is the
       // normal/expected case pre-login). If it's missing, fetch() itself failed — the backend is
       // unreachable — which is worth telling the user about instead of just showing a blank form.
-      setConnectionError(err.status === undefined ? `Can't reach the backend at ${backendUrl}. Is it running?` : '');
+      // backendUrl is '' for same-origin production hosting (see api.js) — "the backend at "
+      // reads oddly with nothing after it, so name it explicitly in that case.
+      const where = backendUrl || 'this site';
+      setConnectionError(err.status === undefined ? `Can't reach the backend at ${where}. Is it running?` : '');
       return false;
     }
   }, [backendUrl]);

@@ -1,0 +1,21 @@
+{
+  "hosting": {
+    "public": "frontend/dist",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      { "source": "/api/**", "function": "api" },
+      { "source": "/webhooks/**", "function": "api" },
+      { "source": "**", "destination": "/index.html" }
+    ]
+  },
+  "functions": {
+    "source": "server",
+    "ignore": [
+      ".env",
+      "data",
+      "*.test.js",
+      "mock-smartmoving-server.js",
+      "node_modules"
+    ]
+  }
+}

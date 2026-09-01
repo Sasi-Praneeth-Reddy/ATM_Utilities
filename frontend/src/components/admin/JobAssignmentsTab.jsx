@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import JobAssignments from './JobAssignments';
+import SyncPanel from './SyncPanel';
 import { jobTrucks, jobTruckLabel } from '../../utils/jobs';
 
 /** Matches a job against a lowercased search term across every field a dispatcher would plausibly
@@ -8,7 +9,8 @@ import { jobTrucks, jobTruckLabel } from '../../utils/jobs';
  * works too, not just "find this customer"). */
 export function matchesQuery(job, trucks, drivers, q) {
   const ts = jobTrucks(trucks, job);
-  const driverNames = ts.map((t) => (t.driverId ? drivers.find((d) => d.id === t.driverId)?.name : null)).filter(Boolean);
+  const truckDrivers = job.truckDrivers || {};
+  const driverNames = ts.map((t) => (truckDrivers[t.id] ? drivers.find((d) => d.id === truckDrivers[t.id])?.name : null)).filter(Boolean);
   const haystack = [
     job.customer, job.id, job.origin, job.destination,
     job.smartMovingJobId, job.smartMovingOpportunityId,
@@ -23,8 +25,14 @@ export function matchesQuery(job, trucks, drivers, q) {
  * Adds a plain filter-as-you-type search scoped to this page only — this list can run long once
  * SmartMoving sync has populated a month's worth of jobs, and unlike JobSearch.jsx on the board
  * (which jumps the calendar to a picked result), everything's already on screen here, so filtering
- * the list in place is all that's needed. */
-export default function JobAssignmentsTab({ trucks, drivers, jobs, conflictIds, onSetJobSingleTruck, onToggleJobTruck, onUpdateJobField, onAddExtraTruck }) {
+ * the list in place is all that's needed. Also hosts SyncPanel (moved here 2026-08-25 at the
+ * user's request, from Trucks & Drivers — this page is where assignments actually get made, so
+ * checking for/pulling in newly-synced jobs belongs here rather than on the truck/driver roster
+ * page) — see SyncPanel.jsx for what it does. */
+export default function JobAssignmentsTab({
+  trucks, drivers, jobs, conflictIds, onSetJobSingleTruck, onToggleJobTruck, onUpdateJobField, onAddExtraTruck, onSetJobTruckDriver,
+  syncStatus, onSyncNow, lastSyncedAt, smartInsightsSyncStatus, onSyncSmartInsightsNow,
+}) {
   const [query, setQuery] = useState('');
 
   const filteredJobs = useMemo(() => {
@@ -35,6 +43,11 @@ export default function JobAssignmentsTab({ trucks, drivers, jobs, conflictIds, 
 
   return (
     <section>
+      <SyncPanel
+        syncStatus={syncStatus} onSyncNow={onSyncNow} lastSyncedAt={lastSyncedAt}
+        smartInsightsSyncStatus={smartInsightsSyncStatus} onSyncSmartInsightsNow={onSyncSmartInsightsNow}
+      />
+
       <div className="toolbar">
         <h2 className="section-title">Job Assignments — assign a truck &amp; driver to each job</h2>
         <div className="list-filter">
@@ -56,6 +69,7 @@ export default function JobAssignmentsTab({ trucks, drivers, jobs, conflictIds, 
           onToggleJobTruck={onToggleJobTruck}
           onUpdateJobField={onUpdateJobField}
           onAddExtraTruck={onAddExtraTruck}
+          onSetJobTruckDriver={onSetJobTruckDriver}
         />
       )}
     </section>

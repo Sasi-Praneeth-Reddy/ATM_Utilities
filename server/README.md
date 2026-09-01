@@ -2,8 +2,8 @@
 
 This backend has three jobs:
 
-1. **Serves the scheduler's data** — trucks, drivers, and jobs live in a SQLite database on this
-   server and are exposed over a small REST API (`GET /api/state`, plus create/update endpoints).
+1. **Serves the scheduler's data** — trucks, drivers, and jobs live in Firestore and are exposed
+   over a small REST API (`GET /api/state`, plus create/update endpoints).
    The `frontend/` app is a thin client: it has no local storage of its own, so this backend has to
    be running for the scheduler to work at all, and every device that opens it talks to the same
    shared database.
@@ -21,53 +21,71 @@ still need to mirror any date/time changes into SmartMoving by hand until SmartM
 write endpoint (worth asking their support team directly — this isn't something we can build
 around on our end).
 
-## Webhooks vs. polling — why both, and how polling alone now finds booked jobs too
+## Webhooks vs. polling — why both, booked jobs only, and how polling alone finds them
 
-Originally this only polled `GET /api/leads`. **Confirmed live in the dev portal on 2026-08-10**
-(the "Get leads" operation's own description): "By default, only New and In Progress leads are
-returned, but Lost and Bad Leads can be included through query parameters." There is no parameter
-of any kind to widen this to Booked/Completed/Closed — `IncludeBad`/`IncludeLost` are the only two
-flags this endpoint has. So `/api/leads` **cannot ever** return an already-booked job, full stop —
-not a bug to fix, a hard ceiling on what that one source can see. SmartMoving separately has a
-`Create an opportunity` endpoint that books a job directly, with no lead involved at all (e.g. a
-repeat customer or phone booking a staff member enters straight as a booking) — those are
-permanently invisible to `/api/leads` too.
+**The board only ever shows booked jobs**, not quotes/leads/opportunities still in the
+pre-booking pipeline. `mapJobs.js`'s `BOOKED_STATUSES` (`4` Booked, `10` Completed, `11` Closed) is
+the single source of truth for this filter, applied in `hydrateOpportunity()` (`server.js`) before
+any opportunity is written to Firestore — so it's enforced no matter which discovery path found the
+opportunity (webhook, poll sweep, or a manual `POST /api/sync-now`). A pre-filter also runs earlier
+in the poll sweep (see step 2 below) purely to save API calls, but `hydrateOpportunity`'s check is
+the one that's actually authoritative.
 
-Fixed two ways, so neither webhooks nor polling alone has to carry the whole load:
+This whole design went through three iterations, in order:
 
-1. **Webhooks (primary, real-time)** — `Job Created` and `Opportunity Created`/
-   `Opportunity Status Changed`/`Opportunity Changed` fire off the job/opportunity object itself,
-   regardless of whether it ever passed through the lead pipeline. Confirmed directly in the
-   webhook docs: `Opportunity Created` is described as firing "whether submitted via web form,
-   entered manually, or created through an integration or API." Payloads are thin —
-   `opportunity-*` events give `{event-type, opportunity-id, opportunity-status}` (confirmed via
-   the dev portal's webhook document), so receiving one tells the backend which opportunity to
-   re-fetch via `GET /api/opportunities/{id}`. **`job-created` only ever gives `{event-type,
-   job-id}` — no opportunity-id** — and there's no endpoint that resolves a bare job-id to
-   anything (every job-detail endpoint needs the opportunity id too), so that event alone can't be
-   hydrated; `handleWebhook` in `server.js` deliberately no-ops on it and lets the poll sweep pick
-   it up on its next pass instead of guessing.
-2. **Poll sweep (fallback/backfill AND how job-created gets resolved)**, running on an interval
-   (default every 15 minutes), now merges **three** discovery sources before hydrating anything:
-   - `GET /api/leads` — same as before, catches a lead the moment it's created and gives a
-     customer name for the sync summary, but (see above) never the booked ones.
-   - `GET /api/crew-members/{id}/jobs` — **confirmed live in the dev portal 2026-08-10**: lists
-     real jobs directly by service date, for one crew member at a time. This does NOT go through
-     `/api/leads` at all, so it finds already-booked, already-staffed work. There's no "list all
-     jobs" endpoint on this API, so the sweep enumerates **every** crew member
-     (`GET /api/crew-members`, deliberately no `Status` filter — see below) and asks each one for
-     their jobs in the poll window. This source can't find a job with nobody staffed on it yet —
-     there's no crew member to enumerate it from.
-   - `GET /api/customers` — **confirmed live in the dev portal 2026-08-10**, added after a real
-     user reported jobs missing even with no crew assigned. Its own description: "Get a list of
-     all customers ordered by name. Optionally, you can filter them based on the job service date
-     associated with each customer's opportunities." Each customer comes back with
-     `opportunities[]` across the **full** `OpportunityStatus` range (not leads-scoped at all) and
-     each opportunity's `jobs[]` embedded — this doesn't depend on lead-pipeline stage OR crew
-     assignment, so it's what finds a Booked job that's had nobody staffed on it yet. This is the
-     closest thing this API has to a true "list every job in a date range" endpoint.
+1. **Leads + webhooks (original).** Polled `GET /api/leads` only. **Confirmed live in the dev
+   portal on 2026-08-10** (the "Get leads" operation's own description): "By default, only New and
+   In Progress leads are returned, but Lost and Bad Leads can be included through query
+   parameters." There is no parameter of any kind to widen this to Booked/Completed/Closed —
+   `IncludeBad`/`IncludeLost` are the only two flags this endpoint has. So `/api/leads` **cannot
+   ever** return an already-booked job, full stop — a hard ceiling on what that one source can see,
+   not a bug. Two more sources (crew-assigned jobs, customer records — see step 3) were added to
+   close that gap without dropping leads yet.
+2. **iCal feed (brief, 2026-08-18).** The REST API's 20,000-calls/month Basic-tier quota got
+   exhausted in about two days running the 3-source sweep every 15 minutes during a live team test.
+   SmartMoving's free, unmetered iCal feed (`server/icalClient.js`) briefly became the primary sync
+   path instead. **Set aside again the same day** once step 3 below made REST polling cheap enough
+   to trust as primary — the iCal code is kept, not deleted (`pollIcalFeed` in `server.js`,
+   reachable via `icalSweepScheduled` in `functions-index.js`, currently commented out of that
+   file's `exports`), in case a faster/free path is needed again later. Its known gap if ever
+   reactivated: the feed's event shape carries no opportunity status, so it can't apply the
+   booked-only filter itself — every event on the feed gets imported regardless of stage.
+3. **Booked-only status filter + leads dropped (current, 2026-08-18).** `GET /api/leads` was
+   removed entirely — see step 1, it structurally can never contribute a booked job, so under a
+   booked-only design it was pure wasted calls. What's left:
+   - **Webhooks (primary, real-time)** — `Job Created` and `Opportunity Created`/
+     `Opportunity Status Changed`/`Opportunity Changed` fire off the job/opportunity object itself,
+     regardless of pipeline stage. Confirmed directly in the webhook docs: `Opportunity Created` is
+     described as firing "whether submitted via web form, entered manually, or created through an
+     integration or API." Payloads are thin — `opportunity-*` events give `{event-type,
+     opportunity-id, opportunity-status}` (confirmed via the dev portal's webhook document), so
+     receiving one tells the backend which opportunity to re-fetch via
+     `GET /api/opportunities/{id}` — `hydrateOpportunity` then applies the booked-only filter on
+     the fresh `status`. **`job-created` only ever gives `{event-type, job-id}` — no
+     opportunity-id** — and there's no endpoint that resolves a bare job-id to anything, so that
+     event alone can't be hydrated; `handleWebhook` deliberately no-ops on it and lets the poll
+     sweep pick it up on its next pass instead of guessing.
+   - **Poll sweep** (`server.js`'s `pollSweep`, primary sync path again, on an interval —
+     `POLL_INTERVAL_MINUTES`, default 120) merges **two** discovery sources before hydrating:
+     - `GET /api/crew-members/{id}/jobs` — **confirmed live in the dev portal 2026-08-10**: lists
+       real jobs directly by service date, for one crew member at a time. Doesn't go through
+       `/api/leads` at all, so it finds already-booked, already-staffed work. There's no "list all
+       jobs" endpoint on this API, so the sweep enumerates **every** crew member
+       (`GET /api/crew-members`, deliberately no `Status` filter — see below) and asks each one for
+       their jobs in the poll window. Can't find a job with nobody staffed on it yet — nothing to
+       enumerate it from. This source's own job shape carries no status field, so its
+       opportunities go straight to `hydrateOpportunity`'s check rather than being pre-filtered.
+     - `GET /api/customers` — **confirmed live in the dev portal 2026-08-10**, added after a real
+       user reported jobs missing even with no crew assigned. Each customer comes back with
+       `opportunities[]` across the **full** `OpportunityStatus` range and each opportunity's
+       `status` field directly embedded — so `pollSweep` pre-filters against `BOOKED_STATUSES`
+       *here*, before it's even added to the discovery list, which is the main lever that keeps
+       poll-sweep call volume down (this source alone previously found ~977
+       opportunities-with-jobs in one real test, most not booked). Fails open on a missing/unusual
+       `status` value rather than silently dropping a real job over an unexpected shape.
 
-   Every opportunity id found by any of the three is hydrated exactly once.
+     Every opportunity id found by either source is hydrated exactly once — deduped in a `Map`
+     before the hydration loop, so one found via both sources still only costs one hydration call.
 
 **Don't filter crew members by `Status=Active`.** Found 2026-08-10 against a real account: a real,
 booked, staffed job was missing from the board because it was assigned to a crew member whose
@@ -77,18 +95,16 @@ Active-only silently drops every job assigned to anyone who doesn't match — fo
 false negative (a real job never appearing) is worse than the extra API calls from checking
 everyone. `getAllCrewMembers()` now fetches all crew members regardless of status.
 
-Verified all of this actually closes the gaps, in one bash-call test run each:
+Verified the discovery gaps actually close, in one bash-call test run each:
 `server/mock-smartmoving-server.js` has three sample bookings, each deliberately unreachable by a
 different subset of sources — one absent from `LEADS` (a direct booking), one assigned only to an
 `Inactive`-status crew member, and one Booked with a job created but `crewMembers: []` (nobody
 staffed) and absent from `LEADS`. Ran real `POST /api/sync-now` calls against the mock with **no
 webhook involved at all** and confirmed each one landed on the board through the poll sweep alone —
 `crewJobOpportunityCount`/`customerJobOpportunityCount` in the response show which source found
-which. Before these fixes, none of the three could be found without a deployed webhook; now polling
-finds all of them, closing the gap for accounts that haven't deployed a public webhook URL yet.
-`test-webhook.js` still exercises the webhook path itself (`npm run test-webhook`) — webhooks
-remain the better real-time signal once hosting is in place, but polling is no longer structurally
-blind to any booking state.
+which. `test-webhook.js` still exercises the webhook path itself (`npm run test-webhook`) —
+webhooks remain the better real-time signal once hosting is in place, but polling is no longer
+structurally blind to any booking state.
 
 ### Rate limits
 
@@ -106,22 +122,22 @@ to 6 retries per call. If a sync summary still shows `429` errors after that, ra
 ## What it does
 
 1. **REST API for the scheduler** (`server.js` + `db.js`) — `GET /api/state` returns all
-   trucks/drivers/jobs from the SQLite database; `POST`/`PATCH` endpoints create and update them.
-   The scheduler UI calls these directly for every action (assigning a truck, adding a driver,
-   editing a job) and polls `GET /api/state` in the background every 15s so multiple open tabs/
-   devices stay in sync with each other.
+   trucks/drivers/jobs from Firestore; `POST`/`PATCH` endpoints create and update them. The
+   scheduler UI calls these directly for every action (assigning a truck, adding a driver, editing
+   a job) and polls `GET /api/state` in the background every 15s so multiple open tabs/devices stay
+   in sync with each other.
 2. **Webhook receiver** (`POST /webhooks/smartmoving`) — SmartMoving POSTs here on `job-created`,
    `opportunity-created`, `opportunity-status-changed`, or `opportunity-changed`. On a relevant
    event with an opportunity id, fetches `GET /api/opportunities/{id}` (and, best-effort,
    `GET /api/opportunities/{id}/jobs` for exact start/end times) and upserts the result into the
-   `jobs` table. `job-created` payloads only carry a job id with no opportunity id and nothing
+   `jobs` collection. `job-created` payloads only carry a job id with no opportunity id and nothing
    resolves one from the other, so that event is left for the poll sweep to pick up instead.
-3. **Poll sweep** (fallback/backfill, every `POLL_INTERVAL_MINUTES`) — merges three discovery
-   sources: `GET /api/leads`, `GET /api/crew-members/{id}/jobs` for every crew member, and
-   `GET /api/customers` — all over the same rolling date window (the latter two find already-booked
-   jobs the first structurally cannot, and `/api/customers` finds them even with no crew assigned
-   yet — see "Webhooks vs. polling" above) — then hydrates each opportunity found by any source the
-   same way, so nothing depends solely on webhooks arriving.
+3. **Poll sweep** (primary sync path, every `POLL_INTERVAL_MINUTES`, default 120) — merges two
+   discovery sources: `GET /api/crew-members/{id}/jobs` for every crew member, and
+   `GET /api/customers` (pre-filtered to booked-only statuses) — over the same rolling date window
+   (see "Webhooks vs. polling" above for why `GET /api/leads` was dropped) — then hydrates each
+   opportunity found by either source the same way (booked-only filter applied again there,
+   authoritatively), so nothing depends solely on webhooks arriving.
 4. Syncing a job that's already in the database (matched by SmartMoving's internal job ID) only
    refreshes its SmartMoving-owned fields (customer, date, time, addresses, crew size) — truck
    assignments and status a dispatcher has set locally are left alone, so a sync can't undo their
@@ -135,23 +151,31 @@ the automatic interval sweep) keep things current on their own.
 
 ## Setup
 
-Requires **Node 22.5 or newer** — this uses the built-in `node:sqlite` module (experimental as of
-this Node line), not a separate database server. Almost everything else is dependency-free too;
-`nodemailer` (for the password-reset email — see "Login & accounts") is the one real npm package,
-so `npm install` is a one-time step now. Check your version with `node -v`; if you're on an older
-Node, upgrade first (e.g. via nvm: `nvm install 22 && nvm use 22`).
+Data lives in Firestore, not a local file — for local development, run it against the **Firestore
+emulator** rather than real production data (see `server/firestore.js`'s header comment for how
+credential resolution works). Requires Node 22.5+ still, but only for `node:sqlite` in the one-off
+`migrate-to-firestore.js` script (see its header) — the request path itself (`server.js`/`db.js`)
+doesn't need it anymore. `firebase-admin` and `nodemailer` (for the password-reset email — see
+"Login & accounts") are the two real npm dependencies now, so `npm install` is a one-time step.
 
 ```bash
 cd server
 npm install
 cp .env.example .env
 # edit .env and paste in your SmartMoving API key
-npm start
+
+# In one terminal — starts the Firestore emulator on localhost:8080 (requires the Firebase CLI:
+# npm install -g firebase-tools):
+firebase emulators:start --only firestore
+
+# In another terminal:
+FIRESTORE_EMULATOR_HOST=localhost:8080 npm start
 ```
 
-This starts the backend on `http://localhost:8787`, creates `server/data/atm.db` on first run
-(seeded with sample trucks/drivers/jobs), and — if `ADMIN_EMAIL` is set in `.env` — grants the
-first admin account. See "Login & accounts" below before you do anything else — set `ADMIN_PASSWORD`
+This starts the backend on `http://localhost:8787`, seeds the emulator with sample trucks/drivers/
+jobs on first run (an empty Firestore database), and — if `ADMIN_EMAIL` is set in `.env` — grants
+the first admin account. Emulator data resets every time you restart it (nothing to clean up
+between runs). See "Login & accounts" below before you do anything else — set `ADMIN_PASSWORD`
 too if you want to sign in immediately, or configure `SMTP_USER`/`SMTP_PASS` so the account can set
 its own password via the emailed one-time code. Then start the frontend
 (`cd ../frontend && npm install && npm run dev`) — it talks to `http://localhost:8787` by default.
@@ -344,8 +368,11 @@ Environment variables (set in `.env`, or via your hosting platform):
 | `POLL_LOOKAHEAD_DAYS` | `60` | How far forward the poll sweep's date window extends. |
 | `SMARTMOVING_BASE_URL` | `https://api-public.smartmoving.com/v1` | Override to point at the mock server for testing. |
 | `SMARTMOVING_MIN_REQUEST_INTERVAL_MS` | `350` | Minimum gap between consecutive SmartMoving API calls. Raise this if you have a large fleet/branch (many crew members, many opportunities) and still see `429` errors in the sync summary despite the built-in retry — see "Rate limits" below. |
-| `PORT` | `8787` | Port the backend listens on. |
-| `SQLITE_PATH` | `server/data/atm.db` | Where the database file lives. Must be a normal local-disk path — SQLite needs real file locking, which doesn't work over some network drives or FUSE-style mounts. |
+| `PORT` | `8787` | Port the backend listens on. Set this to whatever port your AWS App Runner service is configured to send traffic to. |
+| `FIREBASE_PROJECT_ID` | — | The Firebase/GCP project the Firestore data lives in (`atm-scheduler`). Always required on AWS — unlike Cloud Run, App Runner has no GCP environment to infer this from. |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | — | The full contents of a downloaded service account key, as one JSON string — how the backend authenticates to Firestore on AWS (no built-in GCP identity there). Set via an App Runner secret, not a plain env var — see "AWS deployment" below and `server/firestore.js`'s header comment. |
+| `GOOGLE_APPLICATION_CREDENTIALS` | — | Path to a downloaded service account JSON key **file**. Local-dev-only alternative to `FIREBASE_SERVICE_ACCOUNT_JSON` (a file path is more convenient than a JSON string on a laptop) — see `server/firestore.js`'s header comment. Never commit that file. |
+| `FIRESTORE_EMULATOR_HOST` | — | Set to `localhost:8080` (or wherever `firebase emulators:start --only firestore` is listening) to develop locally without touching real data. |
 | `SMTP_USER` / `SMTP_PASS` | — | The mailbox that sends the forgot-password/first-time-setup one-time code (see "Login & accounts" → "One-time setup: email delivery"). Without these, that flow's emails silently don't go out. |
 | `SMTP_HOST` / `SMTP_PORT` | `smtp.gmail.com` / `465` | Override for a different mailbox, e.g. Microsoft 365 (`smtp.office365.com` / `587` — see the tenant SMTP AUTH caveat above). |
 | `SMTP_FROM` | `SMTP_USER` | Override only if the mailbox has "send as" delegation set up for a different address. |
@@ -356,40 +383,148 @@ Environment variables (set in `.env`, or via your hosting platform):
 | `COOKIE_SECURE` | unset | Set to `true` once served over HTTPS, to add the `Secure` flag to the session cookie. Leave unset for local `http://` development. |
 | `DEV_BYPASS_LOGIN` | unset | Local dev only — see "Working on the app without email configured." Never set on a publicly reachable server. |
 
-The scheduler picks up the backend URL from a `?api=` query parameter (falls back to
-`http://localhost:8787`) — there's nothing to configure in the browser's storage, since the app no
-longer uses any.
+The scheduler picks up the backend URL from a `?api=` query parameter. In local dev (`npm run
+dev`, frontend and backend as two separate processes/ports) it falls back to
+`http://localhost:8787`; in the production build it falls back to `''` (same origin — see
+`frontend/src/api.js`), since in production `server.js` itself serves the built frontend (see its
+`serveStatic()` function) — frontend and API are the same AWS App Runner service, so the browser
+never sees a different origin at all.
 
 ## Deployment
 
-The backend is a single dependency-free Node process, so it runs anywhere Node 22.5+ runs: a small
-VM, Render, Railway, Fly.io, or a container. Whatever you use:
+This backend is stateless (all data lives in Firestore, not on local disk), so any container
+platform that honors `PORT` works. The setup this project actually uses is AWS App Runner, serving
+both this backend's API and the built frontend from one container — see "AWS deployment" below for
+the exact commands. A few things that apply regardless of platform:
 
-- Set `SMARTMOVING_API_KEY`, `WEBHOOK_SECRET`, `SESSION_SECRET`, `SMTP_USER`, and `SMTP_PASS` as
-  real environment variables, not committed to a repo. `SESSION_SECRET` especially — an
-  auto-generated one changes on every restart, logging everyone out each time you deploy.
-- Run `npm install` before `npm start` — this backend now has one real dependency (`nodemailer`),
-  unlike before.
+- Set `SMARTMOVING_API_KEY`, `WEBHOOK_SECRET`, `SESSION_SECRET`, `SMTP_USER`, `SMTP_PASS`, and
+  `FIREBASE_SERVICE_ACCOUNT_JSON` as real secrets (via a secret manager), never committed to the
+  repo. `SESSION_SECRET` especially — an auto-generated one changes on every restart/redeploy,
+  logging everyone out each time.
 - Make sure `DEV_BYPASS_LOGIN` is unset on anything reachable outside your own machine.
 - Set `COOKIE_SECURE=true` once this is served over HTTPS (it should be, for anything beyond local
-  dev — the session cookie is otherwise sent in the clear).
+  dev — the session cookie is otherwise sent in the clear). AWS App Runner is HTTPS-only by
+  default, so this should always be `true` there.
 - `/api/*` routes require a logged-in session now (see "Login & accounts" above), so they're safe
-  to expose without an additional allowlist/VPN layer — though one doesn't hurt for defense in
-  depth. `/webhooks/smartmoving` is the one route that stays public on purpose (for SmartMoving to
-  reach it), so make sure `WEBHOOK_SECRET` is set before exposing it.
-- The frontend (`frontend/`) and backend are typically different origins (e.g. a static host for
-  the built frontend + a separate host for this backend) — the backend already sends the right CORS
-  headers for that (`Access-Control-Allow-Origin` echoing the request's origin, with credentials
-  enabled), but double check your frontend's `?api=` / deployed backend URL matches exactly what
-  you deployed.
-- The database is a single SQLite file at `server/data/atm.db` (auto-created and seeded on first
-  run, gitignored). It needs to sit on real local disk — most VMs and container platforms give you
-  this by default, but if you attach a network volume, confirm it supports normal file locking
-  first. Run only **one instance** of this backend against one database file — SQLite handles
-  concurrent access from many clients (the scheduler's tabs/devices) fine, but isn't meant to be
-  shared by multiple *server* processes at once the way a networked database would be.
-- Back up `server/data/atm.db` periodically (a plain file copy is fine while the server isn't
-  mid-write) — it's now the only copy of trucks, drivers, and jobs.
+  to expose without an additional allowlist/VPN layer. `/webhooks/smartmoving` is the one route
+  that stays public on purpose (for SmartMoving to reach it), so make sure `WEBHOOK_SECRET` is set
+  before exposing it.
+- This backend can now run more than one instance at once safely (Firestore, unlike the old SQLite
+  file, is a real shared database) — App Runner's autoscaling just works. The one thing to watch:
+  the `setInterval`-based poll sweep (see "Webhooks vs. polling" above) runs inside each instance's
+  process, so if App Runner scales to zero between requests, that timer stops. See "AWS deployment"
+  below for how this project handles that (minimum instance count of 1).
+
+### AWS deployment
+
+This app uses **Firestore for data, AWS for hosting/compute** — split across two separate cloud
+accounts on purpose:
+
+- **`atm-scheduler`** (Google Firebase project) — Firestore only. Stays on the no-cost Spark plan;
+  plain Firestore usage under the free quotas doesn't require billing.
+- **AWS App Runner** — runs this backend as a container, and also serves the built frontend (see
+  the "4." item in `server.js`'s header comment) — one service, one URL, for both the site and its
+  API. Chosen over Google Cloud Run specifically to avoid enabling Cloud Run/Cloud Build/Artifact
+  Registry, which require the GCP project to be upgraded to the paid Blaze plan just to host a
+  container — Firestore itself doesn't need that, and App Runner is AWS's closest equivalent to
+  Cloud Run (build from a Dockerfile, auto-scaling, pay-per-use, HTTPS handled for you).
+
+Since App Runner isn't a GCP product, it has no built-in Google identity and no persistent
+filesystem to pre-place a downloaded credentials file on — the backend authenticates to Firestore
+using a service account **key**, injected as a secret env var (`FIREBASE_SERVICE_ACCOUNT_JSON` —
+see `server/firestore.js`'s header comment for exactly how this is resolved).
+
+**One-time setup:**
+
+1. In the `atm-scheduler` Firebase project, enable the Firestore API and create a Firestore
+   database in **Native mode** (Firebase console → Build → Firestore Database → Create database),
+   if it doesn't already have one.
+2. Download a service account key for that project: Firebase console → `atm-scheduler` → Project
+   settings → Service accounts → **Generate new private key**. This downloads a JSON file — treat
+   it like a password (see .gitignore; never commit it).
+3. Store that key's contents in AWS Secrets Manager as a single-line string (App Runner reads it
+   from there as an env var):
+   ```
+   aws secretsmanager create-secret --name atm-scheduler/firebase-key \
+     --secret-string "$(cat /path/to/the-downloaded-key.json | tr -d '\n')"
+   ```
+4. Create secrets for the rest of the sensitive config the same way:
+   ```
+   aws secretsmanager create-secret --name atm-scheduler/session-secret \
+     --secret-string "$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")"
+   aws secretsmanager create-secret --name atm-scheduler/smtp-pass --secret-string "your-gmail-app-password"
+   aws secretsmanager create-secret --name atm-scheduler/smartmoving-api-key --secret-string "your-smartmoving-api-key"
+   aws secretsmanager create-secret --name atm-scheduler/webhook-secret \
+     --secret-string "$(node -e "console.log(require('crypto').randomBytes(24).toString('hex'))")"
+   ```
+5. Build and push the container image to Amazon ECR (from the **repo root**, since the Dockerfile
+   there needs both `frontend/` and `server/` in its build context):
+   ```
+   aws ecr create-repository --repository-name atm-scheduler   # one-time
+   aws ecr get-login-password | docker login --username AWS --password-stdin <your-account-id>.dkr.ecr.<region>.amazonaws.com
+   docker build -t atm-scheduler .
+   docker tag atm-scheduler:latest <your-account-id>.dkr.ecr.<region>.amazonaws.com/atm-scheduler:latest
+   docker push <your-account-id>.dkr.ecr.<region>.amazonaws.com/atm-scheduler:latest
+   ```
+
+**Create the App Runner service** (console is easiest for the first setup — CLI shown for
+reference): Source = "Container registry" → pick the `atm-scheduler` ECR repo/`latest` tag → Port
+`8787` (matches the Dockerfile's `EXPOSE`/`server.js`'s default). Under environment variables and
+secrets:
+
+| Name | Value | Type |
+|---|---|---|
+| `FIREBASE_PROJECT_ID` | `atm-scheduler` | plain env var |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | `atm-scheduler/firebase-key` | secret (from Secrets Manager) |
+| `SESSION_SECRET` | `atm-scheduler/session-secret` | secret |
+| `SMTP_PASS` | `atm-scheduler/smtp-pass` | secret |
+| `SMARTMOVING_API_KEY` | `atm-scheduler/smartmoving-api-key` | secret |
+| `WEBHOOK_SECRET` | `atm-scheduler/webhook-secret` | secret |
+| `ADMIN_EMAIL` | your email | plain env var — grants the first admin, see "Login & accounts" |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` | `smtp.gmail.com` / `465` / your sending address | plain env vars |
+| `POLL_LOOKBACK_DAYS` / `POLL_LOOKAHEAD_DAYS` | `7` / `30` | plain env vars |
+| `COOKIE_SECURE` | `true` | plain env var — App Runner is HTTPS-only, so this should always be `true` |
+
+Under "Auto scaling," set **minimum size to 1** — App Runner can otherwise scale a service to zero
+between requests, which would silently stop the SmartMoving poll-sweep timer (the same
+`setInterval` caveat that applies to Cloud Run — see "Webhooks vs. polling" above). It's a small
+ongoing cost, worth it for a 3-week team test where you want sync to just keep working. No
+authentication needs configuring on App Runner itself — this app's own login (email + password +
+OTP) already gates every `/api/*` route.
+
+App Runner gives you a URL like `https://xxxxxxxxxx.us-east-1.awsapprunner.com` once the service is
+running (a custom domain can be attached later under "Custom domains" if you have one).
+
+**Migrate the real data, once, before or right after the first deploy** — see
+`server/migrate-to-firestore.js`'s own header comment for full details. Run it locally, from
+whichever machine still has the real `server/data/atm.db` file on it (this uses
+`GOOGLE_APPLICATION_CREDENTIALS` pointing at a **local copy** of the same downloaded key file,
+since that's more convenient than pasting JSON into an env var on a laptop):
+```
+cd server
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/the-downloaded-key.json FIREBASE_PROJECT_ID=atm-scheduler \
+node migrate-to-firestore.js            # dry run first — prints counts, writes nothing
+# then, once the counts look right:
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/the-downloaded-key.json FIREBASE_PROJECT_ID=atm-scheduler \
+node migrate-to-firestore.js --yes
+```
+
+**Verify:** visit the App Runner URL, confirm the login screen loads, and check
+`<your-app-runner-url>/api/health` returns `{"ok": true, ...}` — that confirms the container is
+serving both the frontend and the API, and that it can reach Firestore.
+
+Grant the team's actual accounts once it's live, from your own machine (same
+`GOOGLE_APPLICATION_CREDENTIALS`/`FIREBASE_PROJECT_ID` as the migration step above):
+```
+node create-admin.js dispatcher1@aroundtownmovers.com dispatcher
+node create-admin.js crewlead1@aroundtownmovers.com crew
+```
+Each person then uses "Forgot password?" on the login screen to set their own password via an
+emailed one-time code — see "Login & accounts" above.
+
+**Redeploying after a code change:** rebuild and push a new image (the `docker build`/`tag`/`push`
+steps above), then either trigger a deployment from the App Runner console or enable "automatic
+deployments" on the service so a new image push redeploys on its own.
 
 ## Known limitations (flagged for future work)
 

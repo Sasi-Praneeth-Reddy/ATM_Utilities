@@ -1,5 +1,6 @@
 # Secrets — never commit
 server/.env
+server/local.secrets
 
 # Runtime data — the SQLite database file. Auto-created and seeded on first run, not source.
 server/data/
@@ -11,3 +12,24 @@ node_modules/
 .DS_Store
 Thumbs.db
 *.swp
+
+# The frontend production build — built fresh into the Docker image at deploy time (see root
+# Dockerfile), don't commit the output.
+frontend/dist/
+
+# Downloaded Firebase service account keys (see server/firestore.js "AWS deployment") — never
+# commit these, wherever they end up saved. Firebase's actual default download name is
+# "<project-id>-firebase-adminsdk-<random>.json" (e.g. atm-scheduler-firebase-adminsdk-fbsvc-*.json)
+# — matched explicitly below since it doesn't contain the word "key" anywhere in the filename.
+*service-account*.json
+*firebase*key*.json
+*-firebase-adminsdk-*.json
+
+# AWS infrastructure files containing the real account ID and production Secrets Manager paths —
+# kept local-only per the user's explicit choice (2026-09-01), not because the repo is public, but
+# to avoid putting exact secret-storage locations under source control at all.
+secrets-access-policy.json
+primary-container.json
+
+# Firebase CLI's local deploy cache — regenerated on every `firebase deploy`, not source.
+.firebase/

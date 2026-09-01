@@ -26,11 +26,9 @@ function AddDriverForm({ onSave, onCancel }) {
   );
 }
 
-function DriverCard({ d, trucks, drivers, onUpdateField, onLinkDriver, onUnassignDriverTruck, onDeleteDriver }) {
-  const assignedTruck = trucks.find((t) => t.driverId === d.id);
-
+function DriverCard({ d, drivers, onUpdateField, onDeleteDriver }) {
   async function handleDelete() {
-    if (!window.confirm(`Remove driver "${d.name}"? If they're linked to a truck, that link will be cleared. This can't be undone.`)) return;
+    if (!window.confirm(`Remove driver "${d.name}"? Any job assignment naming them as a truck's driver will be cleared. This can't be undone.`)) return;
     try {
       await onDeleteDriver(d.id);
     } catch (err) {
@@ -50,15 +48,23 @@ function DriverCard({ d, trucks, drivers, onUpdateField, onLinkDriver, onUnassig
       </h3>
       <div className="row"><span className="field-label">Phone</span><input type="text" value={d.phone} onChange={(e) => onUpdateField(d.id, 'phone', e.target.value)} /></div>
       <div className="row"><span className="field-label">License</span><input type="text" value={d.cdl} onChange={(e) => onUpdateField(d.id, 'cdl', e.target.value)} /></div>
+      {/* No "Truck" field here anymore — a driver's truck changes job to job now instead of being
+          a standing assignment (see db.js's file header). Set it per job in Admin → Job
+          Assignments instead. */}
       <div className="row">
-        <span className="field-label">Truck</span>
-        <select
-          value={assignedTruck ? assignedTruck.id : ''}
-          onChange={(e) => (e.target.value ? onLinkDriver(e.target.value, d.id) : onUnassignDriverTruck(d.id))}
-        >
-          <option value="">— Unassigned —</option>
-          {trucks.map((t) => <option value={t.id} key={t.id}>{t.name}</option>)}
-        </select>
+        <span className="field-label" title="How this driver is labeled in SmartMoving's dispatch &quot;Crew:&quot; text (e.g. &quot;Celita&quot; or &quot;Celita 703-454-4456&quot;) — used to auto-assign this driver when a synced job names them. That text is inconsistently formatted job to job, so add more than one alias if the first doesn't catch. Separate multiple aliases with commas.">SmartMoving label</span>
+        {/* defaultValue + onBlur, same as TruckAdminList's SmartMoving label field — holds an
+            array, and re-splitting/rejoining on every keystroke eats the trailing ", " the instant
+            you type a comma, making it impossible to type a second alias. */}
+        <input
+          type="text"
+          defaultValue={(d.smartMovingLabels || []).join(', ')}
+          placeholder="e.g. Celita, Celita 703-454-4456"
+          onBlur={(e) => {
+            const labels = e.target.value.split(',').map((s) => s.trim()).filter(Boolean);
+            onUpdateField(d.id, 'smartMovingLabels', labels);
+          }}
+        />
       </div>
       {onDeleteDriver && (
         <div className="row" style={{ justifyContent: 'flex-end' }}>
@@ -69,7 +75,7 @@ function DriverCard({ d, trucks, drivers, onUpdateField, onLinkDriver, onUnassig
   );
 }
 
-export default function DriverAdminList({ trucks, drivers, showAddForm, onSaveNewDriver, onCancelAddDriver, onUpdateField, onLinkDriver, onUnassignDriverTruck, onDeleteDriver }) {
+export default function DriverAdminList({ drivers, showAddForm, onSaveNewDriver, onCancelAddDriver, onUpdateField, onDeleteDriver }) {
   return (
     <div>
       {showAddForm && <AddDriverForm onSave={onSaveNewDriver} onCancel={onCancelAddDriver} />}
@@ -77,11 +83,8 @@ export default function DriverAdminList({ trucks, drivers, showAddForm, onSaveNe
         <DriverCard
           key={d.id}
           d={d}
-          trucks={trucks}
           drivers={drivers}
           onUpdateField={onUpdateField}
-          onLinkDriver={onLinkDriver}
-          onUnassignDriverTruck={onUnassignDriverTruck}
           onDeleteDriver={onDeleteDriver}
         />
       ))}

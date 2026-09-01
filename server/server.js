@@ -1,12 +1,14 @@
 /**
  * ATM Scheduler — backend API + SmartMoving sync + login.
  *
- * Requires Node 22.5+ (see the version check below) — uses Node's built-in `node:sqlite`, which
- * needs a fairly recent Node. This backend is otherwise dependency-free except for `nodemailer`
- * (see `emailer.js` for why that's the one deliberate exception).
+ * Runs on AWS App Runner in production (see server/README.md "AWS deployment") and honors the
+ * `PORT` env var. Data lives in Firestore (`server/db.js` / `server/firestore.js`) — a Google
+ * product, but accessed here over the network via a service account key, same as any other
+ * Firestore client; nothing about running on AWS instead of GCP changes how `db.js` works. Every
+ * db.* call is async.
  *
- * This backend does three jobs:
- *  1. Serves the scheduler's own data (trucks/drivers/jobs/assignments) from a SQLite database
+ * This backend does FOUR jobs:
+ *  1. Serves the scheduler's own data (trucks/drivers/jobs/assignments) from Firestore
  *     (`server/db.js`) via a small REST API, so every device sees the same live board instead of
  *     each browser having its own separate localStorage copy.
  *  2. Pulls jobs FROM SmartMoving CRM (webhooks + a polling fallback) and writes them straight into
@@ -16,6 +18,11 @@
  *     gets access and how roles map to what each route allows. Nobody's password is ever stored in
  *     plaintext (see auth.js), and there's no admin-set temp password — new accounts (and anyone
  *     locked out) set their own password via an emailed one-time code.
+ *  4. Serves the built React frontend as static files (see `serveStatic()` below) — the Docker
+ *     image's build stage compiles `frontend/` and copies the output into `server/public/`, so one
+ *     AWS App Runner service serves both the site and its API from the same origin. Nothing to
+ *     configure for this locally — `server/public/` only exists inside the built container image
+ *     (see the root `Dockerfile`), so local dev (`npm run dev` in `frontend/`) is unaffected.
  *
  * One-way sync only: editing a job's date/truck/time in the scheduler does NOT push back to
  * SmartMoving — their public API has no endpoint for that (checked exhaustively; see
@@ -39,26 +46,50 @@
  *   GET   /api/state                                -> { trucks, drivers, jobs }
  *   POST  /api/trucks                                [admin]  body: {name, size, capacity, homeBase}
  *   PATCH /api/trucks/:id                            [admin]  body: any truck field(s) to change
- *   DELETE /api/trucks/:id                           [admin]  job_trucks rows cascade-delete; any driver
- *                                                     linked to this truck is unlinked
- *   POST  /api/trucks/:id/link-driver                [admin]  body: {driverId}
+ *   DELETE /api/trucks/:id                           [admin]  job_trucks rows cascade-delete; any
+ *                                                     truckDrivers entry naming this truck is cleared too
+ *   POST  /api/trucks/reorder                        [admin]  body: {truckIds: [...]} — every
+ *                                                              current truck id, in the new display order
  *   POST  /api/drivers                               [admin]  body: {name, phone, cdl}
  *   PATCH /api/drivers/:id                           [admin]  body: any driver field(s) to change
- *   DELETE /api/drivers/:id                          [admin]  any truck linked to this driver is unlinked
- *   POST  /api/drivers/:id/unassign-truck            [admin]
- *   POST  /api/jobs                                   [admin+dispatcher] body: {customer, date, endDate, startTime}
- *                                                              — creates a manual "placeholder" job, unassigned,
- *                                                              type inferred from date vs endDate
+ *   DELETE /api/drivers/:id                          [admin]  any job's truckDrivers entry naming this
+ *                                                     driver is cleared too
+ *   POST  /api/jobs                                   [admin+dispatcher] body: {customer, type, date, endDate,
+ *                                                              startTime, origin, destination, trucksNeeded,
+ *                                                              crewSize} — creates a manual "placeholder" job,
+ *                                                              unassigned. type is 'local'/'long_distance'
+ *                                                              (falls back to inferring from date vs endDate
+ *                                                              if omitted). customer/type/origin/destination/
+ *                                                              trucksNeeded/crewSize are all optional.
  *   PATCH /api/jobs/:id                              [admin+dispatcher] body: any job field(s), incl. truckIds[]
+ *                                                              (removing a truck also clears its truckDrivers entry)
  *   DELETE /api/jobs/:id                             [admin+dispatcher] permanently removes a job — UI only
  *                                                              offers this for placeholder jobs, see db.js
+ *   POST  /api/jobs/:id/set-truck-driver             [admin+dispatcher] body: {truckId, driverId} — assigns
+ *                                                              (driverId: null clears) the driver for one
+ *                                                              truck on this job; truckId must already be
+ *                                                              one of the job's assigned trucks
  *   POST  /api/reset-to-sample-data                  [admin]
  *   POST  /api/clear-jobs                            [admin]  empties jobs only — trucks/drivers untouched
- *   POST  /api/sync-now?from=YYYY-MM-DD&to=YYYY-MM-DD [admin]  triggers an immediate SmartMoving poll
- *                                                              sweep; from/to are optional and override
- *                                                              POLL_LOOKBACK_DAYS/POLL_LOOKAHEAD_DAYS
- *                                                              for this sync only
+ *   POST  /api/sync-now?from=YYYY-MM-DD&to=YYYY-MM-DD [admin]  triggers an immediate SmartMoving sync
+ *                                                              via the REST API poll sweep (see
+ *                                                              pollSweep) — booked jobs only (see
+ *                                                              mapJobs.js's BOOKED_STATUSES). The iCal
+ *                                                              feed (icalClient.js/pollIcalFeed) is set
+ *                                                              aside for now, not deleted — see
+ *                                                              README's "Webhooks vs. polling".
  *   GET   /api/schedulable-jobs?statuses=4           [admin]  SmartMoving-sourced jobs only (debugging)
+ *   POST  /api/smart-insights/sync-now                [admin]  triggers an immediate Smart Insights
+ *                                                              report sync (Gmail -> parse -> upsert,
+ *                                                              see smartInsightsSync.js) — same
+ *                                                              pipeline as the daily 6am ET
+ *                                                              smartInsightsSyncScheduled function.
+ *                                                              Jobs land with source:
+ *                                                              'smartmoving-insights'; duplicate
+ *                                                              detection against manually-created
+ *                                                              placeholders is computed client-side,
+ *                                                              see frontend/src/utils/jobs.js's
+ *                                                              getPlaceholderDuplicates().
  *   POST  /webhooks/smartmoving?secret=...           [public, secret-checked] SmartMoving webhook receiver
  */
 
@@ -67,37 +98,41 @@ const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
 
-// node:sqlite needs Node 22.5+. Fail loudly and early rather than a confusing crash mid-request.
-{
-  const [major, minor] = process.versions.node.split('.').map(Number);
-  if (major < 22 || (major === 22 && minor < 5)) {
-    console.error(
-      `This backend needs Node 22.5 or newer (found ${process.versions.node}) — it uses the ` +
-      `built-in node:sqlite module. Upgrade Node (e.g. via nvm: "nvm install 22 && nvm use 22") and try again.`
-    );
-    process.exit(1);
-  }
-}
-
 // Loads server/.env into process.env (shared with create-admin.js and any other CLI script — see
-// load-env.js for why this used to be inline here and why that was a bug).
+// load-env.js for why this used to be inline here and why that was a bug). On AWS App Runner
+// there's no .env file (config comes from env vars / Secrets Manager set on the service), so this
+// is a no-op there — see load-env.js.
 require('./load-env');
 
 const db = require('./db');
 const auth = require('./auth');
 const { sendOtpEmail, otpEmailConfigured } = require('./emailer');
 const {
-  getAllLeads, getJobsByOpportunityId, getOpportunityDetails,
+  getJobsByOpportunityId, getOpportunityDetails,
   getAllCrewMembers, getAllJobsByCrewMemberId, getAllCustomersWithOpportunities,
 } = require('./smartmovingClient');
 const { mapOpportunityToJobs } = require('./mapOpportunity');
-const { OPPORTUNITY_STATUS } = require('./mapJobs');
+const { OPPORTUNITY_STATUS, BOOKED_STATUSES } = require('./mapJobs');
+const { fetchIcalEvents } = require('./icalClient');
+const { fetchCalendarEvents } = require('./googleCalendarClient');
+const { mapIcalEventToJob, parseDescription } = require('./mapIcalEvent');
+const { syncSmartInsights } = require('./smartInsightsSync');
 
 const PORT = process.env.PORT || 8787;
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
 const DEFAULT_STATUSES = [4]; // Booked — jobs that are past quoting and need to be dispatched
-const POLL_INTERVAL_MINUTES = process.env.POLL_INTERVAL_MINUTES !== undefined ? Number(process.env.POLL_INTERVAL_MINUTES) : 15;
+// Default bumped from 15 -> 120 on 2026-08-18 when REST polling went back to being the primary
+// sync path (iCal set aside — see pollIcalFeed's doc comment). 15 minutes is the exact interval
+// that burned through this account's ~20,000-call/month Basic-tier quota in about 2 days the last
+// time REST polling was primary; the booked-only status filter in pollSweep cuts call volume some,
+// but not enough to justify going back anywhere near that frequent. Override via env if needed.
+const POLL_INTERVAL_MINUTES = process.env.POLL_INTERVAL_MINUTES !== undefined ? Number(process.env.POLL_INTERVAL_MINUTES) : 120;
 const POLL_LOOKBACK_DAYS = Number(process.env.POLL_LOOKBACK_DAYS) || 7;
+// The iCal feed (see icalClient.js) is a single account-wide feed covering every branch on this
+// SmartMoving account — confirmed live 2026-08-18 it included a second branch ("Campbell Moving
+// and Storage") alongside this app's own ("Around Town Movers"). Filter to just this app's branch
+// so other branches' jobs never land on this scheduler's board.
+const ICAL_BRANCH_FILTER = process.env.SMARTMOVING_ICAL_BRANCH || 'Around Town Movers';
 const POLL_LOOKAHEAD_DAYS = Number(process.env.POLL_LOOKAHEAD_DAYS) || 60;
 const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true';
 // Only used by the dev-login bypass below, which is a full-page browser navigation (like an old
@@ -113,20 +148,37 @@ const DEV_BYPASS_LOGIN = process.env.DEV_BYPASS_LOGIN === 'true';
 let SESSION_SECRET = process.env.SESSION_SECRET;
 let sessionSecretIsEphemeral = false;
 if (!SESSION_SECRET) {
+  // Cloud Functions/Cloud Run runs multiple separate container instances over time — especially
+  // with minInstances: 0, where an idle instance can be recycled and a new one cold-started for
+  // the very next request. A random-per-instance fallback here means a session token signed by
+  // one instance silently fails verification on another: login appears to succeed, then every
+  // request right after 401s, with nothing in the logs pointing at why (this exact fallback used
+  // to only warn from inside start()'s server.listen() callback, which functions-index.js never
+  // calls — so it failed completely silently in this environment until now). Harmless for local
+  // dev/AWS (a single long-running process, restart just logs everyone out) but wrong here — fail
+  // loudly instead of guessing wrong for every login.
+  if (process.env.K_SERVICE || process.env.FUNCTION_TARGET) {
+    throw new Error(
+      'SESSION_SECRET is not set. Cloud Functions cannot safely fall back to a random per-instance ' +
+      'secret — sessions would break unpredictably across cold starts. Set it via: ' +
+      'firebase functions:secrets:set SESSION_SECRET'
+    );
+  }
   SESSION_SECRET = crypto.randomBytes(32).toString('hex');
   sessionSecretIsEphemeral = true;
 }
 
 /* ---------- Bootstrap the first admin account ----------
-   Only runs when the users table is empty, so it never overwrites real accounts. Set ADMIN_EMAIL
-   in .env for the very first run. If ADMIN_PASSWORD is also set, the account can sign in with it
-   immediately; otherwise it's created with no password, and whoever owns that email needs to use
-   "Forgot password?" on the login screen (which requires SMTP_USER/SMTP_PASS to be
+   Only runs when the users collection is empty, so it never overwrites real accounts. Set
+   ADMIN_EMAIL in .env for the very first run. If ADMIN_PASSWORD is also set, the account can sign
+   in with it immediately; otherwise it's created with no password, and whoever owns that email
+   needs to use "Forgot password?" on the login screen (which requires SMTP_USER/SMTP_PASS to be
    configured — see server/README.md) to set one before they can sign in. Safe to remove
    ADMIN_EMAIL/ADMIN_PASSWORD afterward (or leave them — they're only consulted while there are
-   zero users). */
-(function bootstrapAdmin() {
-  if (db.listUsers().length > 0) return;
+   zero users). Called once from the async startup sequence at the bottom of this file, after
+   `db.initDb()` has run and before the server starts accepting requests. */
+async function bootstrapAdmin() {
+  if ((await db.listUsers()).length > 0) return;
   const email = auth.normalizeEmail(process.env.ADMIN_EMAIL);
   if (!email) {
     console.warn(
@@ -142,11 +194,11 @@ if (!SESSION_SECRET) {
   const id = 'U1';
   const adminPassword = process.env.ADMIN_PASSWORD || '';
   const passwordHash = adminPassword ? auth.hashPassword(adminPassword) : undefined;
-  db.createUser({ id, email, role: 'admin', passwordHash });
+  await db.createUser({ id, email, role: 'admin', passwordHash });
   console.log(passwordHash
     ? `Granted admin access to: ${email} (signs in with the ADMIN_PASSWORD you set in .env — change it via "Forgot password?" afterward).`
     : `Granted admin access to: ${email} — no password set yet. Use "Forgot password?" on the login screen to set one (requires email sending to be configured), or run: node create-admin.js ${email} admin <password>`);
-})();
+}
 
 function todayYyyymmdd(offsetDays = 0) {
   const d = new Date();
@@ -207,6 +259,15 @@ function readRequestBody(req) {
   });
 }
 async function readJsonBody(req) {
+  // Cloud Functions (server/functions-index.js's onRequest wrapper) already buffers and parses the
+  // body before this handler ever runs, exposing it as req.rawBody — the request stream itself has
+  // already been consumed by that point, so req.on('data', ...) below would never fire and this
+  // would hang forever waiting on a stream that's already drained. Plain Node http (local dev, the
+  // AWS container) has no such thing, so it falls through to the manual read exactly as before.
+  if (req.rawBody !== undefined) {
+    if (!req.rawBody || !req.rawBody.length) return {};
+    return JSON.parse(req.rawBody.toString('utf8'));
+  }
   const raw = await readRequestBody(req);
   if (!raw) return {};
   return JSON.parse(raw);
@@ -216,19 +277,19 @@ async function readJsonBody(req) {
    getCurrentUser() re-reads the user row from the database on every call rather than trusting
    anything cached in the token, so a role change or account deletion takes effect on the user's
    very next request instead of waiting for their session to expire. */
-function getCurrentUser(req) {
+async function getCurrentUser(req) {
   const cookies = auth.parseCookies(req);
   const token = cookies[auth.COOKIE_NAME];
   if (!token) return null;
   const payload = auth.verifySessionToken(token, SESSION_SECRET);
   if (!payload) return null;
-  const row = db.getUserById(payload.sub);
+  const row = await db.getUserById(payload.sub);
   if (!row) return null;
   return { id: row.id, email: row.email, role: row.role };
 }
 
-function requireAuth(req) {
-  const user = getCurrentUser(req);
+async function requireAuth(req) {
+  const user = await getCurrentUser(req);
   if (!user) { const err = new Error('Not logged in'); err.status = 401; throw err; }
   return user;
 }
@@ -240,6 +301,10 @@ function requireRole(user, roles) {
 /* ---------- SmartMoving sync diagnostics (state kept for /api/health) ---------- */
 let lastPollAt = null;
 let lastPollError = null;
+let lastIcalSyncAt = null;
+let lastIcalSyncError = null;
+let lastCalendarSyncAt = null;
+let lastCalendarSyncError = null;
 let lastWebhookAt = null;
 const recentWebhookEvents = []; // small ring buffer for /api/health diagnostics
 const MAX_EVENT_LOG = 20;
@@ -249,12 +314,230 @@ function recordEvent(entry) {
 }
 
 /**
+ * Was the primary SmartMoving sync path from 2026-08-18 for a short window — see icalClient.js's
+ * header for why it existed: the REST API's 20,000-calls/month Basic-tier quota got exhausted by
+ * the old (leads-based) pollSweep() running every 15 minutes, mid live team test. Set aside again
+ * (not deleted — still reachable via POST /api/sync-now with no from/to, see this file's header
+ * comment) once pollSweep() itself got a "booked jobs only" status filter that cuts its own call
+ * volume — see hydrateOpportunity's doc comment and mapJobs.js's BOOKED_STATUSES. Kept around
+ * because the underlying feed still works and this doesn't carry the same quota risk if a future
+ * need for a faster/free sync path comes back.
+ *
+ * Note: unlike pollSweep(), this does NOT filter by opportunity status — the iCal feed's event
+ * shape doesn't expose one (see mapIcalEvent.js), so every job on the feed gets imported regardless
+ * of booked/quote/lead stage. Worth fixing if this is ever un-shelved as a primary path again.
+ *
+ * Also auto-assigns truckIds on brand-new jobs: each event's "Trucks:" text (mapIcalEvent.js) is
+ * matched against every truck's `smartMovingLabels` (set via the Admin > Trucks panel) via
+ * db.findTruckIdBySmartMovingLabel. Only applies at creation — db.upsertSmartMovingJob never
+ * touches truckIds on a job that already exists, so it can't undo a dispatcher's manual reassignment
+ * on a later re-sync. Jobs whose "Trucks:" text doesn't match any truck's labels just keep
+ * truckIds: [] with the raw text preserved on smartMovingTruckText for a dispatcher to read and
+ * assign manually — no risk of a wrong auto-assignment from an unmapped/misspelled label.
+ */
+async function pollIcalFeed() {
+  let jobCount = 0;
+  let skippedOtherBranch = 0;
+  let skippedUnparseable = 0;
+  let autoAssignedCount = 0;
+  const errors = [];
+
+  try {
+    const [events, { trucks }] = await Promise.all([fetchIcalEvents(), db.getState()]);
+
+    for (const event of events) {
+      let job;
+      try {
+        job = mapIcalEventToJob(event);
+      } catch (err) {
+        skippedUnparseable += 1;
+        errors.push({ uid: event.uid, message: `mapping failed: ${err.message}` });
+        continue;
+      }
+      if (!job) { skippedUnparseable += 1; continue; }
+
+      // Branch filter needs the raw parsed value, not anything mapIcalEventToJob kept — re-parse
+      // just the branch line rather than threading it through the job shape for one field.
+      const branch = parseDescription(event.description).branch;
+      if (branch && branch !== ICAL_BRANCH_FILTER) { skippedOtherBranch += 1; continue; }
+
+      const matchedTruckId = db.findTruckIdBySmartMovingLabel(trucks, job.smartMovingTruckText);
+      if (matchedTruckId) { job.truckIds = [matchedTruckId]; autoAssignedCount += 1; }
+
+      try {
+        await db.upsertSmartMovingJob(job);
+        jobCount += 1;
+      } catch (err) {
+        errors.push({ uid: event.uid, jobId: job.id, message: err.message });
+      }
+    }
+
+    lastIcalSyncAt = new Date().toISOString();
+    lastIcalSyncError = null;
+  } catch (err) {
+    lastIcalSyncAt = new Date().toISOString();
+    lastIcalSyncError = err.message;
+    errors.push({ message: `feed fetch failed: ${err.message}` });
+  }
+
+  recordEvent({
+    type: 'ical-sweep', jobCount, autoAssignedCount, skippedOtherBranch, skippedUnparseable,
+    errorCount: errors.length,
+  });
+  return { jobCount, autoAssignedCount, skippedOtherBranch, skippedUnparseable, errors };
+}
+
+// Driver auto-assignment, OFF as of 2026-08-27 per explicit request ("for now don't bother about
+// the driver, just assign the job to the truck") — trucks are matched off the truck board's own
+// smartMovingLabels regardless of this flag; only the Crew:-text-to-driver matching pauses. Kept as
+// a one-line flag rather than deleting db.findDriverIdBySmartMovingLabel/the DriverAdminList.jsx
+// label field/etc. so turning it back on later is exactly that: flip this back to true. No data is
+// lost while this is off — smartMovingCrewText is still recorded on every synced job either way,
+// so a dispatcher can always see (and re-running a sync after flipping this on can still pick up)
+// whichever crew text SmartMoving sent, even from jobs synced while this was disabled.
+const DRIVER_AUTO_ASSIGN_ENABLED = false;
+
+/**
+ * Added 2026-08-26, at the user's explicit request to merge the calendar/iCal data with the Smart
+ * Insights report data and have truck (and, while DRIVER_AUTO_ASSIGN_ENABLED above is true, driver)
+ * assignments made automatically "as in SmartMoving." Same event-shape and mapping logic as
+ * pollIcalFeed() above (both feed the same mapIcalEventToJob(), see googleCalendarClient.js's
+ * header for why) but reads from a Google Calendar SmartMoving is synced into
+ * (googleCalendarClient.js) instead of polling the bare iCal feed URL.
+ *
+ * CHANGED 2026-08-27, at the user's explicit request ("don't add new jobs" — a live run the day
+ * before had synced 341 calendar events against only 258 Smart Insights counterparts, and the other
+ * 83 landed as brand-new, truck-less, "non-binding" entries cluttering the board): this is now
+ * ENRICHMENT ONLY. For each calendar event, if there's no existing job for that job number already
+ * on the board — neither a doc under its own `SM-` id from an earlier sync, nor a `SI-` counterpart
+ * from a Smart Insights report — the event is now SKIPPED, not turned into a new job. See
+ * db.mergeCalendarDataOntoExistingJob (used here instead of db.upsertSmartMovingJob) for the exact
+ * matching logic; db.upsertSmartMovingJob itself is untouched and still creates new jobs for the
+ * REST poll (pollSweep/hydrateOpportunity), which is unaffected by this change.
+ *
+ * What "enrichment" still means for a job that DOES already exist:
+ *
+ *  1. Truck auto-assignment. Each event's "Trucks:" text (mapIcalEvent.js) is matched against every
+ *     truck's `smartMovingLabels` (Admin > Trucks panel) via db.findTruckIdBySmartMovingLabel — only
+ *     ever applied if that job doesn't already have a truck (see fillAssignmentIfEmpty in db.js), so
+ *     a dispatcher's own assignment is never overwritten by a later sync.
+ *
+ *  2. Driver auto-assignment (currently disabled — see DRIVER_AUTO_ASSIGN_ENABLED above). When on:
+ *     each event's "Crew:" text is matched against every driver's `smartMovingLabels` (Admin >
+ *     Drivers panel) via db.findDriverIdBySmartMovingLabel — EXACT match only, per explicit
+ *     instruction (no fuzzy/best-effort name guessing, since crew text format is "wildly
+ *     inconsistent" — see that function's doc comment). A driver is only ever recorded
+ *     (`job.truckDrivers[truckId] = driverId`) when a truck ALSO matched, since truckDrivers is
+ *     keyed by truck id.
+ *
+ *  3. Date fields, including — since 2026-08-27 — a real end date for long-distance jobs when the
+ *     calendar event itself spans more than one day (see mapIcalEvent.js's endDate derivation),
+ *     extending the job on the board from its start date through its actual delivery date instead
+ *     of collapsing to a single day.
+ *
+ * CHANGED 2026-08-31, at the user's explicit request ("allow both branches"): this used to skip any
+ * event whose Branch: line wasn't ICAL_BRANCH_FILTER ("Around Town Movers"), the same filter
+ * pollIcalFeed() below still applies. That made sense back when this sync could CREATE new board
+ * entries (branch filtering kept a second SmartMoving branch on the same account, "Campbell Moving
+ * and Storage," off this board entirely) — but since the 2026-08-27 "don't add new jobs" change
+ * above, this function only ever enriches a job that's ALREADY on the board, and the Smart Insights
+ * report sync (smartInsightsSync.js) was never branch-filtered in the first place, so Campbell jobs
+ * were already landing on the board that way — just never getting truck/crew/date enrichment from
+ * the calendar, because THIS filter (not the report sync) was the only thing still branch-scoped.
+ * Confirmed live: job 23917-1, a real Campbell-branch job already on the board via Smart Insights,
+ * had a calendar event with a real, matching truck ("ZCMS - 377" -> YCMS 377) that this filter was
+ * silently discarding. Removed here — enrichment now applies regardless of branch, matching how the
+ * report sync already treats both branches as one shared pool. NOT changed in pollIcalFeed() below,
+ * which is dormant but CAN still create new board entries if ever reactivated — that path keeps the
+ * original branch scoping so reactivating it doesn't suddenly start creating Campbell-branch jobs on
+ * this board as a side effect.
+ */
+async function pollGoogleCalendarFeed() {
+  let matchedCount = 0;
+  let mergedCount = 0;
+  let skippedNoMatch = 0;
+  let skippedUnparseable = 0;
+  let autoAssignedTruckCount = 0;
+  let autoAssignedDriverCount = 0;
+  const errors = [];
+
+  try {
+    const [events, { trucks, drivers }] = await Promise.all([fetchCalendarEvents(), db.getState()]);
+
+    for (const event of events) {
+      let job;
+      try {
+        job = mapIcalEventToJob(event);
+      } catch (err) {
+        skippedUnparseable += 1;
+        errors.push({ uid: event.uid, message: `mapping failed: ${err.message}` });
+        continue;
+      }
+      if (!job) { skippedUnparseable += 1; continue; }
+
+      const matchedTruckId = db.findTruckIdBySmartMovingLabel(trucks, job.smartMovingTruckText);
+      if (matchedTruckId) {
+        job.truckIds = [matchedTruckId];
+        autoAssignedTruckCount += 1;
+        if (DRIVER_AUTO_ASSIGN_ENABLED) {
+          const matchedDriverId = db.findDriverIdBySmartMovingLabel(drivers, job.smartMovingCrewText);
+          if (matchedDriverId) {
+            job.truckDrivers = { [matchedTruckId]: matchedDriverId };
+            autoAssignedDriverCount += 1;
+          }
+        }
+      }
+
+      try {
+        const result = await db.mergeCalendarDataOntoExistingJob(job);
+        if (result.matched) {
+          matchedCount += 1;
+          if (result.merged) mergedCount += 1;
+        } else {
+          skippedNoMatch += 1;
+        }
+      } catch (err) {
+        errors.push({ uid: event.uid, jobId: job.id, message: err.message });
+      }
+    }
+
+    lastCalendarSyncAt = new Date().toISOString();
+    lastCalendarSyncError = null;
+  } catch (err) {
+    lastCalendarSyncAt = new Date().toISOString();
+    lastCalendarSyncError = err.message;
+    errors.push({ message: `calendar fetch failed: ${err.message}` });
+  }
+
+  recordEvent({
+    type: 'calendar-sweep', matchedCount, mergedCount, skippedNoMatch, autoAssignedTruckCount,
+    autoAssignedDriverCount, skippedUnparseable, errorCount: errors.length,
+  });
+  return {
+    matchedCount, mergedCount, skippedNoMatch, autoAssignedTruckCount, autoAssignedDriverCount,
+    skippedUnparseable, errors,
+  };
+}
+
+/**
  * Fetches one opportunity's full detail + (best-effort) precise per-job timing, maps it into
  * scheduler job objects, and upserts each into the database. Shared by both the webhook handler
  * and the poll sweep so they can't drift out of sync with each other.
  */
 async function hydrateOpportunity(opportunityId) {
   const opportunity = await getOpportunityDetails(opportunityId);
+
+  // "Booked jobs only" filter (2026-08-18) — a live dispatch board shouldn't be cluttered with
+  // quotes/leads that might never actually happen, and importing them wasted API calls on the
+  // Basic tier's 20,000/month quota for opportunities that usually weren't schedulable anyway.
+  // Checked here, not before this getOpportunityDetails call, because `status` is only reliably
+  // known once we've fetched the opportunity itself — but skipping the SECOND call
+  // (getJobsByOpportunityId, the more expensive premium-tier one) for anything that fails this
+  // check still meaningfully cuts call volume. See mapJobs.js's BOOKED_STATUSES for exactly which
+  // statuses count and why. Does NOT retroactively remove a job that was already imported while
+  // Booked and has since moved to a non-booked status (e.g. Cancelled) — this app has no
+  // delete-on-cancel logic anywhere yet, that's a separate gap, not something this filter covers.
+  if (!BOOKED_STATUSES.has(opportunity.status)) return [];
 
   let premiumJobsById = {};
   try {
@@ -267,55 +550,60 @@ async function hydrateOpportunity(opportunityId) {
   }
 
   const mappedJobs = mapOpportunityToJobs(opportunity, premiumJobsById);
-  mappedJobs.forEach(job => db.upsertSmartMovingJob(job));
+  for (const job of mappedJobs) await db.upsertSmartMovingJob(job);
   return mappedJobs;
 }
 
-/* ---------- Poll sweep (fallback/backfill) ---------- */
+/* ---------- Poll sweep (primary sync path again as of the 2026-08-18 "booked jobs only"
+   redesign — see mapJobs.js's BOOKED_STATUSES and hydrateOpportunity's doc comment above. The
+   iCal feed (server/icalClient.js) briefly held this role but is set aside for now, not deleted —
+   see README's "Webhooks vs. polling" for why. ---------- */
 /**
- * Three independent discovery sources, merged before hydrating:
+ * Two independent discovery sources, merged before hydrating (a third, GET /api/leads, was
+ * dropped — see below):
  *
- *  1. GET /api/leads — confirmed live in the dev portal (2026-08-10) to ONLY EVER return
- *     New/InProgress opportunities by default (IncludeBad/IncludeLost are the only two widening
- *     params that exist — there's no way to ask it for Booked/Completed/Closed). So on its own
- *     this can never surface an already-booked job. Kept because it's the earliest signal (a lead
- *     the moment it's created) and gives a customer name for free.
- *  2. GET /api/crew-members/{id}/jobs — real JOBS, filtered by service date, that never go
- *     through /api/leads at all. Finds already-booked, already-staffed work. Requires enumerating
- *     crew members first (no status filter — see getAllCrewMembers's doc comment; filtering to
- *     Active-only was found 2026-08-10 to silently miss real jobs on crew with any other status).
- *  3. GET /api/customers — confirmed live 2026-08-10, added after a real user report of jobs
- *     missing even with NO crew assigned yet (source 2 can't find those — nothing to enumerate
- *     from). Lists customers filtered by job service date, each with opportunities[] across the
- *     FULL status range and their jobs[] embedded — doesn't depend on lead-pipeline stage OR crew
- *     assignment at all, closing the one gap sources 1 and 2 structurally can't reach.
+ *  1. GET /api/crew-members/{id}/jobs — real JOBS, filtered by service date, assigned to actual
+ *     crew. Requires enumerating crew members first (no status filter — see getAllCrewMembers's
+ *     doc comment; filtering to Active-only was found 2026-08-10 to silently miss real jobs on
+ *     crew with any other status). Crew only ever get assigned to real, already-booked work, so
+ *     this source's opportunities are implicitly booked already — hydrateOpportunity's status
+ *     check still runs on them as a safety net, at the cost of one call per opportunity to learn
+ *     that (this endpoint's own job shape carries no status field to pre-filter on before that).
+ *  2. GET /api/customers — lists customers filtered by job service date, each with
+ *     opportunities[] across the FULL status range and their jobs[] embedded. Pre-filtered by
+ *     `opp.status` right here, before it's even added to the discovery Map, to skip opportunities
+ *     that clearly aren't booked WITHOUT spending a hydration call to find that out — this is the
+ *     single biggest lever on the account's monthly call quota, since this source alone
+ *     previously found ~977 opportunities-with-jobs in one real test, most of which weren't
+ *     Booked. If `opp.status` is ever missing/undefined on a real response (a shape mismatch, not
+ *     expected per the confirmed-live shape in mock-smartmoving-server.js), this fails OPEN —
+ *     still includes it, letting hydrateOpportunity's authoritative check decide, rather than
+ *     silently dropping a real job over an unexpected response shape.
  *
- * Each opportunity discovered by any source is hydrated exactly once via the shared
- * hydrateOpportunity() (a Map dedupes by opportunityId before the hydration loop runs).
+ * DROPPED: GET /api/leads. Confirmed live in the dev portal (2026-08-10) to ONLY EVER return
+ * New/InProgress opportunities by default — by definition it can never surface a Booked+
+ * opportunity, so under a "booked jobs only" sync it contributed nothing but wasted calls. Its
+ * only value (earliest-possible signal a lead exists, a free customer name) doesn't matter once
+ * the whole point is to keep pre-booking pipeline stuff OFF the live board.
+ *
+ * Each opportunity discovered by either source is hydrated exactly once via the shared
+ * hydrateOpportunity() (a Map dedupes by opportunityId before the hydration loop runs) — that
+ * function is the single source of truth for the booked-status check, so a customer-sourced
+ * opportunity that slips past this file's fail-open pre-filter still gets caught there.
  */
 async function pollSweep({ from: fromOverride, to: toOverride } = {}) {
   const from = fromOverride ?? todayYyyymmdd(-POLL_LOOKBACK_DAYS);
   const to = toOverride ?? todayYyyymmdd(POLL_LOOKAHEAD_DAYS);
   const errors = [];
-  let leadCount = 0;
   let crewJobOpportunityCount = 0;
   let customerJobOpportunityCount = 0;
   let jobCount = 0;
-  let leadsWithNoJobCount = 0;
+  let skippedNotBookedCount = 0;
   let sourcesFailed = 0;
 
-  // opportunityId -> customerName (undefined if only found via sources 2/3, which don't carry one
-  // in the shape used for the Map key — source 3 actually does have a name, applied below).
+  // opportunityId -> customerName (undefined if only found via source 1, which doesn't carry one
+  // in the shape used here — source 2 does have a name, applied below).
   const opportunityIds = new Map();
-
-  try {
-    const leads = await getAllLeads({ from, to, includeBad: false, includeLost: false });
-    leadCount = leads.length;
-    leads.forEach(l => opportunityIds.set(l.id, l.customerName));
-  } catch (err) {
-    sourcesFailed += 1;
-    errors.push({ opportunityId: null, customer: null, message: `GET /api/leads: ${err.message}` });
-  }
 
   try {
     // No status filter — see smartmovingClient.js's getAllCrewMembers doc comment. Filtering to
@@ -343,10 +631,12 @@ async function pollSweep({ from: fromOverride, to: toOverride } = {}) {
     const customerOpportunityIds = new Set();
     customers.forEach(customer => {
       (customer.opportunities || []).forEach(opp => {
-        if (opp.id && Array.isArray(opp.jobs) && opp.jobs.length > 0) {
-          customerOpportunityIds.add(opp.id);
-          if (!opportunityIds.has(opp.id)) opportunityIds.set(opp.id, customer.name);
-        }
+        if (!opp.id || !Array.isArray(opp.jobs) || opp.jobs.length === 0) return;
+        // Fail OPEN on a missing/unrecognized status — only skip once we positively know it's not
+        // booked. See this function's doc comment for why.
+        if (opp.status !== undefined && opp.status !== null && !BOOKED_STATUSES.has(opp.status)) return;
+        customerOpportunityIds.add(opp.id);
+        if (!opportunityIds.has(opp.id)) opportunityIds.set(opp.id, customer.name);
       });
     });
     customerJobOpportunityCount = customerOpportunityIds.size;
@@ -359,19 +649,22 @@ async function pollSweep({ from: fromOverride, to: toOverride } = {}) {
     try {
       const mappedJobs = await hydrateOpportunity(opportunityId);
       jobCount += mappedJobs.length;
-      if (mappedJobs.length === 0) leadsWithNoJobCount += 1;
+      // Covers both "hydrated but genuinely had zero job records" and "filtered out because it
+      // wasn't booked" (hydrateOpportunity returns [] for both) — this count is a rough "how much
+      // of what we discovered didn't turn into a board job" signal, not a precise not-booked tally.
+      if (mappedJobs.length === 0) skippedNotBookedCount += 1;
     } catch (err) {
       errors.push({ opportunityId, customer: customerName, message: err.message });
     }
   }
 
   lastPollAt = new Date().toISOString();
-  lastPollError = sourcesFailed >= 3 ? errors[0].message : null;
+  lastPollError = sourcesFailed >= 2 ? errors[0].message : null;
   recordEvent({
-    type: 'poll-sweep', leadCount, crewJobOpportunityCount, customerJobOpportunityCount,
-    opportunityCount: opportunityIds.size, jobCount, leadsWithNoJobCount, errorCount: errors.length,
+    type: 'poll-sweep', crewJobOpportunityCount, customerJobOpportunityCount,
+    opportunityCount: opportunityIds.size, jobCount, skippedNotBookedCount, errorCount: errors.length,
   });
-  return { errors, leadCount, crewJobOpportunityCount, customerJobOpportunityCount, jobCount, leadsWithNoJobCount, from, to };
+  return { errors, crewJobOpportunityCount, customerJobOpportunityCount, jobCount, skippedNotBookedCount, from, to };
 }
 
 let pollTimer = null;
@@ -379,6 +672,19 @@ function startPolling() {
   if (POLL_INTERVAL_MINUTES <= 0) return; // webhook-only mode
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(() => { pollSweep().catch(() => {}); }, POLL_INTERVAL_MINUTES * 60 * 1000);
+}
+
+// Not called from start() anymore as of 2026-08-18 — iCal is set aside as the primary sync path
+// (see pollIcalFeed's doc comment), so nothing schedules this timer currently. Kept, not deleted,
+// in case a faster/free sync path is needed again later; call startIcalPolling() manually or wire
+// it back into start() to reactivate.
+const ICAL_POLL_INTERVAL_MINUTES = process.env.ICAL_POLL_INTERVAL_MINUTES !== undefined
+  ? Number(process.env.ICAL_POLL_INTERVAL_MINUTES) : 10;
+let icalPollTimer = null;
+function startIcalPolling() {
+  if (ICAL_POLL_INTERVAL_MINUTES <= 0 || !process.env.SMARTMOVING_ICAL_URL) return;
+  if (icalPollTimer) clearInterval(icalPollTimer);
+  icalPollTimer = setInterval(() => { pollIcalFeed().catch(() => {}); }, ICAL_POLL_INTERVAL_MINUTES * 60 * 1000);
 }
 
 /* ---------- Webhook receiver ---------- */
@@ -442,8 +748,70 @@ function publicUser(row) {
   return { id: row.id, email: row.email, role: row.role, createdAt: row.createdAt, hasPassword: Boolean(row.passwordHash ?? row.hasPassword) };
 }
 
-/* ---------- HTTP server ---------- */
-const server = http.createServer(async (req, res) => {
+/* ---------- Static frontend (see the "4." doc-comment item at the top of this file) ---------- */
+const PUBLIC_DIR = path.join(__dirname, 'public');
+// Only exists inside the built container image (root Dockerfile's frontend build stage) — absent
+// in local dev, where the frontend runs separately via `npm run dev` on its own port instead.
+const SERVING_STATIC_FRONTEND = fs.existsSync(PUBLIC_DIR);
+
+const MIME_TYPES = {
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png',
+  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.ico': 'image/x-icon',
+  '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.txt': 'text/plain; charset=utf-8',
+  '.map': 'application/json; charset=utf-8', '.webmanifest': 'application/manifest+json',
+};
+
+/**
+ * Serves the built frontend for any GET/HEAD request that isn't an API or webhook path. Tries the
+ * requested path as an exact static file first (JS/CSS bundles, images, etc.); falls back to
+ * `index.html` for anything else (e.g. `/`, or a future client-side route) — the same "SPA
+ * catchall" behavior Firebase Hosting's rewrites used to provide, just implemented directly here
+ * now that one process serves both the site and the API. Deliberately runs BEFORE `requireAuth()`
+ * below — the login page itself (and the JS that renders it) has to be reachable by a signed-out
+ * browser, or nobody could ever reach the login form in the first place.
+ *
+ * Blocks path traversal (`..`) by resolving against PUBLIC_DIR and checking the result is still
+ * inside it — `url.pathname` is attacker-controlled input from the request line.
+ */
+function serveStatic(req, res, pathname) {
+  if (!SERVING_STATIC_FRONTEND) return false;
+  if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+  if (pathname.startsWith('/api/') || pathname.startsWith('/webhooks/')) return false;
+
+  const decoded = decodeURIComponent(pathname);
+  let filePath = path.normalize(path.join(PUBLIC_DIR, decoded));
+  if (!filePath.startsWith(PUBLIC_DIR)) filePath = PUBLIC_DIR; // traversal attempt — fall back safely
+
+  let stat;
+  try { stat = fs.statSync(filePath); } catch (err) { /* no exact file at this path */ }
+  if (!stat || stat.isDirectory()) filePath = path.join(PUBLIC_DIR, 'index.html');
+
+  try {
+    const data = fs.readFileSync(filePath);
+    const ext = path.extname(filePath).toLowerCase();
+    res.writeHead(200, {
+      'Content-Type': MIME_TYPES[ext] || 'application/octet-stream',
+      // index.html changes which hashed JS/CSS bundle it references on every deploy — never cache
+      // it. The hashed asset files themselves (Vite's default build output naming) are safe to
+      // cache aggressively since a new deploy gives them new filenames.
+      'Cache-Control': filePath.endsWith('index.html') ? 'no-cache' : 'public, max-age=31536000, immutable',
+    });
+    res.end(req.method === 'HEAD' ? undefined : data);
+    return true;
+  } catch (err) {
+    return false; // no index.html either — let the normal 404 path handle it
+  }
+}
+
+/* ---------- HTTP server ----------
+   handleRequest is a plain (req, res) => Promise<void> function, deliberately not tied to Node's
+   http module — that's what lets server/functions-index.js reuse it as-is inside a Cloud Functions
+   onRequest handler (Express-like req/res objects support the same writeHead/end/on('data') calls
+   Node's raw http ones do). http.createServer(handleRequest) below is only how the AWS
+   container/local dev path turns it into an actual listening server. */
+async function handleRequest(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const p = url.pathname;
 
@@ -451,16 +819,20 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'OPTIONS') { sendJson(req, res, 204, {}); return; }
 
     if (p === '/api/health') {
-      const state = db.getState();
+      const state = await db.getState();
+      const users = await db.listUsers();
       sendJson(req, res, 200, {
         ok: true,
         hasApiKey: Boolean(process.env.SMARTMOVING_API_KEY),
         webhookSecretConfigured: Boolean(WEBHOOK_SECRET),
         pollIntervalMinutes: POLL_INTERVAL_MINUTES,
         truckCount: state.trucks.length, driverCount: state.drivers.length, jobCount: state.jobs.length,
-        userCount: db.listUsers().length,
-        dbFile: db.DB_FILE,
-        lastPollAt, lastPollError, lastWebhookAt,
+        userCount: users.length,
+        dataStore: 'firestore',
+        hasIcalUrl: Boolean(process.env.SMARTMOVING_ICAL_URL),
+        hasCalendarSync: Boolean(process.env.GMAIL_OAUTH_REFRESH_TOKEN),
+        lastPollAt, lastPollError, lastIcalSyncAt, lastIcalSyncError,
+        lastCalendarSyncAt, lastCalendarSyncError, lastWebhookAt,
         recentEvents: recentWebhookEvents,
       });
       return;
@@ -471,13 +843,15 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (serveStatic(req, res, p)) return;
+
     /* ---- Auth ---- */
 
     if (p === '/api/auth/login' && req.method === 'POST') {
       const body = await readJsonBody(req);
       const email = auth.normalizeEmail(body.email);
       const password = body.password || '';
-      const row = db.getUserByEmail(email);
+      const row = await db.getUserByEmail(email);
       // Same generic error either way — confirming "that email exists but the password's wrong"
       // vs. "no such account" would let someone probe which addresses have access.
       if (!row || !auth.verifyPassword(password, row.passwordHash)) {
@@ -494,13 +868,13 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/auth/forgot-password' && req.method === 'POST') {
       const body = await readJsonBody(req);
       const email = auth.normalizeEmail(body.email);
-      const row = db.getUserByEmail(email);
+      const row = await db.getUserByEmail(email);
       // Always the same response regardless of whether the account exists — otherwise this route
       // becomes a way to enumerate which addresses have access to the app.
       if (row) {
         const code = auth.generateOtp();
         const otpHash = auth.hashOtp(code, SESSION_SECRET);
-        db.setUserOtp(row.id, otpHash, new Date(Date.now() + auth.OTP_TTL_MS).toISOString());
+        await db.setUserOtp(row.id, otpHash, new Date(Date.now() + auth.OTP_TTL_MS).toISOString());
         try {
           await sendOtpEmail(email, code);
           recordEvent({ type: 'otp-sent', email });
@@ -517,7 +891,7 @@ const server = http.createServer(async (req, res) => {
       const email = auth.normalizeEmail(body.email);
       const code = String(body.otp || '').trim();
       const newPassword = body.newPassword || '';
-      const row = db.getUserByEmail(email);
+      const row = await db.getUserByEmail(email);
       const otpValid = row && row.otpHash && row.otpExpiresAt
         && Date.now() <= Date.parse(row.otpExpiresAt)
         && auth.verifyOtp(code, row.otpHash, SESSION_SECRET);
@@ -529,10 +903,10 @@ const server = http.createServer(async (req, res) => {
         sendJson(req, res, 400, { error: 'Password must be at least 8 characters.' });
         return;
       }
-      db.setUserPassword(row.id, auth.hashPassword(newPassword));
+      await db.setUserPassword(row.id, auth.hashPassword(newPassword));
       const token = auth.createSessionToken(row, SESSION_SECRET);
       recordEvent({ type: 'password-reset', email });
-      sendJson(req, res, 200, publicUser(db.getUserById(row.id)), { 'Set-Cookie': auth.sessionCookieHeader(token, COOKIE_SECURE) });
+      sendJson(req, res, 200, publicUser(await db.getUserById(row.id)), { 'Set-Cookie': auth.sessionCookieHeader(token, COOKIE_SECURE) });
       return;
     }
 
@@ -544,7 +918,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/auth/dev-login' && req.method === 'GET') {
       if (!DEV_BYPASS_LOGIN) { sendJson(req, res, 404, { error: 'Not found' }); return; }
       const requestedRole = url.searchParams.get('role');
-      const users = db.listUsers();
+      const users = await db.listUsers();
       if (users.length === 0) {
         sendJson(req, res, 500, { error: 'No user accounts exist yet — set ADMIN_EMAIL in server/.env and restart, or run node create-admin.js <email> [role].' });
         return;
@@ -562,20 +936,20 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/api/auth/me' && req.method === 'GET') {
-      const user = getCurrentUser(req);
+      const user = await getCurrentUser(req);
       if (!user) { sendJson(req, res, 401, { error: 'Not logged in' }); return; }
       sendJson(req, res, 200, user);
       return;
     }
 
     /* ---- Everything below here requires a logged-in user ---- */
-    const currentUser = requireAuth(req);
+    const currentUser = await requireAuth(req);
 
     /* ---- User management (admin only) ---- */
 
     if (p === '/api/users' && req.method === 'GET') {
       requireRole(currentUser, ['admin']);
-      sendJson(req, res, 200, db.listUsers());
+      sendJson(req, res, 200, await db.listUsers());
       return;
     }
 
@@ -583,28 +957,70 @@ const server = http.createServer(async (req, res) => {
       requireRole(currentUser, ['admin']);
       const body = await readJsonBody(req);
       const email = auth.normalizeEmail(body.email);
-      if (!auth.isCompanyEmail(email)) {
-        sendJson(req, res, 400, { error: `Email must be a @${auth.EMAIL_DOMAIN} address` });
+      // Company-domain addresses are always allowed; anything else needs to have been explicitly
+      // added to the allowed-external-emails list first (see the routes below and db.js's
+      // isEmailAllowedExternally doc comment) — e.g. a partner/subcontractor's own email address.
+      if (!auth.isCompanyEmail(email) && !(await db.isEmailAllowedExternally(email))) {
+        sendJson(req, res, 400, {
+          error: `Email must be a @${auth.EMAIL_DOMAIN} address, or first added under "External Access" below`,
+        });
         return;
       }
       const role = ['admin', 'dispatcher', 'crew'].includes(body.role) ? body.role : 'dispatcher';
-      if (db.getUserByEmail(email)) {
+      if (await db.getUserByEmail(email)) {
         sendJson(req, res, 409, { error: 'A user with that email already exists' });
         return;
       }
-      const id = nextId(db.listUsers(), 'U');
+      const id = nextId(await db.listUsers(), 'U');
       // Grants access only — no password set. This person uses "Forgot password?" on the login
       // screen to set one via an emailed one-time code before they can sign in.
-      const user = db.createUser({ id, email, role });
+      const user = await db.createUser({ id, email, role });
       sendJson(req, res, 201, publicUser(user));
       return;
     }
 
-    let m = p.match(/^\/api\/users\/([^/]+)$/);
+    /* ---- Allowed external emails (admin only) — see db.js's doc comment on this collection.
+       Lifts the @aroundtownmovers.com restriction above for specific one-off addresses; doesn't by
+       itself grant access — an admin still has to create the actual user (with a role) via
+       POST /api/users afterward, same as any other account. */
+
+    if (p === '/api/allowed-external-emails' && req.method === 'GET') {
+      requireRole(currentUser, ['admin']);
+      sendJson(req, res, 200, await db.listAllowedExternalEmails());
+      return;
+    }
+
+    if (p === '/api/allowed-external-emails' && req.method === 'POST') {
+      requireRole(currentUser, ['admin']);
+      const body = await readJsonBody(req);
+      const email = auth.normalizeEmail(body.email);
+      if (!email || !email.includes('@')) {
+        sendJson(req, res, 400, { error: 'A valid email address is required' });
+        return;
+      }
+      if (auth.isCompanyEmail(email)) {
+        sendJson(req, res, 400, { error: `@${auth.EMAIL_DOMAIN} addresses are already allowed — no need to add them here` });
+        return;
+      }
+      const entry = await db.addAllowedExternalEmail(email, { addedByEmail: currentUser.email, note: String(body.note || '').slice(0, 200) });
+      sendJson(req, res, 201, entry);
+      return;
+    }
+
+    let m = p.match(/^\/api\/allowed-external-emails\/([^/]+)$/);
+    if (m && req.method === 'DELETE') {
+      requireRole(currentUser, ['admin']);
+      const email = auth.normalizeEmail(decodeURIComponent(m[1]));
+      await db.removeAllowedExternalEmail(email);
+      sendJson(req, res, 200, { ok: true });
+      return;
+    }
+
+    m = p.match(/^\/api\/users\/([^/]+)$/);
     if (m && req.method === 'PATCH') {
       requireRole(currentUser, ['admin']);
       const targetId = m[1];
-      const target = db.getUserById(targetId);
+      const target = await db.getUserById(targetId);
       if (!target) { sendJson(req, res, 404, { error: 'User not found' }); return; }
       const body = await readJsonBody(req);
       if (body.role !== undefined) {
@@ -612,13 +1028,13 @@ const server = http.createServer(async (req, res) => {
           sendJson(req, res, 400, { error: 'Invalid role' });
           return;
         }
-        if (target.role === 'admin' && body.role !== 'admin' && db.countAdmins() <= 1) {
+        if (target.role === 'admin' && body.role !== 'admin' && (await db.countAdmins()) <= 1) {
           sendJson(req, res, 400, { error: "Can't remove the last admin — promote someone else first" });
           return;
         }
-        db.updateUserRole(targetId, body.role);
+        await db.updateUserRole(targetId, body.role);
       }
-      sendJson(req, res, 200, publicUser(db.getUserById(targetId)));
+      sendJson(req, res, 200, publicUser(await db.getUserById(targetId)));
       return;
     }
 
@@ -626,14 +1042,14 @@ const server = http.createServer(async (req, res) => {
     if (m && req.method === 'DELETE') {
       requireRole(currentUser, ['admin']);
       const targetId = m[1];
-      const target = db.getUserById(targetId);
+      const target = await db.getUserById(targetId);
       if (!target) { sendJson(req, res, 404, { error: 'User not found' }); return; }
       if (targetId === currentUser.id) { sendJson(req, res, 400, { error: "You can't delete your own account while logged in" }); return; }
-      if (target.role === 'admin' && db.countAdmins() <= 1) {
+      if (target.role === 'admin' && (await db.countAdmins()) <= 1) {
         sendJson(req, res, 400, { error: "Can't delete the last admin" });
         return;
       }
-      db.deleteUser(targetId);
+      await db.deleteUser(targetId);
       sendJson(req, res, 200, { ok: true });
       return;
     }
@@ -641,19 +1057,19 @@ const server = http.createServer(async (req, res) => {
     /* ---- Scheduler data API ---- */
 
     if (p === '/api/state' && req.method === 'GET') {
-      sendJson(req, res, 200, db.getState());
+      sendJson(req, res, 200, await db.getState());
       return;
     }
 
     if (p === '/api/reset-to-sample-data' && req.method === 'POST') {
       requireRole(currentUser, ['admin']);
-      sendJson(req, res, 200, db.resetToSampleData());
+      sendJson(req, res, 200, await db.resetToSampleData());
       return;
     }
 
     if (p === '/api/clear-jobs' && req.method === 'POST') {
       requireRole(currentUser, ['admin']);
-      sendJson(req, res, 200, db.clearJobs());
+      sendJson(req, res, 200, await db.clearJobs());
       return;
     }
 
@@ -671,17 +1087,40 @@ const server = http.createServer(async (req, res) => {
         sendJson(req, res, 400, { error: '"from" date must be on or before "to" date' });
         return;
       }
+      // REST poll sweep is the sync path again (see pollSweep's doc comment) — with or without an
+      // explicit from/to, since pollSweep already defaults to POLL_LOOKBACK_DAYS/POLL_LOOKAHEAD_DAYS
+      // when neither is given. The iCal feed is set aside for now; it's still reachable directly if
+      // ever needed by calling pollIcalFeed() (not wired to this endpoint anymore).
       const result = await pollSweep({ from, to });
-      sendJson(req, res, 200, { ...result, state: db.getState() });
+      // Also run the Google Calendar sync (added 2026-08-26) on every manual "Sync Now" — it's what
+      // actually carries truck/driver assignment data (pollSweep's REST source doesn't), and it's
+      // where the iCal/Smart-Insights record merge happens (see db.upsertSmartMovingJob). Wrapped
+      // separately so a not-yet-authorized calendar (e.g. before the one-time re-consent flow in
+      // smartInsightsGmail.js's 2026-08-26 comment has been run) never breaks the REST sync's own
+      // response — it just reports its own error alongside a normal result from the REST side.
+      const calendarSync = await pollGoogleCalendarFeed().catch((err) => ({ errors: [{ message: err.message }] }));
+      sendJson(req, res, 200, { ...result, calendarSync, state: await db.getState() });
+      return;
+    }
+
+    if (p === '/api/smart-insights/sync-now' && req.method === 'POST') {
+      requireRole(currentUser, ['admin']);
+      // Manual trigger for the same pipeline smartInsightsSyncScheduled runs daily at 6am ET (see
+      // functions-index.js) — checks Gmail for any not-yet-processed "SmartMoving Report is Ready"
+      // email right now instead of waiting for the next scheduled run. Requires GMAIL_OAUTH_*
+      // secrets to be set (see smartInsightsGmail.js / server/gmail-oauth-setup.js) — throws a clear
+      // error via syncSmartInsights -> getAuthenticatedClient if they aren't.
+      const result = await syncSmartInsights();
+      sendJson(req, res, 200, { ...result, state: await db.getState() });
       return;
     }
 
     if (p === '/api/trucks' && req.method === 'POST') {
       requireRole(currentUser, ['admin']);
       const body = await readJsonBody(req);
-      const { trucks } = db.getState();
+      const { trucks } = await db.getState();
       const id = nextId(trucks, 'T');
-      const truck = db.createTruck({ id, name: body.name || `Truck ${trucks.length + 1}`, size: body.size, capacity: body.capacity, homeBase: body.homeBase, status: 'available' });
+      const truck = await db.createTruck({ id, name: body.name || `Truck ${trucks.length + 1}`, size: body.size, capacity: body.capacity, homeBase: body.homeBase, status: 'available' });
       sendJson(req, res, 201, truck);
       return;
     }
@@ -690,23 +1129,31 @@ const server = http.createServer(async (req, res) => {
     if (m && req.method === 'PATCH') {
       requireRole(currentUser, ['admin']);
       const body = await readJsonBody(req);
-      sendJson(req, res, 200, db.updateTruck(m[1], body));
+      sendJson(req, res, 200, await db.updateTruck(m[1], body));
       return;
     }
     if (m && req.method === 'DELETE') {
       requireRole(currentUser, ['admin']);
-      const { trucks } = db.getState();
+      const { trucks } = await db.getState();
       if (!trucks.some(t => t.id === m[1])) { sendJson(req, res, 404, { error: 'Truck not found' }); return; }
-      sendJson(req, res, 200, db.deleteTruck(m[1]));
+      sendJson(req, res, 200, await db.deleteTruck(m[1]));
       return;
     }
 
-    m = p.match(/^\/api\/trucks\/([^/]+)\/link-driver$/);
-    if (m && req.method === 'POST') {
+    if (p === '/api/trucks/reorder' && req.method === 'POST') {
       requireRole(currentUser, ['admin']);
       const body = await readJsonBody(req);
-      db.linkTruckDriver(m[1], body.driverId || null);
-      sendJson(req, res, 200, db.getState());
+      if (!Array.isArray(body.truckIds) || !body.truckIds.length) {
+        sendJson(req, res, 400, { error: 'truckIds must be a non-empty array' });
+        return;
+      }
+      const { trucks } = await db.getState();
+      const knownIds = new Set(trucks.map((t) => t.id));
+      if (body.truckIds.length !== trucks.length || !body.truckIds.every((id) => knownIds.has(id))) {
+        sendJson(req, res, 400, { error: 'truckIds must include every current truck exactly once' });
+        return;
+      }
+      sendJson(req, res, 200, await db.reorderTrucks(body.truckIds));
       return;
     }
 
@@ -714,9 +1161,9 @@ const server = http.createServer(async (req, res) => {
       requireRole(currentUser, ['admin']);
       const body = await readJsonBody(req);
       if (!body.name) { sendJson(req, res, 400, { error: 'name is required' }); return; }
-      const { drivers } = db.getState();
+      const { drivers } = await db.getState();
       const id = nextId(drivers, 'D');
-      const driver = db.createDriver({ id, name: body.name, phone: body.phone, cdl: body.cdl });
+      const driver = await db.createDriver({ id, name: body.name, phone: body.phone, cdl: body.cdl });
       sendJson(req, res, 201, driver);
       return;
     }
@@ -725,22 +1172,14 @@ const server = http.createServer(async (req, res) => {
     if (m && req.method === 'PATCH') {
       requireRole(currentUser, ['admin']);
       const body = await readJsonBody(req);
-      sendJson(req, res, 200, db.updateDriver(m[1], body));
+      sendJson(req, res, 200, await db.updateDriver(m[1], body));
       return;
     }
     if (m && req.method === 'DELETE') {
       requireRole(currentUser, ['admin']);
-      const { drivers } = db.getState();
+      const { drivers } = await db.getState();
       if (!drivers.some(d => d.id === m[1])) { sendJson(req, res, 404, { error: 'Driver not found' }); return; }
-      sendJson(req, res, 200, db.deleteDriver(m[1]));
-      return;
-    }
-
-    m = p.match(/^\/api\/drivers\/([^/]+)\/unassign-truck$/);
-    if (m && req.method === 'POST') {
-      requireRole(currentUser, ['admin']);
-      db.unassignDriverTruck(m[1]);
-      sendJson(req, res, 200, db.getState());
+      sendJson(req, res, 200, await db.deleteDriver(m[1]));
       return;
     }
 
@@ -754,15 +1193,16 @@ const server = http.createServer(async (req, res) => {
       requireRole(currentUser, ['admin', 'dispatcher']);
       const body = await readJsonBody(req);
       if (!body.date) { sendJson(req, res, 400, { error: 'date is required' }); return; }
-      const { jobs } = db.getState();
+      const { jobs } = await db.getState();
       const id = nextId(jobs, 'J-');
       const endDate = body.endDate || body.date;
-      // No explicit type picker in the quick-add form — inferred the same way the rest of the
-      // board treats dates: a job that runs past a single day is a multi-day (long-distance-style)
-      // placeholder, otherwise it's a same-day local one. Matches how JobEditModal already frames
-      // "until which day" as the field that distinguishes the two.
-      const type = endDate > body.date ? 'long_distance' : 'local';
-      const job = db.createJob({
+      // JobCreateModal now sends an explicit type (a "Local"/"Long Distance" toggle, added
+      // 2026-08-18 — used to only be inferred). Still falls back to the old date-range inference
+      // for any other caller that doesn't send one, rather than requiring it.
+      const type = body.type === 'long_distance' || body.type === 'local'
+        ? body.type
+        : (endDate > body.date ? 'long_distance' : 'local');
+      const job = await db.createJob({
         id,
         customer: (body.customer || '').trim() || 'New job',
         type,
@@ -770,15 +1210,15 @@ const server = http.createServer(async (req, res) => {
         endDate,
         startTime: body.startTime || null,
         duration: type === 'local' ? 2 : null,
-        origin: '',
-        destination: '',
-        crewSize: null,
-        trucksNeeded: 1,
+        origin: (body.origin || '').trim(),
+        destination: (body.destination || '').trim(),
+        crewSize: body.crewSize ? Number(body.crewSize) : null,
+        trucksNeeded: body.trucksNeeded ? Number(body.trucksNeeded) : 1,
         status: 'scheduled',
         source: 'placeholder',
         truckIds: [],
       });
-      sendJson(req, res, 201, { ...job, state: db.getState() });
+      sendJson(req, res, 201, { ...job, state: await db.getState() });
       return;
     }
 
@@ -786,9 +1226,9 @@ const server = http.createServer(async (req, res) => {
     if (m && req.method === 'PATCH') {
       requireRole(currentUser, ['admin', 'dispatcher']);
       const body = await readJsonBody(req);
-      const job = db.getJob(m[1]);
+      const job = await db.getJob(m[1]);
       if (!job) { sendJson(req, res, 404, { error: 'Job not found' }); return; }
-      sendJson(req, res, 200, db.updateJob(m[1], body));
+      sendJson(req, res, 200, await db.updateJob(m[1], body));
       return;
     }
 
@@ -796,9 +1236,27 @@ const server = http.createServer(async (req, res) => {
     // db.js's deleteJob doc comment for why), but that's a UI choice, not enforced here.
     if (m && req.method === 'DELETE') {
       requireRole(currentUser, ['admin', 'dispatcher']);
-      const job = db.getJob(m[1]);
+      const job = await db.getJob(m[1]);
       if (!job) { sendJson(req, res, 404, { error: 'Job not found' }); return; }
-      sendJson(req, res, 200, db.deleteJob(m[1]));
+      sendJson(req, res, 200, await db.deleteJob(m[1]));
+      return;
+    }
+
+    // Assigns (or, with driverId: null, clears) which driver is driving one specific truck on this
+    // job — see db.js's file header for why driver assignment moved off the truck and onto this
+    // per-job pairing. Requires truckId to already be one of this job's assigned trucks, so a
+    // dispatcher can't pin a driver to a truck the job doesn't actually have.
+    m = p.match(/^\/api\/jobs\/([^/]+)\/set-truck-driver$/);
+    if (m && req.method === 'POST') {
+      requireRole(currentUser, ['admin', 'dispatcher']);
+      const body = await readJsonBody(req);
+      const job = await db.getJob(m[1]);
+      if (!job) { sendJson(req, res, 404, { error: 'Job not found' }); return; }
+      if (!body.truckId || !(job.truckIds || []).includes(body.truckId)) {
+        sendJson(req, res, 400, { error: 'truckId must be one of this job\'s assigned trucks' });
+        return;
+      }
+      sendJson(req, res, 200, await db.setJobTruckDriver(m[1], body.truckId, body.driverId || null));
       return;
     }
 
@@ -810,7 +1268,7 @@ const server = http.createServer(async (req, res) => {
       const forceRefresh = url.searchParams.get('refresh') === 'true';
       if (forceRefresh) await pollSweep();
 
-      const { jobs } = db.getState();
+      const { jobs } = await db.getState();
       const smJobs = jobs.filter(j => j.source === 'smartmoving' &&
         (j.smartMovingStatusCode === null || j.smartMovingStatusCode === undefined || statuses.includes(j.smartMovingStatusCode)));
 
@@ -819,7 +1277,7 @@ const server = http.createServer(async (req, res) => {
         statuses: statuses.map(s => ({ code: s, label: OPPORTUNITY_STATUS[s] || s })),
         count: smJobs.length,
         jobs: smJobs,
-        lastPollAt, lastPollError, lastWebhookAt,
+        lastPollAt, lastPollError, lastIcalSyncAt, lastIcalSyncError, lastWebhookAt,
       });
       return;
     }
@@ -828,30 +1286,69 @@ const server = http.createServer(async (req, res) => {
   } catch (err) {
     sendJson(req, res, err.status || 500, { error: err.message });
   }
-});
+}
 
-server.listen(PORT, () => {
-  console.log(`ATM Scheduler backend listening on http://localhost:${PORT}`);
-  console.log(`Database: ${db.DB_FILE}`);
-  console.log(`SmartMoving API key ${process.env.SMARTMOVING_API_KEY ? 'is' : 'is NOT'} configured.`);
-  console.log(`Webhook secret ${WEBHOOK_SECRET ? 'is' : 'is NOT'} configured (POST /webhooks/smartmoving).`);
-  console.log(POLL_INTERVAL_MINUTES > 0
-    ? `Poll sweep every ${POLL_INTERVAL_MINUTES} min (fallback/backfill).`
-    : `Poll sweep disabled — webhook-only mode.`);
-  if (sessionSecretIsEphemeral) {
-    console.warn('SESSION_SECRET is not set in .env — using a random one generated for this run. ' +
-      'Everyone will be logged out on the next restart. Set SESSION_SECRET in .env to avoid that.');
-  }
-  console.log(otpEmailConfigured()
-    ? 'Password-reset emails are configured (SMTP).'
-    : 'Password-reset emails are NOT configured — set SMTP_USER and SMTP_PASS in .env, or nobody without a password can get one (see server/README.md "Login & accounts").');
-  if (DEV_BYPASS_LOGIN) {
-    console.warn('⚠️  DEV_BYPASS_LOGIN is active — /api/auth/dev-login skips password checks entirely. ' +
-      'Local dev only. Do not set this on anything reachable outside your own machine.');
-  }
-  console.log(`${db.listUsers().length} user account(s) have access.`);
-  if (process.env.SMARTMOVING_API_KEY) pollSweep().catch(() => {}); // warm the store on startup
-  startPolling();
-});
+const server = http.createServer(handleRequest);
 
-module.exports = { server, db, auth, hydrateOpportunity, pollSweep };
+/**
+ * Async startup sequence — Firestore needs an `await` before the server can safely accept
+ * requests, unlike the old SQLite version where the database was ready synchronously as soon as
+ * `require('./db')` returned. Order matters: seed sample data (only on a brand new, empty
+ * database) before bootstrapping the first admin (only on zero users) before opening the port.
+ *
+ * Also used (minus the server.listen() call) by server/functions-index.js's ensureInit() — Cloud
+ * Functions has no single "startup" moment the way a long-running container does, so that file
+ * calls initOnce() lazily on first invocation of either exported function instead.
+ */
+async function initOnce() {
+  await db.initDb();
+  await bootstrapAdmin();
+}
+
+/**
+ * Starts the plain-Node listening server — used by local dev and the AWS container (see
+ * server/start.js, which is the only thing that actually calls this). Deliberately NOT invoked
+ * just by requiring this file: Firebase's own `firebase deploy` runs a local "analyze the source
+ * to see what's exported" pass over server/functions-index.js (which requires this file) before
+ * ever touching Cloud Functions/Cloud Run — that pass expects requiring the module to be a fast,
+ * side-effect-free operation, and a real Firestore init + an actual listen() call blew straight
+ * through its 10s timeout ("Cannot determine backend specification"). Splitting "define the app"
+ * from "run the app" like this is what makes the same server.js safely reusable by three different
+ * entry points (server/start.js, server/functions-index.js, and Firebase's own analysis pass)
+ * without needing to sniff environment variables to guess which one is currently loading it.
+ */
+async function start() {
+  await initOnce();
+
+  server.listen(PORT, () => {
+    console.log(`ATM Scheduler backend listening on http://localhost:${PORT}`);
+    console.log('Database: Firestore');
+    console.log(`SmartMoving API key ${process.env.SMARTMOVING_API_KEY ? 'is' : 'is NOT'} configured.`);
+    console.log(`Webhook secret ${WEBHOOK_SECRET ? 'is' : 'is NOT'} configured (POST /webhooks/smartmoving).`);
+    console.log(POLL_INTERVAL_MINUTES > 0
+      ? `Poll sweep every ${POLL_INTERVAL_MINUTES} min (primary sync, booked jobs only).`
+      : `Poll sweep disabled — webhook-only mode.`);
+    if (sessionSecretIsEphemeral) {
+      console.warn('SESSION_SECRET is not set in .env — using a random one generated for this run. ' +
+        'Everyone will be logged out on the next restart. Set SESSION_SECRET in .env to avoid that.');
+    }
+    console.log(otpEmailConfigured()
+      ? 'Password-reset emails are configured (SMTP).'
+      : 'Password-reset emails are NOT configured — set SMTP_USER and SMTP_PASS in .env, or nobody without a password can get one (see server/README.md "Login & accounts").');
+    if (DEV_BYPASS_LOGIN) {
+      console.warn('⚠️  DEV_BYPASS_LOGIN is active — /api/auth/dev-login skips password checks entirely. ' +
+        'Local dev only. Do not set this on anything reachable outside your own machine.');
+    }
+    db.listUsers().then(users => console.log(`${users.length} user account(s) have access.`));
+    // REST poll sweep is the primary sync path again as of 2026-08-18 (see pollSweep's doc
+    // comment) — the iCal feed is set aside for now, not deleted, so startIcalPolling() is no
+    // longer called from here; pollIcalFeed itself still works via POST /api/sync-now (no from/to).
+    if (process.env.SMARTMOVING_API_KEY) pollSweep().catch(() => {});
+    startPolling();
+  });
+}
+
+module.exports = {
+  server, db, auth, hydrateOpportunity, pollSweep, pollIcalFeed, pollGoogleCalendarFeed,
+  syncSmartInsights, handleRequest, initOnce, start,
+};

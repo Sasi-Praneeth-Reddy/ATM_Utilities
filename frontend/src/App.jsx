@@ -3,7 +3,8 @@ import { initialBackendUrl, normalizeBackendUrl } from './api';
 import { useAuth } from './hooks/useAuth';
 import { useSchedulerData } from './hooks/useSchedulerData';
 import { useUsers } from './hooks/useUsers';
-import { getConflicts, conflictIdsFrom, roleLabels } from './utils/jobs';
+import { getConflicts, conflictIdsFrom, getPlaceholderDuplicates, roleLabels } from './utils/jobs';
+import { todayStr } from './utils/dates';
 import Header from './components/Header';
 import Nav from './components/Nav';
 import BackendBanner from './components/BackendBanner';
@@ -45,8 +46,15 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('board');
   const [currentCrewTruck, setCurrentCrewTruck] = useState('T1');
   const [boardMode, setBoardMode] = useState('day');
-  const [boardDate, setBoardDate] = useState('2026-08-05');
-  const [monthCursor, setMonthCursor] = useState(new Date(2026, 7, 1));
+  // Opens on today's date/month, not a hardcoded one — was pinned to a fixed 2026-08-05 (a leftover
+  // from an early dev/demo date) so the board silently opened on the wrong day for anyone visiting
+  // after that date passed. todayStr() (utils/dates.js) matches what DayBoard's "Today" button and
+  // now-line already use, so all three stay in agreement about what "today" means.
+  const [boardDate, setBoardDate] = useState(todayStr());
+  const [monthCursor, setMonthCursor] = useState(() => {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
 
   // Land on that role's default tab once we know who's logged in (or right after logging in).
   useEffect(() => {
@@ -61,8 +69,21 @@ export default function App() {
     }
   }, [trucks, currentCrewTruck]);
 
+  // The role hint line ("Admin — full access to...") shows for 3s after the scheduler actually
+  // opens, then hides — a one-time orientation cue, not a permanent fixture eating space on every
+  // tab. Gated on isAuthenticated (not just mount) so the 3s starts when the scheduler UI itself
+  // first appears, not while still on the loading spinner or login screen. Doesn't re-trigger on
+  // tab switches (isAuthenticated stays true the whole session) — only a fresh login shows it again.
+  const [showRoleHint, setShowRoleHint] = useState(true);
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const t = setTimeout(() => setShowRoleHint(false), 3000);
+    return () => clearTimeout(t);
+  }, [isAuthenticated]);
+
   const conflicts = useMemo(() => getConflicts(jobs), [jobs]);
   const conflictIds = useMemo(() => conflictIdsFrom(conflicts), [conflicts]);
+  const placeholderDuplicates = useMemo(() => getPlaceholderDuplicates(jobs), [jobs]);
 
   if (authStatus === 'loading') {
     return <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)' }}>Loading…</div>;
@@ -105,7 +126,7 @@ export default function App() {
           backendUrl={backendUrl}
           onRetryUrl={setBackendUrl}
         />
-        <div className="hint">{roleLabels[role]}</div>
+        {showRoleHint && <div className="hint">{roleLabels[role]}</div>}
 
         {activeTab === 'board' && (
           <BoardTab
@@ -116,11 +137,13 @@ export default function App() {
             trucks={trucks} drivers={drivers} jobs={jobs}
             currentCrewTruck={currentCrewTruck}
             conflicts={conflicts} conflictIds={conflictIds}
+            placeholderDuplicates={placeholderDuplicates}
             onUnassignJob={data.unassignJob}
             onAddTruckToJob={data.addTruckToJob}
             onRemoveTruck={data.removeTruckFromJob}
             onMoveJobDate={data.moveJobDate}
             onAddExtraTruck={data.addExtraTruckToJob}
+            onSetJobTruckDriver={data.setJobTruckDriver}
             onUpdateJobFields={data.updateJobFields}
             onCreateJob={data.createJob}
             onDeleteJob={data.deleteJob}
@@ -138,14 +161,13 @@ export default function App() {
         {activeTab === 'admin' && role === 'admin' && (
           <AdminTab
             trucks={trucks} drivers={drivers} jobs={jobs}
-            syncStatus={data.syncStatus} onSyncNow={data.syncNow} lastSyncedAt={data.lastSyncedAt}
             onResetToSampleData={data.resetToSampleData}
             onClearJobs={data.clearJobs}
             onCreateTruck={data.createTruck} onCreateDriver={data.createDriver}
             onUpdateTruckField={data.updateTruckField} onUpdateTruckStatus={data.updateTruckStatus}
-            onLinkDriver={data.linkTruckDriver}
-            onUpdateDriverField={data.updateDriverField} onUnassignDriverTruck={data.unassignDriverTruck}
+            onUpdateDriverField={data.updateDriverField}
             onDeleteTruck={data.deleteTruck} onDeleteDriver={data.deleteDriver}
+            onReorderTrucks={data.reorderTrucks}
           />
         )}
 
@@ -155,6 +177,9 @@ export default function App() {
             onSetJobSingleTruck={data.setJobSingleTruck} onToggleJobTruck={data.toggleJobTruck}
             onUpdateJobField={data.updateJobField}
             onAddExtraTruck={data.addExtraTruckToJob}
+            onSetJobTruckDriver={data.setJobTruckDriver}
+            syncStatus={data.syncStatus} onSyncNow={data.syncNow} lastSyncedAt={data.lastSyncedAt}
+            smartInsightsSyncStatus={data.smartInsightsSyncStatus} onSyncSmartInsightsNow={data.syncSmartInsightsNow}
           />
         )}
 
@@ -163,6 +188,9 @@ export default function App() {
             users={usersData.users} currentUserId={user.id}
             onCreateUser={usersData.createUser} onChangeUserRole={usersData.changeRole}
             onDeleteUser={usersData.deleteUser}
+            allowedExternalEmails={usersData.allowedExternalEmails}
+            onAddAllowedExternalEmail={usersData.addAllowedExternalEmail}
+            onRemoveAllowedExternalEmail={usersData.removeAllowedExternalEmail}
           />
         )}
 

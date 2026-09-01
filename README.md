@@ -8,10 +8,11 @@ one-way sync from the SmartMoving CRM.
 - **`frontend/`** — the scheduler itself, as a React (Vite) app. It's a thin client: it holds no
   data of its own and needs the backend below running to load or save anything. See
   [`frontend/README.md`](frontend/README.md) for setup and project layout.
-- **`server/`** — a small Node + SQLite backend. It stores all scheduler data (trucks, drivers,
-  jobs) and serves it over a REST API, and separately pulls schedulable jobs out of SmartMoving CRM
-  into that same database. See [`server/README.md`](server/README.md) for setup, webhook
-  configuration, deployment, and the full list of known limitations.
+- **`server/`** — a small Node backend, deployed to AWS App Runner, backed by Firestore. It stores
+  all scheduler data (trucks, drivers, jobs) and serves it over a REST API (and the built frontend
+  itself, in production), and separately pulls schedulable jobs out of SmartMoving CRM into that
+  same database. See [`server/README.md`](server/README.md) for setup, webhook configuration, AWS
+  deployment, and the full list of known limitations.
 - **`atm-scheduler.html`** — the original single-file HTML/CSS/JS version. Superseded by
   `frontend/` (same features, ported 1:1 into React components) — kept around for now so nothing's
   deleted before you've had a chance to confirm the new version works for you. Safe to delete once
@@ -37,7 +38,7 @@ one-way sync from the SmartMoving CRM.
 - SmartMoving sync (Admin → Trucks & Drivers → SmartMoving Sync panel): pulls jobs that need
   dispatching directly into the board. One-way — see [`server/README.md`](server/README.md) for
   why, and for the webhook + polling architecture that keeps it up to date.
-- Shared, persistent data: trucks/drivers/jobs live in a SQLite database on the backend, not in the
+- Shared, persistent data: trucks/drivers/jobs live in Firestore on the backend, not in the
   browser — every device pointed at the same backend sees the same board, and it stays refreshed
   automatically (polls every 15s). Admin → Trucks & Drivers → **Reset to sample data** clears the
   database back to the original demo state for everyone using it.
@@ -55,12 +56,16 @@ cp .env.example .env
 # edit .env: set ADMIN_EMAIL (grants the first admin) and either ADMIN_PASSWORD (sign in right
 # away) or SMTP_USER/SMTP_PASS (so the account can set its own password by email), and,
 # optionally, your SmartMoving API key
-npm start
+
+# in one terminal — starts a local Firestore emulator (npm install -g firebase-tools first):
+firebase emulators:start --only firestore
+# in another terminal:
+FIRESTORE_EMULATOR_HOST=localhost:8080 npm start
 ```
-This creates and seeds `server/data/atm.db` on first run, and grants the first admin account from
-`ADMIN_EMAIL`. Full backend details, including email delivery setup, login/account management,
-webhook setup for real-time SmartMoving sync, and deployment notes, are in
-[`server/README.md`](server/README.md).
+This seeds sample trucks/drivers/jobs into the emulator on first run, and grants the first admin
+account from `ADMIN_EMAIL`. Full backend details, including email delivery setup, login/account
+management, webhook setup for real-time SmartMoving sync, and deployment (Firestore + AWS App
+Runner), are in [`server/README.md`](server/README.md).
 
 ```bash
 # 2. frontend (separate terminal)
@@ -81,9 +86,9 @@ actual dispatch.
 - [x] Long-distance multi-day jobs, multi-truck jobs, conflict detection
 - [x] Role-based views (Admin / Dispatcher / Crew)
 - [x] SmartMoving one-way sync: webhook receiver + polling fallback, backend + UI
-- [x] Shared persistence: SQLite database on the backend (trucks/drivers/jobs), served over a REST
-      API — the scheduler is now a thin client with no local/offline storage, so multiple devices
-      pointed at the same backend share one live board
+- [x] Shared persistence: Firestore database on the backend (trucks/drivers/jobs), served over a
+      REST API — the scheduler is now a thin client with no local/offline storage, so multiple
+      devices pointed at the same backend share one live board
 - [x] Frontend rewritten from a single HTML/JS file into a React (Vite) app in `frontend/` — same
       features, ported 1:1 into components; build verified and every view smoke-tested against the
       real backend
@@ -96,8 +101,9 @@ actual dispatch.
       third-party email service — see `server/README.md` "Login & accounts" for setup. First admin
       account bootstraps from `.env`.
 - [ ] Live test of the sync against a real SmartMoving account
-- [ ] Real hosting for the backend (needed for webhooks — they require a public URL — and for
-      multi-device use outside one machine) and a static host for the built `frontend/`
+- [x] Real hosting for the backend and frontend: Firestore (data) + AWS App Runner (backend API
+      and the built frontend, served from one container) — see [`server/README.md`](server/README.md)
+      "AWS deployment"
 - [ ] Push job/schedule changes back to SmartMoving — currently blocked; their public API has no
       write endpoint for job date/time (see `server/README.md`)
 - [ ] Manual browser click-through test of the React frontend (drag-and-drop, forms) — build and

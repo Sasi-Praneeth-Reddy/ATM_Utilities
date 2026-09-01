@@ -22,6 +22,7 @@
  */
 
 const { smartMovingIntDateToIso, utcIsoToHHMM, hoursBetween, OPPORTUNITY_STATUS } = require('./mapJobs');
+const { classifyJob } = require('./jobTypeInference');
 
 const OPPORTUNITY_TYPE = { 0: 'Local', 1: 'Intrastate', 2: 'Interstate' };
 
@@ -54,7 +55,11 @@ function hourDecimalToHHMM(h) {
 function mapOpportunityToJobs(opportunity, premiumJobsById = {}) {
   const jobs = opportunity.jobs || [];
   const inferredType = opportunityTypeToJobType(opportunity.opportunityType);
-  const type = inferredType || 'local';
+  // `opportunityType` is the one authoritative long-distance flag SmartMoving actually exposes
+  // (see file header) — trusted as-is when present. When it's absent/unrecognized (null), fall
+  // through to jobTypeInference.js's mileage/address check per job below rather than defaulting
+  // straight to 'local', so a job on an opportunity with no usable type code can still be caught
+  // by real distance the same way every other ingestion path is (2026-08-28).
   const tripInfo = opportunity.tripInfo;
   const pickupDate = tripInfo && tripInfo.confirmedPickupDate ? smartMovingIntDateToIso(tripInfo.confirmedPickupDate) : null;
   const deliveryDate = tripInfo && tripInfo.confirmedDeliveryDate ? smartMovingIntDateToIso(tripInfo.confirmedDeliveryDate) : null;
@@ -67,6 +72,17 @@ function mapOpportunityToJobs(opportunity, premiumJobsById = {}) {
     const addresses = job.jobAddresses || [];
     const origin = addresses[0] || '';
     const destination = addresses.length > 1 ? addresses[addresses.length - 1] : '';
+
+    // `addresses` (job.jobAddresses) are plain strings, not structured objects — same shape
+    // stateFromAddress/zipFromAddress in jobTypeInference.js already expect. `labelSaysLongDistance`
+    // passes the opportunity's own authoritative type through; a per-job mileage/state check still
+    // runs on top of it (see this function's own comment above on why: it can only ever ADD
+    // long-distance jobs jobTypeInference.js's classifyJob wouldn't otherwise have caught, never
+    // remove one opportunityType already confirmed).
+    const { type, serviceCategory, miles } = classifyJob({
+      originAddress: origin, destinationAddress: destination,
+      labelSaysLongDistance: inferredType === 'long_distance',
+    });
 
     let date = smartMovingIntDateToIso(job.jobDate) || smartMovingIntDateToIso(opportunity.serviceDate);
     let endDate = date;
@@ -96,7 +112,8 @@ function mapOpportunityToJobs(opportunity, premiumJobsById = {}) {
       truckIds: [],
       trucksNeeded: 1,
       status: 'scheduled',
-      miles: undefined,
+      miles,
+      serviceCategory,
       source: 'smartmoving',
       smartMovingStatus,
       smartMovingStatusCode,

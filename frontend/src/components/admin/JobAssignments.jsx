@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { fmtRange, hourToLabel, timeToHour } from '../../utils/dates';
-import { jobTrucks, jobTruckIds, jobTrucksNeeded } from '../../utils/jobs';
+import { jobTrucks, jobTruckIds, jobTrucksNeeded, driversBusyForJob } from '../../utils/jobs';
 import { SmBadge, TruckBadge } from '../board/JobVisuals';
 
 /** Collapsed-by-default multi-select for a long-distance job's assigned trucks — with the real
@@ -60,14 +60,39 @@ function TruckMultiSelect({ job, trucks, onToggleJobTruck }) {
   );
 }
 
-export default function JobAssignments({ trucks, drivers, jobs, conflictIds, onSetJobSingleTruck, onToggleJobTruck, onUpdateJobField, onAddExtraTruck }) {
+/** One "Driver:" dropdown for one truck on one job — a truck can carry a different driver on
+ * every job it's booked for (see db.js's file header), so this is keyed on the (job, truck) pair
+ * rather than the truck alone. */
+function TruckDriverPicker({ job, truck, drivers, jobs, onSetJobTruckDriver }) {
+  const driverId = (job.truckDrivers || {})[truck.id] || '';
+  // Hides anyone already driving on another job whose dates AND times overlap this one — see
+  // driversBusyForJob's doc comment in utils/jobs.js. Whoever's already picked for THIS pairing
+  // always stays in the list, so the select never shows a value that isn't one of its options.
+  const busy = driversBusyForJob(jobs, job, job.id);
+  const options = drivers.filter((d) => d.id === driverId || !busy.has(d.id));
+  return (
+    <label className="truck-driver-picker">
+      {truck.name} driver:{' '}
+      <select
+        value={driverId}
+        onChange={(e) => onSetJobTruckDriver(job.id, truck.id, e.target.value || null)}
+      >
+        <option value="">— No driver —</option>
+        {options.map((d) => <option value={d.id} key={d.id}>{d.name}</option>)}
+      </select>
+    </label>
+  );
+}
+
+export default function JobAssignments({ trucks, drivers, jobs, conflictIds, onSetJobSingleTruck, onToggleJobTruck, onUpdateJobField, onAddExtraTruck, onSetJobTruckDriver }) {
   const sorted = [...jobs].sort((a, b) => a.date.localeCompare(b.date));
 
   return (
     <div>
       {sorted.map((j) => {
         const ts = jobTrucks(trucks, j);
-        const driverNames = ts.map((t) => (t.driverId ? drivers.find((d) => d.id === t.driverId)?.name : null)).filter(Boolean);
+        const truckDrivers = j.truckDrivers || {};
+        const driverNames = ts.map((t) => (truckDrivers[t.id] ? drivers.find((d) => d.id === truckDrivers[t.id])?.name : null)).filter(Boolean);
         const conflict = conflictIds.has(j.id);
         const multiCapable = j.type === 'long_distance';
 
@@ -98,6 +123,13 @@ export default function JobAssignments({ trucks, drivers, jobs, conflictIds, onS
                     />
                     {' '}<TruckBadge job={j} />
                   </div>
+                  {ts.length > 0 && (
+                    <div className="truck-driver-list">
+                      {ts.map((t) => (
+                        <TruckDriverPicker key={t.id} job={j} truck={t} drivers={drivers} jobs={jobs} onSetJobTruckDriver={onSetJobTruckDriver} />
+                      ))}
+                    </div>
+                  )}
                 </>
               ) : (
                 <>
@@ -105,6 +137,11 @@ export default function JobAssignments({ trucks, drivers, jobs, conflictIds, onS
                     <option value="">— Unassigned —</option>
                     {trucks.map((t) => <option value={t.id} key={t.id}>{t.name}</option>)}
                   </select>
+                  {ts.length > 0 && (
+                    <div className="truck-driver-list">
+                      <TruckDriverPicker job={j} truck={ts[0]} drivers={drivers} jobs={jobs} onSetJobTruckDriver={onSetJobTruckDriver} />
+                    </div>
+                  )}
                   {jobTruckIds(j).length > 0 && (() => {
                     const assignedIds = new Set(jobTruckIds(j));
                     const available = trucks.filter((t) => !assignedIds.has(t.id));
