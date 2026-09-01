@@ -9,6 +9,7 @@ import DayPrintTimeline from './DayPrintTimeline';
 import JobSearch from './JobSearch';
 import { useDragAutoScroll } from '../../hooks/useDragAutoScroll';
 import { todayStr, addDays } from '../../utils/dates';
+import { isTransitOnlyDay } from '../../utils/jobs';
 
 // Both print sheets are always in the DOM (hidden on screen) so printing never has to wait on a
 // React re-render. Which one shows up on paper is decided by a plain DOM class toggle right before
@@ -94,8 +95,7 @@ function printSheet(id, orientation = 'portrait', truckCount) {
 // before printSheet() in the same handler — same "no state, no race" reasoning as printSheet()'s
 // own comment above.
 function transitOnlyJobCount(jobs, date) {
-  return jobs.filter((j) => j.type === 'long_distance' && j.endDate && j.endDate !== j.date
-    && date > j.date && date < j.endDate).length;
+  return jobs.filter((j) => isTransitOnlyDay(j, date)).length;
 }
 
 export default function BoardTab({
@@ -146,6 +146,21 @@ export default function BoardTab({
   // stay correct regardless of which filter is active — including "Conflicts", which naturally keeps
   // BOTH sides of a conflicting pair (local-local, LD-LD, or mixed) since conflictIds already spans
   // every type.
+  // Day view only — a long-distance job spans its ENTIRE date range on a truck's row (jobActiveOn,
+  // utils/dates.js, has no notion of "in transit" vs. "actually working today"), and getConflicts
+  // (utils/jobs.js) treats that whole span as fully busy too, so a multi-week move can flag a
+  // conflict on every truck row it merely passes through. Added 2026-09-01 at the user's request
+  // ("hide the multi day jobs that are in transit which are making many conflicts") — reuses the
+  // exact isTransitOnlyDay definition DayPrintTimeline.jsx already established for the printed
+  // board (see utils/jobs.js), so a job that's already invisible on a printout is now optionally
+  // invisible on the live board too, for the same reason: nothing actionable happens on that truck
+  // that day. Defaults to OFF (existing behavior unchanged) since this hides real jobs from the
+  // view — a dispatcher opts in rather than something disappearing on them unannounced. Persists
+  // only for this browser tab's session (plain useState, not written to Firestore or localStorage)
+  // since it's a personal viewing preference, not shared board state.
+  const [hideInTransit, setHideInTransit] = useState(false);
+  const transitHiddenCount = boardMode === 'day' ? transitOnlyJobCount(jobs, boardDate) : 0;
+
   const [monthFilter, setMonthFilter] = useState('all');
   const monthFilteredJobs = useMemo(() => {
     if (monthFilter === 'local') return jobs.filter((j) => j.type !== 'long_distance');
@@ -185,6 +200,14 @@ export default function BoardTab({
               <input type="date" value={boardDate} onChange={(e) => setBoardDate(e.target.value)} />
               <button className="btn secondary" onClick={() => setBoardDate(addDays(boardDate, 1))} title="Next day">›</button>
               <button className="btn secondary" onClick={() => setBoardDate(todayStr())} title="Jump to today — the same date the now-line marks on the timeline">Today</button>
+              <button
+                className={`btn secondary ${hideInTransit ? 'active' : ''}`}
+                onClick={() => setHideInTransit((v) => !v)}
+                title="Hide long-distance jobs on days they're only in transit (not the pickup or delivery day) — reduces conflict clutter from a move that's just passing through a truck's schedule."
+              >
+                {hideInTransit ? 'In-transit hidden' : 'Hide in-transit'}
+                {hideInTransit && transitHiddenCount > 0 && <span className="oa-count-badge">{transitHiddenCount}</span>}
+              </button>
               <button className="btn secondary" onClick={() => printSheet('day-print-list')} title="Print a plain text list of the day's jobs">🖨 Print List</button>
               <button
                 className="btn secondary"
@@ -239,6 +262,11 @@ export default function BoardTab({
 
       {boardMode === 'day' && (
         <>
+          {hideInTransit && transitHiddenCount > 0 && (
+            <div className="month-filter-note">
+              Hiding {transitHiddenCount} long-distance job{transitHiddenCount === 1 ? '' : 's'} in transit today (not the pickup or delivery day).
+            </div>
+          )}
           <DayBoard
             date={boardDate}
             trucks={trucks}
@@ -247,6 +275,7 @@ export default function BoardTab({
             role={role}
             conflictIds={conflictIds}
             conflicts={conflicts}
+            hideInTransit={hideInTransit}
             onUnassignJob={onUnassignJob}
             onAddTruckToJob={onAddTruckToJob}
             onRemoveTruck={onRemoveTruck}

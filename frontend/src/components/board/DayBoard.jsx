@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { jobActiveOn, hourToLabel, todayStr } from '../../utils/dates';
-import { jobTruckIds, statusClass, statusLabel, groupByOpportunity, deriveTruckStatus, jobTruckDriver, overlappingClusterFor } from '../../utils/jobs';
+import { jobTruckIds, statusClass, statusLabel, groupByOpportunity, deriveTruckStatus, jobTruckDriver, overlappingClusterFor, isTransitOnlyDay } from '../../utils/jobs';
 import { JobChip, GroupedJobChip, JobBlock } from './JobVisuals';
 import JobEditModal from './JobEditModal';
 import JobConflictChooser from './JobConflictChooser';
@@ -32,6 +32,7 @@ function hourLabelList() {
 
 export default function DayBoard({
   date, trucks, drivers, jobs, role, conflictIds, conflicts,
+  hideInTransit,
   onUnassignJob, onAddTruckToJob, onRemoveTruck, onAddExtraTruck, onSetJobTruckDriver, onUpdateJobFields, onCreateJob,
   onDeleteJob,
   highlightedJobId,
@@ -290,7 +291,16 @@ export default function DayBoard({
           </div>
 
           {trucks.map((t) => {
-            const tjobs = jobs.filter((j) => jobTruckIds(j).includes(t.id) && jobActiveOn(j, date));
+            // hideInTransit (BoardTab.jsx's "Hide in-transit" toggle, added 2026-09-01) additionally
+            // drops a long-distance job from a truck's row on a day it's strictly in transit — see
+            // isTransitOnlyDay's doc comment (utils/jobs.js). Off by default so a truck's row still
+            // spans a move's full trip via jobActiveOn, same as always; when it's on, this also pulls
+            // the job out of `hasConflict` below for that day, since a job that isn't shown here
+            // shouldn't flag this row as conflicted either — global conflict counts elsewhere
+            // (Overlapped Alerts, the month view's Conflicts filter) are untouched, same as how
+            // DayPrintTimeline.jsx's own transit-day exclusion only narrows what THAT view shows.
+            const tjobs = jobs.filter((j) => jobTruckIds(j).includes(t.id) && jobActiveOn(j, date)
+              && !(hideInTransit && isTransitOnlyDay(j, date)));
             // Driver is assigned per job now, not permanently to the truck (see db.js's file
             // header) — shows whichever active job's driver is set first; two active jobs on the
             // same truck the same day is itself a conflict the dispatcher needs to resolve.

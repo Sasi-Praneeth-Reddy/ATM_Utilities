@@ -2,7 +2,7 @@ import { Fragment } from 'react';
 import { jobActiveOn, hourToLabel, timeToHour } from '../../utils/dates';
 import {
   jobTruckIds, jobTrucksNeeded, getJobDriverColor, jobTruckDriver, overlappingClusterFor, conflictIdsFrom,
-  serviceCategoryClass, serviceCategoryLabels,
+  serviceCategoryClass, serviceCategoryLabels, isTransitOnlyDay,
 } from '../../utils/jobs';
 
 // Deliberately NOT the same 0-24 span DayBoard.jsx's on-screen timeline uses — narrowed to
@@ -20,20 +20,15 @@ function hourLabelList() {
   return hours;
 }
 
-// A long-distance job only has actionable truck work on the day it actually starts (job.date —
-// loading/departure, with an origin address and a crew) or the day it actually ends (job.endDate —
-// delivery, with a destination address) — every day strictly BETWEEN those two is just "in
-// transit," nothing to print for a worker (no address stop, no crew called, nothing scheduled that
-// day). Narrowed 2026-08-27 at the user's request from an earlier version that excluded every
-// multi-day job outright: now only those in-between transit days are skipped (both from the truck
-// bars and the Unassigned table below) — the start day and end day both print normally, with
-// Departs/Arrives detail text (see detailBits below) so it's clear which one a given day is. A
-// same-day long-distance job (date === endDate) is never affected either way. BoardTab.jsx's
-// "Print Board" button still warns via window.confirm first if any job would be skipped on the
-// date being printed, so nobody is surprised a job they expected to see isn't there.
-function isTransitOnlyDay(j, date) {
-  return j.type === 'long_distance' && j.endDate && j.endDate !== j.date && date > j.date && date < j.endDate;
-}
+// isTransitOnlyDay moved to utils/jobs.js (2026-09-01) so DayBoard.jsx's interactive "hide
+// in-transit jobs" toggle shares the exact same definition instead of a second copy that could
+// drift from this one — see that file for the full doc comment. Narrowed 2026-08-27 at the user's
+// request from an earlier version that excluded every multi-day job outright: only the in-between
+// transit days are skipped here (both from the truck bars and the Unassigned table below) — the
+// start day and end day both print normally, with Departs/Arrives detail text (see detailBits
+// below) so it's clear which one a given day is. BoardTab.jsx's "Print Board" button still warns
+// via window.confirm first if any job would be skipped on the date being printed, so nobody is
+// surprised a job they expected to see isn't there.
 
 function clampFrac(x) {
   return Math.max(0, Math.min(1, x));

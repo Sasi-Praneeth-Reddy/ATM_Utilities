@@ -132,6 +132,19 @@ function sameDayTimeOverlap(a, b) {
   return as < be && bs < ae;
 }
 
+/** A long-distance job only has actionable truck work on the day it actually starts (job.date —
+ * loading/departure) or the day it actually ends (job.endDate — delivery); every day strictly
+ * BETWEEN those two is just "in transit," nothing to do that day. Originally written for
+ * DayPrintTimeline.jsx's printed board (2026-08-27, at the user's request, narrowed from an
+ * earlier version that excluded a multi-day job outright) and BoardTab.jsx's print-confirm count;
+ * promoted here 2026-09-01 so DayBoard.jsx's interactive "hide in-transit jobs" toggle uses the
+ * exact same definition instead of a second copy that could quietly drift from the print one. A
+ * same-day long-distance job (date === endDate) is never "in transit" by this definition — only a
+ * real multi-day span with a day strictly between its two ends qualifies. */
+export function isTransitOnlyDay(j, date) {
+  return j.type === 'long_distance' && j.endDate && j.endDate !== j.date && date > j.date && date < j.endDate;
+}
+
 /** Driver ids already assigned (on ANY truck) to some OTHER job active on this date AND whose time
  * window overlaps `targetJob`'s — used to keep a driver picker from offering someone who's already
  * booked elsewhere at that time. A driver assigned 8:00-12:00 is only busy for jobs that overlap
