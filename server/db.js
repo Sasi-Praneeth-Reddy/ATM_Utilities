@@ -54,6 +54,20 @@ const jobsCol = fs.collection('jobs');
 const usersCol = fs.collection('users');
 const allowedExternalEmailsCol = fs.collection('allowedExternalEmails');
 
+/** Each job's own audit trail lives as a `history` SUBcollection under that job's own document —
+ * `jobs/{jobId}/history/{entryId}` — rather than one flat collection with a `jobId` field to filter
+ * by. Keyed off the job's own id specifically so browsing it in the Firebase console is just
+ * "open this job, open its history": no filtering, no separate lookup, and every job's trail lives
+ * right next to the job it's about. Firestore subcollections are independent documents under the
+ * hood, not nested data on the parent — deleting the parent job doc (deleteJob above) does NOT
+ * delete this subcollection, which is exactly what's wanted here: a deleted job's history (including
+ * the 'delete' entry itself, logged with the job's last known state — see logJobChange) stays
+ * intact and still reachable at this same path even after the job itself is gone. See logJobChange's
+ * own doc comment for what's actually written here and why. */
+function jobHistoryCol(jobId) {
+  return jobsCol.doc(jobId).collection('history');
+}
+
 /* ---------- Sample data (used to seed an empty database on first run) ---------- */
 const SAMPLE_TRUCKS = [
   { id: 'T1', name: 'Truck 1', size: '26ft Box', capacity: '12,000 lbs', status: 'available', homeBase: 'Denver, CO' },
@@ -839,6 +853,48 @@ async function deleteJob(id) {
   return getState();
 }
 
+/**
+ * Records one human-made change to a job into that job's own `history` subcollection (see
+ * jobHistoryCol above) — added 2026-09-02 at the user's request ("can we make a log if the job is
+ * updated by someone... no one has to access it only me", then "make history log of primary id,
+ * the job id, and make the collection for that id"). Deliberately NOT surfaced anywhere in this
+ * app's own API or UI — by design, the only way to read this back is directly in the Firebase
+ * console's Firestore data viewer (open the job, open its `history`), which is enough given nobody
+ * but the account owner needs to see it; that also means there's no new role/permission surface to
+ * get wrong. Only ever called from server.js's job routes, right where the logged-in
+ * dispatcher/admin's identity (from getCurrentUser) is already in scope for the requireRole check
+ * those routes already do — automated SmartMoving sync writes (the REST poll, the calendar sync,
+ * the Smart Insights report sync) never call this, since those aren't "someone" doing anything; see
+ * upsertSmartMovingJob/mergeCalendarDataOntoExistingJob/upsertSmartInsightsJob above, none of which
+ * touch this collection.
+ *
+ * `changes` is a plain object shaped `{ field: { from, to } }` for an update (see server.js's
+ * diffJobFields — only the fields that actually differ) or set-truck-driver (a single entry), or
+ * `{ job: <full snapshot> }` for a create/delete, where there's no "before" or "after" to diff
+ * against. Failure here is swallowed (logged to the server console, not thrown) rather than ever
+ * blocking or rolling back the real job mutation that triggered it — losing one audit entry to a
+ * transient Firestore hiccup is far better than losing a dispatcher's actual change over it.
+ */
+async function logJobChange({ jobId, action, actor, changes }) {
+  try {
+    await jobHistoryCol(jobId).add({
+      // Redundant with the doc's own parent path (jobs/{jobId}/history/...) but kept as a real
+      // field too — harmless, and it means this subcollection could still be queried across EVERY
+      // job at once later via Firestore's collectionGroup('history') without also having to parse
+      // jobId back out of each doc's path.
+      jobId,
+      action, // 'create' | 'update' | 'delete' | 'set-truck-driver'
+      actorId: actor?.id || null,
+      actorEmail: actor?.email || null,
+      actorRole: actor?.role || null,
+      changes: changes || null,
+      at: FieldValue.serverTimestamp(),
+    });
+  } catch (err) {
+    console.error(`[jobAuditLog] failed to record "${action}" on job ${jobId}:`, err);
+  }
+}
+
 /** Seeds sample data if the database is completely empty (checked via the trucks collection alone,
     same as the old SQLite version's truckCount check). Call this once at startup, awaited, before
     server.listen() — see server.js. An existing database (with real dispatcher work in it) is
@@ -879,6 +935,7 @@ module.exports = {
   createDriver, updateDriver, deleteDriver,
   createJob, updateJob, deleteJob, setJobTrucks, setJobTruckDriver, upsertSmartMovingJob,
   upsertSmartInsightsJob, findCounterpartJobId, fillAssignmentIfEmpty, mergeCalendarDataOntoExistingJob,
+  logJobChange,
   resetToSampleData, clearJobs,
   createUser, listUsers, getUserByEmail, getUserById, updateUserRole, deleteUser, countAdmins,
   setUserPassword, setUserOtp, clearUserOtp,

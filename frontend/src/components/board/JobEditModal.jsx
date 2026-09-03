@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { jobTruckIds, driversBusyOnDate } from '../../utils/jobs';
 
 /**
  * Click-to-edit modal for a job — opened by clicking a job block on the day-view timeline (see
@@ -24,8 +25,23 @@ import { useEffect, useState } from 'react';
  * dispatcher who picked the wrong one of two overlapping jobs isn't stuck re-clicking the board.
  * Plain edits (unassigned tray chip, a job with no overlap) never pass it, so nothing changes for
  * the common case.
+ *
+ * Trucks & drivers (added 2026-09-02 at the user's request) apply IMMEDIATELY, the moment a truck
+ * is added/removed or a driver is picked — NOT batched into the rest of the form and only committed
+ * on Save. This deliberately matches how truck/driver assignment already works everywhere else in
+ * the app (dragging a job onto a truck's row, JobBlock's own hover "+truck"/"+driver" controls in
+ * JobVisuals.jsx) — instant, not part of a Save/Cancel cycle — so Cancel here still discards any
+ * unsaved customer/date/address edits without also needing to explain or implement rolling back a
+ * truck assignment that already round-tripped to the server. `job` is always the live object from
+ * DayBoard.jsx's `jobs` array (re-found by id on every render, not a frozen snapshot taken when the
+ * modal opened), so the truck/driver list here stays in sync with each action's result the same way
+ * JobBlock's own controls do.
  */
-export default function JobEditModal({ job, onSave, onClose, onDelete, onBack }) {
+export default function JobEditModal({
+  job, trucks = [], drivers = [], jobs = [],
+  onAddExtraTruck, onRemoveTruck, onSetJobTruckDriver,
+  onSave, onClose, onDelete, onBack,
+}) {
   const isLd = job.type === 'long_distance';
   const [date, setDate] = useState(job.date || '');
   const [endDate, setEndDate] = useState(job.endDate || job.date || '');
@@ -37,6 +53,26 @@ export default function JobEditModal({ job, onSave, onClose, onDelete, onBack })
   const [trucksNeeded, setTrucksNeeded] = useState(job.trucksNeeded ?? 1);
   const [crewSize, setCrewSize] = useState(job.crewSize ?? '');
   const [error, setError] = useState('');
+
+  // Trucks currently on this job (in the order they were assigned) and every other truck still
+  // available to add — same assigned/available split AddTruckControl (JobVisuals.jsx) uses for the
+  // on-block "+truck" picker, just rendered as a form section here instead of a hover-reveal corner
+  // badge (this modal isn't positioned inside a job block, so that CSS wouldn't apply).
+  const assignedTruckIds = jobTruckIds(job);
+  const assignedTrucks = assignedTruckIds.map((id) => trucks.find((t) => t.id === id)).filter(Boolean);
+  const availableTrucks = trucks.filter((t) => !assignedTruckIds.includes(t.id));
+  // Driver ids already busy on some OTHER job active on this job's own date, whose time window
+  // overlaps this job's — same driversBusyOnDate call AddDriverControl (JobVisuals.jsx) uses, just
+  // computed once here for the whole job rather than per-truck (a driver busy elsewhere is equally
+  // unavailable no matter which of this job's trucks you're picking for). Uses job.date (this job's
+  // own start date) rather than a currently-viewed board date, since this modal isn't tied to
+  // whichever day happens to be showing on the board — a driver conflict should be checked against
+  // the day this job actually runs.
+  const busyDriverIds = driversBusyOnDate(jobs, job.date, job.id, job);
+  function driverOptionsFor(truckId) {
+    const current = (job.truckDrivers || {})[truckId] || '';
+    return drivers.filter((d) => d.id === current || !busyDriverIds.has(d.id));
+  }
 
   useEffect(() => {
     function onKeyDown(e) {
@@ -162,6 +198,61 @@ export default function JobEditModal({ job, onSave, onClose, onDelete, onBack })
           Trucks needed
           <input type="number" min="1" step="1" value={trucksNeeded} onChange={(e) => setTrucksNeeded(e.target.value)} />
         </label>
+
+        {/* Live-apply — see this component's doc comment above for why these aren't part of the
+            Save/Cancel form state like every field above. Rendered at all only when the caller
+            passed the truck/driver props (DayBoard.jsx always does); a hypothetical future caller
+            that doesn't wire them up just gets the plain field-editing modal as before. */}
+        {(onAddExtraTruck || onRemoveTruck || onSetJobTruckDriver) && (
+          <div className="job-edit-field job-edit-trucks">
+            <span>Trucks &amp; drivers</span>
+            {assignedTrucks.length ? (
+              <div className="job-edit-truck-list">
+                {assignedTrucks.map((t) => (
+                  <div className="job-edit-truck-row" key={t.id}>
+                    <span className="job-edit-truck-name">{t.name}</span>
+                    <select
+                      className="job-edit-driver-select"
+                      value={(job.truckDrivers || {})[t.id] || ''}
+                      title="Set the driver for this truck on this job"
+                      onChange={(e) => onSetJobTruckDriver && onSetJobTruckDriver(job.id, t.id, e.target.value || null)}
+                      disabled={!onSetJobTruckDriver || !drivers.length}
+                    >
+                      <option value="">No driver</option>
+                      {driverOptionsFor(t.id).map((d) => <option value={d.id} key={d.id}>{d.name}</option>)}
+                    </select>
+                    {onRemoveTruck && (
+                      <button
+                        type="button"
+                        className="job-edit-truck-remove"
+                        title={`Remove ${t.name} from this job`}
+                        onClick={() => onRemoveTruck(job.id, t.id)}
+                      >×</button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="job-edit-truck-empty">No trucks assigned yet.</div>
+            )}
+            {onAddExtraTruck && availableTrucks.length > 0 && (
+              <select
+                className="job-edit-add-truck"
+                value=""
+                title="Load doesn't fit in one truck? Add another."
+                onChange={(e) => {
+                  const truckId = e.target.value;
+                  if (truckId) onAddExtraTruck(job.id, truckId);
+                  e.target.value = '';
+                }}
+              >
+                <option value="">+ Add truck</option>
+                {availableTrucks.map((t) => <option value={t.id} key={t.id}>{t.name}</option>)}
+              </select>
+            )}
+          </div>
+        )}
+
         <label className="job-edit-field">
           Crew size
           <input type="number" min="1" step="1" value={crewSize} placeholder="optional" onChange={(e) => setCrewSize(e.target.value)} />

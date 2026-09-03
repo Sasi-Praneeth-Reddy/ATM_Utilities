@@ -8,8 +8,8 @@ import DayPrintSheet from './DayPrintSheet';
 import DayPrintTimeline from './DayPrintTimeline';
 import JobSearch from './JobSearch';
 import { useDragAutoScroll } from '../../hooks/useDragAutoScroll';
-import { todayStr, addDays } from '../../utils/dates';
-import { isTransitOnlyDay } from '../../utils/jobs';
+import { todayStr, addDays, jobActiveOn } from '../../utils/dates';
+import { isTransitOnlyDay, jobTruckIds, overlappingClusterFor, conflictIdsFrom } from '../../utils/jobs';
 
 // Both print sheets are always in the DOM (hidden on screen) so printing never has to wait on a
 // React re-render. Which one shows up on paper is decided by a plain DOM class toggle right before
@@ -54,7 +54,31 @@ function setPrintOrientation(orientation) {
 const PAGE_HEIGHT_IN = 8.5; // US Letter landscape short side (11in x 8.5in)
 const MARGIN_IN = 10 / 25.4; // matches the 10mm landscape @page margin above
 const PX_PER_IN = 96; // CSS's fixed reference pixel density — independent of actual print DPI
-const CONTENT_HEIGHT_PX = (PAGE_HEIGHT_IN - MARGIN_IN * 2) * PX_PER_IN;
+// .print-sheet.print-active{padding:20px} (styles.css, @media print) adds its OWN 20px padding on
+// every side of the sheet, INSIDE the @page margin already subtracted below — found 2026-09-02
+// while chasing a lingering, almost-empty second page after the conflicts/unassigned side-panel
+// restructure had already fixed the big overflow. That restructure closed the large gap (the
+// stacked conflict rows/Unassigned table that were never budgeted for at all), but this 40px
+// top+bottom padding was ALSO never subtracted here, even before that fix — it just never mattered
+// on its own while a much bigger overflow was already forcing a 2nd page regardless. Once the big
+// gap closed, this 40px alone was enough to still push a normal-size page's total rendered height
+// (header + table + footer, or header + side panel + footer) just past one page's worth of room —
+// small enough that nothing visible actually lands on that forced 2nd page, which is exactly the
+// "why is there a 2nd page with nothing on it" symptom this fixes.
+const SHEET_PADDING_PX = 20;
+// Some browsers' print dialogs (Chrome/Edge's "Headers and footers" option, on by default in some
+// setups and not always easy to find/disable — see the 2026-09-03 report of this from a user on
+// Edge) print their OWN date/URL/title/page-number strip at the top and bottom of every page,
+// reserving real vertical space that lives outside this app's CSS entirely — there's no DOM
+// element, no @page rule, nothing this file can measure or control for it. Found 2026-09-03 from a
+// printout where the app's own content fit ENTIRELY on page 1 (every truck row, side panel, all of
+// it) and page 2 was completely blank except that browser-added strip — proof the shortfall wasn't
+// this app's math being wrong, just not knowing about a chunk of space it doesn't own. This buffer
+// is a defensive estimate (roughly half an inch) of how much room that strip typically eats, so a
+// printout stays on one page whether or not any given user's browser/settings happen to add one —
+// worst case it shrinks text slightly more than strictly necessary when the setting is off.
+const BROWSER_HEADER_FOOTER_BUFFER_PX = 48;
+const CONTENT_HEIGHT_PX = (PAGE_HEIGHT_IN - MARGIN_IN * 2) * PX_PER_IN - SHEET_PADDING_PX * 2 - BROWSER_HEADER_FOOTER_BUFFER_PX;
 // .print-header + .print-footer + the hours <thead> row, at scale 1 — small relative to the page,
 // so (unlike the truck rows) not worth also shrinking via --pt-scale just to claw back a few more
 // px of headroom.
@@ -72,14 +96,91 @@ function truckPrintScale(truckCount) {
   return Math.max(MIN_TRUCK_PRINT_SCALE, Math.min(1, scale));
 }
 
-function printSheet(id, orientation = 'portrait', truckCount) {
+// Conflicts and Unassigned Jobs used to print as extra rows/blocks stacked BELOW the truck grid —
+// an inline conflict panel under every truck that had one, then a whole separate Unassigned table
+// after the whole grid — and neither one was ever budgeted into truckPrintScale's page-fit math
+// above, which only ever looked at truck count. A day with a handful of conflicts or several
+// unassigned jobs routinely pushed the printout onto a second page even though the truck grid
+// alone fit fine. Fixed 2026-09-02 at the user's request by moving both into a side column BESIDE
+// the grid instead (see DayPrintTimeline.jsx's `.pt-side-panel` and its own restructure comment) —
+// a column adds WIDTH, never height, so it can never be the reason the page spills onto a second
+// sheet. That side column gets its own independent scale (`--pt-side-scale`, separate from the
+// truck grid's `--pt-scale`) sized from how much conflict/unassigned content there actually is
+// today, computed here.
+//
+// This mirrors — deliberately, not by import — the exact grouping DayPrintTimeline.jsx's own render
+// does (activeJobs/conflictsToday/conflictIdsToday/per-truck overlappingClusterFor clusters), same
+// "duplicated on purpose" tradeoff transitOnlyJobCount above already makes: the scale has to be
+// known and set as a CSS var on the print-sheet root BEFORE window.print() is called, which is
+// necessarily before DayPrintTimeline ever renders with today's data, so there's no DOM measurement
+// available to read this from — see printSheet()'s own comment for why this is arithmetic, not a
+// measurement, throughout this file.
+function countPrintSideContent(jobs, trucks, date, conflicts) {
+  const activeJobs = jobs.filter((j) => jobActiveOn(j, date) && !isTransitOnlyDay(j, date));
+  const activeJobIds = new Set(activeJobs.map((j) => j.id));
+  const conflictsToday = (conflicts || []).filter((c) => activeJobIds.has(c.a.id) && activeJobIds.has(c.b.id));
+  const conflictIdsToday = conflictIdsFrom(conflictsToday);
+
+  let conflictTruckCount = 0;
+  let conflictJobEntryCount = 0;
+  trucks.forEach((t) => {
+    const tjobs = activeJobs.filter((j) => jobTruckIds(j).includes(t.id));
+    const seen = new Set();
+    let truckHasConflict = false;
+    tjobs.forEach((j) => {
+      if (!conflictIdsToday.has(j.id) || seen.has(j.id)) return;
+      const cluster = overlappingClusterFor(conflictsToday, t.id, j);
+      cluster.forEach((cj) => seen.add(cj.id));
+      conflictJobEntryCount += cluster.length;
+      truckHasConflict = true;
+    });
+    if (truckHasConflict) conflictTruckCount += 1;
+  });
+
+  const unassignedCount = jobs.filter((j) => jobTruckIds(j).length === 0 && j.date === date).length;
+  return { conflictTruckCount, conflictJobEntryCount, unassignedCount };
+}
+
+// Per-entry height budgets for the side panel, at scale 1 — deliberately generous (biased toward
+// shrinking a bit more than strictly necessary) since a real conflict/unassigned entry can wrap to
+// 2 lines (name+time on one, the full origin -> destination address on another) and there's no DOM
+// to measure ahead of time — same reasoning as BASE_ROW_HEIGHT_PX above, just for the narrower
+// side column instead of a truck row.
+const SIDE_SECTION_HEADER_PX = 20; // "⚠ Conflicts Today" / "Unassigned Jobs" section title
+const SIDE_TRUCK_HEADER_PX = 18; // one per truck with a conflict, inside the Conflicts section
+const SIDE_CONFLICT_ENTRY_PX = 34; // one per job listed in a conflict cluster
+const SIDE_UNASSIGNED_ENTRY_PX = 30; // one per unassigned job
+// Side panel is secondary/reference detail, not the primary thing being handed to a crew — allowed
+// to shrink further than the truck grid's own MIN_TRUCK_PRINT_SCALE floor before anything would
+// need to be cut, since legibility matters less here than it does for the truck bars themselves.
+const MIN_SIDE_PRINT_SCALE = 0.45;
+
+// Independent from truckPrintScale — see countPrintSideContent's comment above for why the two
+// columns (truck grid vs. side panel) each get their own scale instead of sharing one, even though
+// both are sized against the exact same page content-height budget.
+function sidePanelPrintScale({ conflictTruckCount, conflictJobEntryCount, unassignedCount }) {
+  const availableForRows = CONTENT_HEIGHT_PX - HEADER_FOOTER_THEAD_PX - SAFETY_BUFFER_PX;
+  const conflictsNeeded = conflictJobEntryCount > 0
+    ? SIDE_SECTION_HEADER_PX + conflictTruckCount * SIDE_TRUCK_HEADER_PX + conflictJobEntryCount * SIDE_CONFLICT_ENTRY_PX
+    : 0;
+  const unassignedNeeded = unassignedCount > 0
+    ? SIDE_SECTION_HEADER_PX + unassignedCount * SIDE_UNASSIGNED_ENTRY_PX
+    : 0;
+  const needed = conflictsNeeded + unassignedNeeded;
+  if (needed <= 0) return 1;
+  const scale = availableForRows / needed;
+  return Math.max(MIN_SIDE_PRINT_SCALE, Math.min(1, scale));
+}
+
+function printSheet(id, orientation = 'portrait', truckCount, sideCounts) {
   document.querySelectorAll('.print-sheet').forEach((el) => el.classList.remove('print-active'));
   const el = document.getElementById(id);
   if (el) {
     el.classList.add('print-active');
-    // Only "Print Board" passes truckCount — "Print List" (the plain manifest) doesn't use
-    // --pt-scale at all, so setting it to 1 there is harmless, just unused.
+    // Only "Print Board" passes truckCount/sideCounts — "Print List" (the plain manifest) doesn't
+    // use --pt-scale/--pt-side-scale at all, so setting both to 1 there is harmless, just unused.
     el.style.setProperty('--pt-scale', String(truckCount != null ? truckPrintScale(truckCount) : 1));
+    el.style.setProperty('--pt-side-scale', String(sideCounts ? sidePanelPrintScale(sideCounts) : 1));
   }
   setPrintOrientation(orientation);
   window.print();
@@ -224,9 +325,14 @@ export default function BoardTab({
                     );
                     if (!ok) return;
                   }
-                  printSheet('day-print-timeline', 'landscape', trucks.length);
+                  // Conflicts/Unassigned Jobs print in their own side column, not stacked below the
+                  // grid — see countPrintSideContent/sidePanelPrintScale above and
+                  // DayPrintTimeline.jsx's restructure comment — so their own scale is computed here
+                  // from today's actual conflict/unassigned counts, independent of truck count.
+                  const sideCounts = countPrintSideContent(jobs, trucks, boardDate, conflicts);
+                  printSheet('day-print-timeline', 'landscape', trucks.length, sideCounts);
                 }}
-                title="Print the truck board as it looks on screen — colors, bars, trucks on the left, 6am-6pm, plus full details for any conflicting jobs. Every truck is fit onto one page, shrinking text only as much as the fleet size requires. Long-distance jobs print on their start and end day; days in between (in transit) are left off, and you'll be asked to confirm first if any would be skipped today."
+                title="Print the truck board as it looks on screen — colors, bars, trucks on the left, 6am-6pm — with Conflicts and Unassigned Jobs in their own column beside the calendar. Everything is fit onto one page, shrinking text only as much as the fleet size and side-panel content require. Long-distance jobs print on their start and end day; days in between (in transit) are left off, and you'll be asked to confirm first if any would be skipped today."
               >
                 🖨 Print Board
               </button>

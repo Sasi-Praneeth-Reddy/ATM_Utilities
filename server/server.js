@@ -298,6 +298,35 @@ function requireRole(user, roles) {
   if (!roles.includes(user.role)) { const err = new Error('Not allowed for your role'); err.status = 403; throw err; }
 }
 
+// Only ever used to build a job's audit-log entry (see db.js's logJobChange, called right after
+// each of the job routes below, at the user's request 2026-09-02) — a plain shallow old-vs-new diff
+// across every key either side has. `id` is skipped (it never changes — a different id is a
+// different job, not an update to this one). Object/array-valued fields (truckIds, truckDrivers)
+// are compared via JSON.stringify rather than by reference, since Firestore always hands back a
+// fresh object/array on every read — a reference-equality check would report every job as "changed"
+// on every single update regardless of whether anything real did. Fine to run on every human-driven
+// edit; this never runs on the sync paths' much higher write volume (and never should — see
+// logJobChange's own doc comment on why sync writes deliberately don't call it at all).
+function diffJobFields(before, after) {
+  const changes = {};
+  const keys = new Set([...Object.keys(before || {}), ...Object.keys(after || {})]);
+  keys.delete('id');
+  keys.forEach((key) => {
+    // Normalized to `?? null` up front, not just when recording the diff below — a field that's
+    // explicitly `null` on one side (every field docToJob returns is always present, even if the
+    // stored value is null) and simply absent/`undefined` on the other (e.g. a caller-supplied
+    // `after` object that only carries some keys) means the same thing here: "no value." Without
+    // this, those two would incorrectly diff as a change on every comparison involving an object
+    // that doesn't carry every field Firestore does.
+    const a = (before ? before[key] : undefined) ?? null;
+    const b = (after ? after[key] : undefined) ?? null;
+    const isObj = (v) => v !== null && typeof v === 'object';
+    const same = (isObj(a) || isObj(b)) ? JSON.stringify(a) === JSON.stringify(b) : a === b;
+    if (!same) changes[key] = { from: a, to: b };
+  });
+  return changes;
+}
+
 /* ---------- SmartMoving sync diagnostics (state kept for /api/health) ---------- */
 let lastPollAt = null;
 let lastPollError = null;
@@ -1218,6 +1247,9 @@ async function handleRequest(req, res) {
         source: 'placeholder',
         truckIds: [],
       });
+      // Audit log (see db.js's logJobChange) — a create has no "before" to diff against, so the
+      // whole new job is logged as-is rather than a field-by-field diff.
+      await db.logJobChange({ jobId: id, action: 'create', actor: currentUser, changes: { job } });
       sendJson(req, res, 201, { ...job, state: await db.getState() });
       return;
     }
@@ -1228,7 +1260,15 @@ async function handleRequest(req, res) {
       const body = await readJsonBody(req);
       const job = await db.getJob(m[1]);
       if (!job) { sendJson(req, res, 404, { error: 'Job not found' }); return; }
-      sendJson(req, res, 200, await db.updateJob(m[1], body));
+      const updatedJob = await db.updateJob(m[1], body);
+      // Audit log — diffed against the actual before/after job docs (not just the request body),
+      // so this also picks up side effects like a removed truck's driver assignment clearing along
+      // with it (see db.js's updateJob), not just the fields the caller explicitly sent.
+      const changes = diffJobFields(job, updatedJob);
+      if (Object.keys(changes).length) {
+        await db.logJobChange({ jobId: m[1], action: 'update', actor: currentUser, changes });
+      }
+      sendJson(req, res, 200, updatedJob);
       return;
     }
 
@@ -1238,6 +1278,9 @@ async function handleRequest(req, res) {
       requireRole(currentUser, ['admin', 'dispatcher']);
       const job = await db.getJob(m[1]);
       if (!job) { sendJson(req, res, 404, { error: 'Job not found' }); return; }
+      // Audit log BEFORE the delete — there's no "after" doc to read back once it's gone, so the
+      // full job as it existed right before deletion is what gets recorded.
+      await db.logJobChange({ jobId: m[1], action: 'delete', actor: currentUser, changes: { job } });
       sendJson(req, res, 200, await db.deleteJob(m[1]));
       return;
     }
@@ -1256,7 +1299,17 @@ async function handleRequest(req, res) {
         sendJson(req, res, 400, { error: 'truckId must be one of this job\'s assigned trucks' });
         return;
       }
-      sendJson(req, res, 200, await db.setJobTruckDriver(m[1], body.truckId, body.driverId || null));
+      const newDriverId = body.driverId || null;
+      const priorDriverId = (job.truckDrivers || {})[body.truckId] || null;
+      if (priorDriverId !== newDriverId) {
+        await db.logJobChange({
+          jobId: m[1],
+          action: 'set-truck-driver',
+          actor: currentUser,
+          changes: { [`truckDrivers.${body.truckId}`]: { from: priorDriverId, to: newDriverId } },
+        });
+      }
+      sendJson(req, res, 200, await db.setJobTruckDriver(m[1], body.truckId, newDriverId));
       return;
     }
 

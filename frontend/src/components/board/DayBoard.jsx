@@ -376,6 +376,7 @@ export default function DayBoard({
         truckId={chooserState.truckId}
         truckName={chooserState.truckName}
         drivers={drivers}
+        date={date}
         onPick={(jobId) => setEditingJobId(jobId)}
         onClose={() => setChooserState(null)}
       />
@@ -384,6 +385,12 @@ export default function DayBoard({
     {editingJob && (
       <JobEditModal
         job={editingJob}
+        trucks={trucks}
+        drivers={drivers}
+        jobs={jobs}
+        onAddExtraTruck={onAddExtraTruck}
+        onRemoveTruck={onRemoveTruck}
+        onSetJobTruckDriver={onSetJobTruckDriver}
         onSave={(fields) => { onUpdateJobFields(editingJob.id, fields); closeEditModal(); }}
         onClose={closeEditModal}
         onBack={chooserState ? () => setEditingJobId(null) : undefined}

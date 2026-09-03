@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { fmtRange } from '../../utils/dates';
+import { fmtRange, jobActiveOn } from '../../utils/dates';
 import { jobTruckDriver } from '../../utils/jobs';
 
 /**
@@ -14,29 +14,57 @@ import { jobTruckDriver } from '../../utils/jobs';
  *
  * Same overlay/modal shell as JobEditModal (.job-edit-overlay/.job-edit-modal) so it reads as part
  * of the same interaction, not a different kind of dialog.
+ *
+ * Two columns, added 2026-09-02 at the user's request — overlappingClusterFor's cluster is a
+ * TRANSITIVE closure of every pairwise date-range overlap on this truck, which for a run of
+ * long-distance jobs can chain together bookings a month apart that never actually run at the same
+ * time as each other, only as a shared middle job (see this cluster's own real example: a
+ * 2026-08-08 job and a 2026-09-04 job end up in the same list purely by both overlapping something
+ * in between). That's the correct set for "every job you might have meant by clicking here," but
+ * it's a lot to scan through when what a dispatcher usually wants is just "what's actually
+ * overlapping RIGHT NOW, today." So the full cluster still shows (left column, unchanged), and a
+ * second column narrows the SAME list down to only jobs active on `date` — the specific day
+ * DayBoard.jsx is currently showing when the click happened — using the same jobActiveOn check the
+ * rest of the board already filters a truck's row by. Picking from either column does the exact
+ * same thing (onPick(job.id)); the split is purely which subset is easier to scan, not two
+ * different actions.
  */
-export default function JobConflictChooser({ jobs, truckId, truckName, drivers, onPick, onClose }) {
+export default function JobConflictChooser({ jobs, truckId, truckName, drivers, date, onPick, onClose }) {
   useEffect(() => {
     function onKeyDown(e) { if (e.key === 'Escape') onClose(); }
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [onClose]);
 
+  const todayJobs = date ? jobs.filter((j) => jobActiveOn(j, date)) : jobs;
+
+  function renderOptions(list) {
+    if (!list.length) return <div className="jc-empty">None</div>;
+    return list.map((j) => {
+      const driver = jobTruckDriver(drivers, j, truckId);
+      return (
+        <button type="button" key={j.id} className="jc-option" onClick={() => onPick(j.id)}>
+          <span className="jc-name">{j.customer}</span>
+          <span className="jc-meta">{j.id} · {fmtRange(j)}{driver ? ` — ${driver.name}` : ''}</span>
+        </button>
+      );
+    });
+  }
+
   return (
     <div className="job-edit-overlay" onClick={onClose}>
-      <div className="job-edit-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="job-edit-modal jc-modal" onClick={(e) => e.stopPropagation()}>
         <h3>Which job do you want to see?</h3>
         <div className="jc-sub">These jobs overlap on {truckName}</div>
-        <div className="jc-options">
-          {jobs.map((j) => {
-            const driver = jobTruckDriver(drivers, j, truckId);
-            return (
-              <button type="button" key={j.id} className="jc-option" onClick={() => onPick(j.id)}>
-                <span className="jc-name">{j.customer}</span>
-                <span className="jc-meta">{j.id} · {fmtRange(j)}{driver ? ` — ${driver.name}` : ''}</span>
-              </button>
-            );
-          })}
+        <div className="jc-columns">
+          <div className="jc-column">
+            <div className="jc-column-title">All conflicts on {truckName}</div>
+            <div className="jc-options">{renderOptions(jobs)}</div>
+          </div>
+          <div className="jc-column">
+            <div className="jc-column-title">{date ? `Conflicts on ${date}` : 'Conflicts today'}</div>
+            <div className="jc-options">{renderOptions(todayJobs)}</div>
+          </div>
         </div>
         <div className="job-edit-actions">
           <span className="job-edit-actions-spacer" />
