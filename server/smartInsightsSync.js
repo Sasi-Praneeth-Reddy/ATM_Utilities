@@ -1,7 +1,8 @@
 /**
  * Orchestrates one Smart Insights sync: Gmail -> parse (both reports) -> join -> map -> upsert.
  *
- * Runs daily at 6:00 AM ET via functions-index.js's smartInsightsSyncScheduled, and on demand via
+ * Runs at 12:00 PM and 4:00 PM ET, every day, via functions-index.js's smartInsightsSyncScheduled
+ * (shortly after the actual report emails go out at 11:51 AM / 3:51 PM ET), and on demand via
  * POST /api/smart-insights/sync-now (see server.js).
  *
  * TWO-REPORT JOIN (redesigned 2026-08-24 — see smartInsightsGmail.js's file header for how each
@@ -100,6 +101,11 @@ async function syncSmartInsights() {
     jobsCreated: 0,
     jobsUpdated: 0,
     rowsSkipped: 0,
+    // Manual edit lock (added 2026-09-08 — see db.js's markJobManuallyEdited): a row that matched an
+    // existing job but was skipped because a dispatcher hand-corrected it. Tracked separately from
+    // jobsUpdated so that count stays accurate (an upsert this sync intentionally left untouched
+    // isn't really an "update") — see the `wasCreated`/`wasSkipped` destructure below.
+    jobsSkippedManualEdit: 0,
     errors: [],
   };
 
@@ -147,14 +153,16 @@ async function syncSmartInsights() {
     }
     try {
       const rows = parseAllJobsBuffer(file.buffer);
-      let created = 0, updated = 0, skipped = 0;
+      let created = 0, updated = 0, skipped = 0, skippedManualEdit = 0;
       for (const row of rows) {
         if (TERMINAL_JOB_STATUSES.has((row.customLeadStatus || '').trim().toLowerCase())) { skipped++; continue; }
         const opportunity = opportunitiesById.get(opportunityIdFromJobNumber(row.jobNumber));
         const job = mapAllJobsRowToJob(row, opportunity);
         if (!job) { skipped++; continue; }
-        const { created: wasCreated } = await db.upsertSmartInsightsJob(job);
-        if (wasCreated) created++; else updated++;
+        const { created: wasCreated, skippedManualEdit: wasLocked } = await db.upsertSmartInsightsJob(job);
+        if (wasCreated) created++;
+        else if (wasLocked) skippedManualEdit++;
+        else updated++;
       }
       // Credit the counts as soon as the Firestore writes succeed, BEFORE the label call below —
       // the upserts are what actually matter (and did happen) even if markMessageProcessed then
@@ -163,6 +171,7 @@ async function syncSmartInsights() {
       summary.jobsCreated += created;
       summary.jobsUpdated += updated;
       summary.rowsSkipped += skipped;
+      summary.jobsSkippedManualEdit += skippedManualEdit;
       await markMessageProcessed(file.messageId);
       summary.filesProcessed++;
     } catch (err) {

@@ -210,7 +210,7 @@ function mapIcalEventToJob(event) {
   // VA/MD/DC false positive (job 23865-1, 2026-08-28), adds `serviceCategory` for board color
   // grading, and applies the mileage-based long-distance override on top of the label check this
   // file always did.
-  const { type, serviceCategory, miles } = classifyJob({
+  const { type, serviceCategory, serviceCategoryLabel, miles } = classifyJob({
     jobTypeLabel: d.jobTypeLabel, originAddress: d.origin, destinationAddress: d.destination,
   });
   const combinedNotes = [d.dispatchNotes, d.internalNotes, d.crewNotes, d.customerNotes]
@@ -278,6 +278,7 @@ function mapIcalEventToJob(event) {
     status: 'scheduled',
     miles,
     serviceCategory,
+    serviceCategoryLabel,
     source: 'smartmoving',
     smartMovingStatus: event.status || null, // iCal's own STATUS (e.g. "CONFIRMED") — NOT the same
                                               // enum as the REST API's OpportunityStatus, don't mix

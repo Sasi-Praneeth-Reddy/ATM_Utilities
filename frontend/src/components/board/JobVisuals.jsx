@@ -1,11 +1,29 @@
 import { useState } from 'react';
-import { fmtRange, hourToLabel, timeToHour, daysBetween } from '../../utils/dates';
+import { fmtRange, hourToLabel, timeToHour, daysBetween, fmtDateTime } from '../../utils/dates';
 import {
   jobTruckIds, jobTrucksNeeded, jobTruckLabel, truckBadgeInfo, getJobDriverColor,
   stackZIndex, ldStageLabels, driversBusyOnDate, jobTruckDriver,
   conflictColorForTruck, conflictTruckIdForJob, overlappingClusterFor,
-  serviceCategoryClass, serviceCategoryLabels,
+  serviceCategoryClass, serviceCategoryText, isStorageJob, isMilitaryJob, jobColorOverrideClass,
 } from '../../utils/jobs';
+
+// Transparent red fill for a military (PCS) move's block/bar — added 2026-09-15 at the user's
+// request ("they are military jobs make the bar color of them to transparent red"). Same --red
+// (#d0453c) already used for conflict styling elsewhere, at low opacity so it reads as a tint layered
+// over the block rather than a solid color — deliberately overrides the block's own category color
+// (catStyle below) rather than combining with it: military status is the more urgent thing to flag
+// at a glance, and the two would otherwise fight over the same background. See DayPrintTimeline.jsx
+// for the print board's identical treatment (its own MILITARY_BG constant, still a plain rgba string
+// there since print always uses black text regardless of theme).
+//
+// A CSS var (--jobblock-military, styles.css) rather than a hardcoded rgba string here, since
+// 2026-09-15's later same-day fix ("make the light military red color a little darker") made this
+// value theme-dependent: light mode's value is a bit more saturated than dark mode's original
+// rgba(208,69,60,.22), specifically so it still reads as "the urgent one" now that .job-block's other
+// category fills are just as pale in light mode (see styles.css's --jobblock-* variables and
+// .job-block's own comment for the whole story) — a plain JS string can't switch per theme the way a
+// CSS var consumed through an inline style still can.
+const MILITARY_BG = 'var(--jobblock-military)';
 
 export function SmBadge({ job }) {
   if (job.source !== 'smartmoving') return null;
@@ -28,6 +46,45 @@ export function SiBadge({ job }) {
 export function PlaceholderBadge({ job }) {
   if (job.source !== 'placeholder') return null;
   return <span className="placeholder-badge" title="Manually added placeholder — fill in details when known">PLACEHOLDER</span>;
+}
+
+/** Manual edit lock (added 2026-09-08) — same badge-next-to-name pattern as SmBadge/SiBadge/
+ * PlaceholderBadge, so a dispatcher can tell at a glance (without opening JobEditModal) that this
+ * job's DETAIL fields (customer/date/time/addresses/crewSize/notes/type) are frozen: the REST poll,
+ * calendar sync, and Smart Insights sync will all skip refreshing them until someone clicks "Resync
+ * from source" in the edit modal — see db.js's markJobManuallyEdited/clearJobManualEdit and
+ * JobEditModal.jsx's own lock notice. Truck/driver assignment has its own separate badge —
+ * TruckLockBadge below — since splitting the two locks apart 2026-09-14; a job can show either, both,
+ * or neither independently.
+ *
+ * Tooltip carries WHO and WHEN (added at the user's follow-up request, "reduce the confusion") —
+ * without it, the badge alone just says "something's off, ask around" instead of pointing straight
+ * at the person and moment to ask about. Falls back to a generic message if manuallyEditedBy wasn't
+ * recorded (shouldn't happen going forward — server.js's PATCH handler always passes the current
+ * user — but old data or a direct Firestore edit could still lack it). */
+export function ManualEditBadge({ job }) {
+  if (!job.manuallyEditedAt) return null;
+  const when = fmtDateTime(job.manuallyEditedAt);
+  const title = job.manuallyEditedBy
+    ? `Manually edited by ${job.manuallyEditedBy}${when ? ` on ${when}` : ''} — syncs won't overwrite this job's details until it's resynced`
+    : `Manually edited${when ? ` on ${when}` : ''} — syncs won't overwrite this job's details until it's resynced`;
+  return <span className="lock-badge" title={title}>🔒</span>;
+}
+
+/** Truck-assignment lock (added 2026-09-14 — see db.js's markTruckAssignmentManual). Same
+ * badge-next-to-name pattern and WHO+WHEN tooltip as ManualEditBadge above, just for the narrower
+ * lock: once a truck/driver has been assigned, reassigned, or removed here (or a real "Trucks
+ * needed" edit saved), the calendar sync — the only sync path with real truck data right now, see
+ * db.js's syncTruckAssignmentUnlessLocked — leaves this job's truck/driver alone until resynced.
+ * Rendered separately from ManualEditBadge so a job can show one, both, or neither: a job with a
+ * dispatcher-assigned truck but untouched date/customer/etc. shows only this one. */
+export function TruckLockBadge({ job }) {
+  if (!job.truckLockedAt) return null;
+  const when = fmtDateTime(job.truckLockedAt);
+  const title = job.truckLockedBy
+    ? `Truck assignment set by ${job.truckLockedBy}${when ? ` on ${when}` : ''} — the calendar sync won't change it until it's resynced`
+    : `Truck assignment set${when ? ` on ${when}` : ''} — the calendar sync won't change it until it's resynced`;
+  return <span className="lock-badge" title={title}>🔒🚚</span>;
 }
 
 export function TruckBadge({ job }) {
@@ -127,7 +184,7 @@ export function JobChip({ job, trucks, conflict, draggable, onDragStart, highlig
           onClick={(e) => { e.stopPropagation(); onDeleteJob(job.id, job.customer); }}
         >×</span>
       )}
-      <b>{job.customer}{conflict && <span className="conflict-flag">⚠</span>}<SmBadge job={job} /><SiBadge job={job} /><PlaceholderBadge job={job} /></b>
+      <b>{job.customer}{conflict && <span className="conflict-flag">⚠</span>}<SmBadge job={job} /><SiBadge job={job} /><PlaceholderBadge job={job} /><ManualEditBadge job={job} /></b>
       <AddressLine job={job} className="chip-addr" />
       {job.id} · {when} <TruckBadge job={job} />
     </div>
@@ -157,7 +214,7 @@ export function GroupedJobChip({ jobsInGroup, trucks, conflictIds, draggable, on
       onClick={onEditJob ? () => onEditJob(job.id) : undefined}
       title={`${jobsInGroup.length} jobs on this SmartMoving booking — pick which one to assign`}
     >
-      <b>{job.customer}{conflict && <span className="conflict-flag">⚠</span>}<SmBadge job={job} /><SiBadge job={job} /><PlaceholderBadge job={job} /></b>
+      <b>{job.customer}{conflict && <span className="conflict-flag">⚠</span>}<SmBadge job={job} /><SiBadge job={job} /><PlaceholderBadge job={job} /><ManualEditBadge job={job} /></b>
       <AddressLine job={job} className="chip-addr" />
       <select
         className="chip-job-select"
@@ -183,10 +240,62 @@ export function GroupedJobChip({ jobsInGroup, trucks, conflictIds, draggable, on
  * show a "which job?" chooser instead of opening JobEditModal directly — see JobConflictChooser.jsx.
  * Local jobs can also be resized by dragging the small handle on their right edge, adjusting
  * duration live as you drag (see handleResizeMouseDown). */
-export function JobBlock({ job, date, truckIdCtx, trucks, drivers, jobs, conflict, conflicts, role, draggable, onDragStart, onRemoveTruck, onAddExtraTruck, onSetJobTruckDriver, onEditJob, onResizeJob, onDeleteJob, TIMELINE_START, TIMELINE_END, highlighted }) {
-  const color = getJobDriverColor(trucks, drivers, job);
-  const colorStyle = color ? { borderColor: color, borderLeftColor: color } : {};
+export function JobBlock({ job, date, truckIdCtx, trucks, drivers, jobs, conflict, conflicts, role, draggable, onDragStart, onRemoveTruck, onAddExtraTruck, onSetJobTruckDriver, onEditJob, onResizeJob, onDeleteJob, TIMELINE_START, TIMELINE_END, highlighted, laneIndex = 0, laneCount = 1 }) {
   const z = stackZIndex(job);
+  // Lane-based vertical position (added 2026-09-15 at the user's request — "instead of placing
+  // conflicted jobs on top of each other... make the jobs look like in print board, one below
+  // another") — DayBoard.jsx computes laneIndex/laneCount per truck (same greedy interval-lane
+  // packing DayPrintTimeline.jsx already uses) and passes them down here. Left undefined for the
+  // ordinary laneCount===1 case so this block keeps using its plain CSS top:3px;bottom:3px exactly
+  // as before this feature — only a truck with a genuine time overlap gets the explicit per-lane
+  // top/height below, which the CSS's own top+height sizing simply overrides (bottom:3px becomes
+  // over-constrained and is dropped, standard CSS box-sizing behavior — no need to reset it
+  // separately). Uses the SAME --track-lane-height CSS var DayBoard.jsx sizes the track's overall
+  // height from, so a lane's lower/upper bound always lines up with the track's own height exactly
+  // — see that var's comment in styles.css for the desktop/mobile values.
+  const laneVerticalStyle = laneCount > 1
+    ? { top: `calc(var(--track-lane-height) * ${laneIndex} + 3px)`, height: `calc(var(--track-lane-height) - 6px)` }
+    : undefined;
+  // Service-category color grading — computed once here (not per-branch below) since both the
+  // long-distance and local branches now use it. Extended 2026-09-08 at the user's request to also
+  // apply to long-distance jobs (see jobTypeInference.js's classifyJob — an LD job's serviceCategory
+  // is no longer forced to the bare string 'long_distance', so it can carry its own DEL/UPK/LOAD/
+  // other label same as a local job).
+  //
+  // Border/background split (also 2026-09-08, same follow-up request): the block's border-left
+  // accent used to be the assigned driver's color (getJobDriverColor) — dropped entirely now that
+  // the driver's name is already printed directly on the block (see assignedDriver/detailBits
+  // below), which made color-coding by driver redundant. The border-left accent is now purely a
+  // conflict indicator instead (styles.css's `.job-block.conflict`/`.job-block.ld.conflict` —
+  // plain CSS classes, no inline style needed here since nothing else claims that channel anymore).
+  // Background always shows the type/category color, conflicted or not — see catStyle below, which
+  // no longer special-cases conflict either.
+  //
+  // Fixed 5-color theme (2026-09-15, replacing the 2026-09-08 per-label 'other' hash-rainbow, at the
+  // user's request: "remove the old color scheme for transit and others, instead use this color
+  // theme, red for identified military jobs, yellow for long distance, purple for packing jobs,
+  // green for local jobs, orange for storage jobs") — every color below is now purely class-driven
+  // via styles.css's --jobblock-* vars (.job-block base=local/green, .ld=long-distance/yellow,
+  // .cat-load=packing/purple, .storage=orange — a delivery_unpack or non-storage 'other' job has no
+  // dedicated color rule anymore and just falls through to its base local/LD color) EXCEPT military,
+  // which stays the one inline override below — military is the more urgent thing to flag and
+  // deliberately overrides whatever category color a job would otherwise get, the same tradeoff this
+  // already made for the transparent-red military tint. "Packing" maps to the existing 'load'
+  // category (jobTypeInference.js's regex matches the word "LOAD" in a job's label, e.g. "LOAD DAY")
+  // since that's the closest existing concept — there's no separate literal "PACK" detection today.
+  // "Storage" is a NEW sub-type carved out of 'other' by isStorageJob (utils/jobs.js) — a plain label
+  // text match, same "display only" rule every category check here already follows.
+  //
+  // Manual color override (2026-09-15, "All users to change these colors when clicking on the job")
+  // — job.colorOverride, set via JobEditModal's swatch picker, wins over ALL of the above, including
+  // military's inline background. Applied purely as a CSS class (jobColorOverrideClass below) rather
+  // than folded into catStyle here, since styles.css's `.job-block.override-*` rules use !important
+  // specifically to beat this component's own inline military style — see that CSS for why.
+  const catClass = serviceCategoryClass(job);
+  const storage = isStorageJob(job);
+  const military = isMilitaryJob(job);
+  const catStyle = military ? { background: MILITARY_BG } : {};
+  const colorOverrideClass = jobColorOverrideClass(job);
   const multiTruck = jobTrucksNeeded(job) > 1;
   // Keyed off how many trucks are ACTUALLY assigned, not job.trucksNeeded — trucksNeeded is an
   // LD-specific "how many should this have" field that's normally 1 for local jobs, so gating the
@@ -304,6 +413,8 @@ export function JobBlock({ job, date, truckIdCtx, trucks, drivers, jobs, conflic
     // from whoever hovers it.
     const detailBits = [
       'LD',
+      military ? 'MIL' : null,
+      catClass ? serviceCategoryText(job) : null,
       `Day ${dayIdx}/${totalDays} (${ldStageLabels[job.stage || 'scheduled']})`,
       `${job.origin || '(no origin)'} → ${job.destination || '(no destination)'}`,
       departsLabel,
@@ -325,9 +436,9 @@ export function JobBlock({ job, date, truckIdCtx, trucks, drivers, jobs, conflic
     ].filter(Boolean).join('\n');
     return (
       <div
-        className={`job-block ld ${conflict ? 'conflict' : ''} ${highlighted ? 'highlighted' : ''} ${showRemove || canDelete ? 'jb-inset' : ''}`}
+        className={`job-block ld ${catClass ? `cat-${catClass}` : ''} ${storage ? 'storage' : ''} ${military ? 'military' : ''} ${colorOverrideClass} ${conflict ? 'conflict' : ''} ${highlighted ? 'highlighted' : ''} ${showRemove || canDelete ? 'jb-inset' : ''}`}
         title={tip}
-        style={{ ...barStyle, zIndex: z, ...colorStyle }}
+        style={{ ...barStyle, zIndex: z, ...catStyle, ...laneVerticalStyle }}
         draggable={draggable}
         onDragStart={(e) => onDragStart(e, job.id)}
         onClick={handleBlockClick}
@@ -340,7 +451,7 @@ export function JobBlock({ job, date, truckIdCtx, trucks, drivers, jobs, conflic
         )}
         <span className="jb-line-wrap">
           <span className="jb-name">{job.customer}{conflict ? ' ⚠' : ''}</span>
-          <SiBadge job={job} /><PlaceholderBadge job={job} /><TruckBadge job={job} />
+          <SiBadge job={job} /><PlaceholderBadge job={job} /><ManualEditBadge job={job} /><TruckBadge job={job} />
           <span className="jb-detail">{detailBits}</span>
         </span>
         {ldConflictNamesLabel && <span className="jb-conflict-names">{ldConflictNamesLabel}</span>}
@@ -354,11 +465,8 @@ export function JobBlock({ job, date, truckIdCtx, trucks, drivers, jobs, conflic
   const dur = resizePreviewHours ?? (job.duration || 2);
   const left = (start - TIMELINE_START) / (TIMELINE_END - TIMELINE_START) * 100;
   const width = dur / (TIMELINE_END - TIMELINE_START) * 100;
-  // Service-category color grading (day board) — added 2026-08-28 at the user's request to color
-  // DEL/UPK, LOAD, etc. distinctly from a plain local move; see utils/jobs.js's
-  // serviceCategoryClass/serviceCategoryLabels and styles.css's `.job-block.cat-*` rules. null for
-  // the categories that deliberately keep the board's default look (see that comment).
-  const catClass = serviceCategoryClass(job);
+  // Service-category color grading (day board) — catClass/catStyle now computed once above,
+  // shared with the long-distance branch (see that comment for the 2026-09-08 update history).
   // Dense single-line detail run — see the long-distance branch above for the full rationale
   // (same "array of optional bits, joined" pattern the print board already uses). truckBadgeInfo's
   // "⚠ needs N more truck(s)" text used to only show via a separate stacked line gated on
@@ -368,7 +476,8 @@ export function JobBlock({ job, date, truckIdCtx, trucks, drivers, jobs, conflic
   // the hover tooltip below, same as the LD branch.
   const detailBits = [
     'LCL',
-    catClass ? serviceCategoryLabels[catClass] : null,
+    military ? 'MIL' : null,
+    catClass ? serviceCategoryText(job) : null,
     `${hourToLabel(start)} · ${dur}h`,
     `${job.origin || '(no origin)'} → ${job.destination || '(no destination)'}`,
     `${jobTrucksNeeded(job)}T/${job.crewSize ?? '?'}M`,
@@ -383,9 +492,9 @@ export function JobBlock({ job, date, truckIdCtx, trucks, drivers, jobs, conflic
   ].filter(Boolean).join('\n');
   return (
     <div
-      className={`job-block ${catClass ? `cat-${catClass}` : ''} ${conflict ? 'conflict' : ''} ${resizing ? 'resizing' : ''} ${highlighted ? 'highlighted' : ''} ${showRemove || canDelete ? 'jb-inset' : ''}`}
+      className={`job-block ${catClass ? `cat-${catClass}` : ''} ${storage ? 'storage' : ''} ${military ? 'military' : ''} ${colorOverrideClass} ${conflict ? 'conflict' : ''} ${resizing ? 'resizing' : ''} ${highlighted ? 'highlighted' : ''} ${showRemove || canDelete ? 'jb-inset' : ''}`}
       title={tip}
-      style={{ left: `${left}%`, width: `${width}%`, zIndex: z, ...colorStyle }}
+      style={{ left: `${left}%`, width: `${width}%`, zIndex: z, ...catStyle, ...laneVerticalStyle }}
       draggable={draggable}
       onDragStart={(e) => onDragStart(e, job.id)}
       onClick={handleBlockClick}
@@ -398,7 +507,7 @@ export function JobBlock({ job, date, truckIdCtx, trucks, drivers, jobs, conflic
       )}
       <span className="jb-line-wrap">
         <span className="jb-name">{job.customer}{conflict ? ' ⚠' : ''}</span>
-        <SiBadge job={job} /><PlaceholderBadge job={job} /><TruckBadge job={job} />
+        <SiBadge job={job} /><PlaceholderBadge job={job} /><ManualEditBadge job={job} /><TruckBadge job={job} />
         <span className="jb-detail">{detailBits}</span>
       </span>
       {conflictNamesLabel && <span className="jb-conflict-names">{conflictNamesLabel}</span>}

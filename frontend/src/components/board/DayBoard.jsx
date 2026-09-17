@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { jobActiveOn, hourToLabel, todayStr } from '../../utils/dates';
-import { jobTruckIds, statusClass, statusLabel, groupByOpportunity, deriveTruckStatus, jobTruckDriver, overlappingClusterFor, isTransitOnlyDay } from '../../utils/jobs';
+import { jobActiveOn, hourToLabel, todayStr, timeToHour, daysBetween } from '../../utils/dates';
+import { jobTruckIds, statusClass, statusLabel, groupByOpportunity, deriveTruckStatus, overlappingClusterFor, isTransitOnlyDay } from '../../utils/jobs';
 import { JobChip, GroupedJobChip, JobBlock } from './JobVisuals';
 import JobEditModal from './JobEditModal';
 import JobConflictChooser from './JobConflictChooser';
@@ -33,7 +33,8 @@ function hourLabelList() {
 export default function DayBoard({
   date, trucks, drivers, jobs, role, conflictIds, conflicts,
   hideInTransit,
-  onUnassignJob, onAddTruckToJob, onRemoveTruck, onAddExtraTruck, onSetJobTruckDriver, onUpdateJobFields, onCreateJob,
+  onUnassignJob, onAddTruckToJob, onRemoveTruck, onAddExtraTruck, onSetJobTruckDriver, onSetJobColor, onUpdateJobFields, onCreateJob,
+  onClearManualEdit,
   onDeleteJob,
   highlightedJobId,
   timelineRef: timelineRefProp,
@@ -76,20 +77,43 @@ export default function DayBoard({
   const trayRef = useRef(null);
   const [pinOffsets, setPinOffsets] = useState({ trayTop: 58, timelineMaxHeight: 'none' });
   useEffect(() => {
+    // MAIN_BOTTOM_PADDING_PX mirrors styles.css's main{padding:16px} — the one bit of space below
+    // .timeline itself that the tray's own rect can't see (it's outside the tray/timeline entirely,
+    // on <main>'s own box).
+    const MAIN_BOTTOM_PADDING_PX = 16;
     function measure() {
       const nav = document.querySelector('nav');
       const navBottom = nav ? nav.getBoundingClientRect().bottom : 58;
-      const trayHeight = trayRef.current ? trayRef.current.getBoundingClientRect().height : 0;
-      setPinOffsets({ trayTop: navBottom, timelineMaxHeight: `calc(100vh - ${navBottom + trayHeight}px)` });
+      // timelineMaxHeight now reads the tray's own real bottom edge (getBoundingClientRect().bottom)
+      // instead of re-deriving "everything above .timeline" as navBottom + the tray's own height.
+      // That older version silently ignored the WHOLE toolbar/banner stack actually sitting between
+      // nav and the tray — BoardTab.jsx's own toolbar (title + Date/Month/Print buttons),
+      // DuplicateAlertBanner, the "Hide in-transit" note — so .timeline rendered taller than the
+      // space truly left in the viewport, pushing the entire PAGE past 100vh and forcing an outer/
+      // body scrollbar that dragged the toolbar (date picker, Print Board/Print All Trucks buttons)
+      // out of view right along with it on scroll. Reading the tray's actual rendered position
+      // instead sidesteps needing to track each of those pieces by hand — whatever is currently
+      // showing above the tray, its real height is already baked into where the tray itself landed.
+      // Fixed 2026-09-17 at the user's request ("get rid of the main scroller... only board will be
+      // scrolled").
+      const trayRect = trayRef.current ? trayRef.current.getBoundingClientRect() : null;
+      const trayBottom = trayRect ? trayRect.bottom : navBottom;
+      setPinOffsets({ trayTop: navBottom, timelineMaxHeight: `calc(100vh - ${trayBottom + MAIN_BOTTOM_PADDING_PX}px)` });
     }
     measure();
     window.addEventListener('resize', measure);
     // Re-measures automatically whenever the tray's rendered size changes for ANY reason (chips
     // appearing/disappearing as jobs get assigned/unassigned, "All jobs assigned" text swapping in,
     // theme/font changes) — covers what a dependency array on unassignedAll.length alone wouldn't
-    // (e.g. a chip's own content reflowing without the count changing).
+    // (e.g. a chip's own content reflowing without the count changing). Also watches <main> as a
+    // whole (added alongside the fix above) so a banner appearing/disappearing ABOVE the tray
+    // (BackendBanner, GmailAuthBanner, the 3s role hint, DuplicateAlertBanner) — which doesn't touch
+    // the tray's OWN size, only its position — still triggers a remeasure instead of leaving
+    // timelineMaxHeight stale until the next resize.
     const ro = new ResizeObserver(measure);
     if (trayRef.current) ro.observe(trayRef.current);
+    const main = document.querySelector('main');
+    if (main) ro.observe(main);
     return () => { window.removeEventListener('resize', measure); ro.disconnect(); };
   }, []);
 
@@ -108,6 +132,12 @@ export default function DayBoard({
     }
   }
   const draggable = role !== 'crew';
+  // Still gates drag/resize/delete/trucks-drivers and the JobEditModal's full form — the ONE
+  // exception is the modal's colorOnly mode (wired below via colorOnly={!canEdit}), which crew CAN
+  // reach (added 2026-09-15 at the user's request, "All users to change these colors when clicking
+  // on the job"): job blocks/chips' onEditJob is deliberately no longer canEdit-gated (see below) so
+  // crew's click still opens something, just the stripped-down color-only view instead of the full
+  // editor everyone else gets.
   const canEdit = role !== 'crew';
   const editingJob = editingJobId ? jobs.find((j) => j.id === editingJobId) : null;
 
@@ -151,6 +181,11 @@ export default function DayBoard({
     el?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
   }, [highlightedJobId, date]);
 
+  // Ref mirror of highlightedJobId, read by the default-scroll effect right below. Deliberately a
+  // ref and not a plain dependency on highlightedJobId itself — see that effect's comment for why.
+  const highlightedJobIdRef = useRef(highlightedJobId);
+  highlightedJobIdRef.current = highlightedJobId;
+
   // Opens the board scrolled to DEFAULT_VISIBLE_START_HOUR instead of midnight — see that
   // constant's comment. Re-runs on every date change so switching days always resets back to the
   // same default view rather than carrying over wherever the previous day happened to be scrolled.
@@ -168,7 +203,22 @@ export default function DayBoard({
   // hour-based at all, dragging it sideways along with the timeline just hid job chips off-screen
   // for no reason. `.timeline` now owns its own horizontal scroll (see styles.css) so this can move
   // the truck-row hours around without disturbing anything above it.
+  //
+  // Bug fixed 2026-09-10 (reported: a job found via search "sometimes" wasn't actually visible —
+  // only showed up if you searched again): this effect and the highlight-scroll effect above both
+  // fire on the same commit whenever a search jump lands on a new date (handleJumpToJob sets
+  // boardDate and highlightedJobId together). Both are plain useEffects declared in this order, so
+  // React always runs the highlight scrollIntoView FIRST, then this one immediately after — and
+  // this one used to unconditionally snap `.timeline`'s scroll back to the default 6am window,
+  // undoing the scrollIntoView a moment earlier if the found job's time fell outside that window.
+  // Searching a SECOND time for a job already on the currently-displayed date never re-triggered
+  // this effect (its old deps were just `[date]`, and date hadn't changed), so only the highlight
+  // effect ran and the job correctly appeared — hence "works the second time." Fix: skip the
+  // default-hour reset whenever a search highlight is actively landing on this date and let that
+  // effect own the scroll position instead; genuine date navigation (arrows, date picker, Today),
+  // where highlightedJobId is null, resets to the default hour exactly as before.
   useEffect(() => {
+    if (highlightedJobIdRef.current) return;
     const el = timelineRef.current;
     if (!el) return;
     const truckColEl = el.querySelector('.truck-col-spacer');
@@ -266,14 +316,19 @@ export default function DayBoard({
         )}
         {unassignedAll.length ? (
           <>
+            {/* onEditJob is unconditional here (not gated on canEdit) as of 2026-09-15 — even the
+                crew role, which can't drag/resize/delete a job, can still click it open to set its
+                color (see JobEditModal's colorOnly mode below, wired via colorOnly={!canEdit}); the
+                delete affordance right next to it stays canEdit-gated since crew still can't delete
+                anything. */}
             {unassignedSingles.map((j) => (
-              <JobChip key={j.id} job={j} trucks={trucks} conflict={conflictIds.has(j.id)} draggable={draggable} onDragStart={onChipDragStart} highlighted={j.id === highlightedJobId} onDeleteJob={canEdit ? handleDeleteJob : undefined} onEditJob={canEdit ? (jobId) => setEditingJobId(jobId) : undefined} />
+              <JobChip key={j.id} job={j} trucks={trucks} conflict={conflictIds.has(j.id)} draggable={draggable} onDragStart={onChipDragStart} highlighted={j.id === highlightedJobId} onDeleteJob={canEdit ? handleDeleteJob : undefined} onEditJob={(jobId) => setEditingJobId(jobId)} />
             ))}
             {unassignedGroups.map((g) => (
               // Never contains placeholder jobs — grouping only happens for jobs that share a
               // smartMovingOpportunityId, which manually-created placeholders don't have — so no
               // delete affordance needed here.
-              <GroupedJobChip key={g[0].smartMovingOpportunityId} jobsInGroup={g} trucks={trucks} conflictIds={conflictIds} draggable={draggable} onDragStart={onChipDragStart} highlightedJobId={highlightedJobId} onEditJob={canEdit ? (jobId) => setEditingJobId(jobId) : undefined} />
+              <GroupedJobChip key={g[0].smartMovingOpportunityId} jobsInGroup={g} trucks={trucks} conflictIds={conflictIds} draggable={draggable} onDragStart={onChipDragStart} highlightedJobId={highlightedJobId} onEditJob={(jobId) => setEditingJobId(jobId)} />
             ))}
           </>
         ) : (
@@ -301,10 +356,6 @@ export default function DayBoard({
             // DayPrintTimeline.jsx's own transit-day exclusion only narrows what THAT view shows.
             const tjobs = jobs.filter((j) => jobTruckIds(j).includes(t.id) && jobActiveOn(j, date)
               && !(hideInTransit && isTransitOnlyDay(j, date)));
-            // Driver is assigned per job now, not permanently to the truck (see db.js's file
-            // header) — shows whichever active job's driver is set first; two active jobs on the
-            // same truck the same day is itself a conflict the dispatcher needs to resolve.
-            const driver = tjobs.map((j) => jobTruckDriver(drivers, j, t.id)).find(Boolean) || null;
             const hasConflict = tjobs.some((j) => conflictIds.has(j.id));
             // "On Job"/"Available" is derived fresh for this specific date from whether the truck
             // actually has an active job today — not read from the truck's stored status field,
@@ -312,6 +363,51 @@ export default function DayBoard({
             // deriveTruckStatus's doc comment in utils/jobs.js). "Maintenance" is still a manual,
             // stored override and always wins.
             const derivedStatus = deriveTruckStatus(t, jobs, date);
+
+            // Lane assignment (added 2026-09-15 at the user's request — "instead of placing
+            // conflicted jobs on top of each other... make the jobs look like in print board, one
+            // below another") — mirrors DayPrintTimeline.jsx's own greedy interval-lane packing
+            // (see that file's identical comment for the algorithm) so two jobs that overlap in
+            // time on this truck get separate stacked rows instead of the old z-index-stacked
+            // overlap (stackZIndex, utils/jobs.js — still used below as a tiebreaker, now mostly
+            // moot since lanes keep genuinely overlapping jobs physically apart). Computed here
+            // (not shared with the print board's copy) since this view's start/end fractions have
+            // to match exactly what JobBlock itself draws for left/width — TIMELINE_START/END span
+            // the FULL day (0-24) here, not the printed board's clamped 6am-6pm window, and an LD
+            // job's bar always runs to the end of the day in this single-day view (see JobBlock's
+            // own barStyle) rather than being clamped like the print board's multi-page layout
+            // needs. Driven purely by actual time overlap, not the `conflictIds` prop, same
+            // reasoning DayPrintTimeline.jsx's own comment gives — so a lane boundary can never
+            // disagree with what conflictIds separately flags as "needs a dispatcher's attention".
+            const framed = tjobs.map((j) => {
+              let startFrac, endFrac;
+              if (j.type === 'long_distance') {
+                const dayIdx = daysBetween(j.date, date) + 1;
+                if (dayIdx !== 1 || !j.startTime) {
+                  startFrac = 0; endFrac = 1;
+                } else {
+                  const start = timeToHour(j.startTime) ?? TIMELINE_START;
+                  startFrac = (start - TIMELINE_START) / (TIMELINE_END - TIMELINE_START);
+                  endFrac = 1;
+                }
+              } else {
+                const start = timeToHour(j.startTime) ?? TIMELINE_START;
+                const dur = j.duration || 2;
+                startFrac = (start - TIMELINE_START) / (TIMELINE_END - TIMELINE_START);
+                endFrac = (start + dur - TIMELINE_START) / (TIMELINE_END - TIMELINE_START);
+              }
+              return { j, startFrac, endFrac };
+            }).sort((a, b) => a.startFrac - b.startFrac);
+            const laneEnds = [];
+            const laneByJobId = new Map();
+            framed.forEach((f) => {
+              let lane = laneEnds.findIndex((end) => f.startFrac >= end - 0.0001);
+              if (lane === -1) { lane = laneEnds.length; laneEnds.push(f.endFrac); }
+              else { laneEnds[lane] = f.endFrac; }
+              laneByJobId.set(f.j.id, lane);
+            });
+            const laneCount = Math.max(1, laneEnds.length);
+
             return (
               <div className="truck-row" key={t.id}>
                 <div className="truck-info">
@@ -323,11 +419,23 @@ export default function DayBoard({
                         hover title covers anyone who wants the word spelled out). */}
                     {hasConflict && <span className="conflict-flag" title="Conflict — this truck has overlapping jobs today">⚠</span>}
                   </div>
-                  <div className="meta">{t.size}{driver ? ` · ${driver.name}` : ''}</div>
+                  {/* Driver name dropped from here 2026-09-15 at the user's request ("remove that
+                      feature") — each job on this truck already shows its own assigned driver
+                      directly on its block (JobVisuals.jsx's assignedDriver/detailBits), which is
+                      more accurate besides (a truck can carry a different driver per job today —
+                      see db.js's file header), so this sidebar summary was redundant with that. */}
+                  <div className="meta">{t.size}</div>
                   <div className="meta">{statusLabel(derivedStatus)}</div>
                 </div>
                 <div
-                  className={`track ${dragOverTruck === t.id ? 'dragover' : ''}`}
+                  className={`track ${dragOverTruck === t.id ? 'dragover' : ''} ${laneCount > 1 ? 'multi-lane' : ''}`}
+                  // Explicit height only kicks in once there's a real overlap (laneCount > 1) — a
+                  // single-lane truck (the normal case) keeps relying on CSS's own min-height:44px
+                  // (or 56px on the mobile breakpoint — see --track-lane-height's own comment in
+                  // styles.css) exactly as before this feature, so nothing changes for the common
+                  // case. --track-lane-height (not a hardcoded 44 here) is what keeps this in sync
+                  // with that same mobile bump automatically.
+                  style={laneCount > 1 ? { height: `calc(var(--track-lane-height) * ${laneCount})` } : undefined}
                   onDragOver={draggable ? (e) => { e.preventDefault(); setDragOverTruck(t.id); } : undefined}
                   onDragLeave={draggable ? () => setDragOverTruck(null) : undefined}
                   onDrop={draggable ? (e) => handleTrackDrop(e, t.id) : undefined}
@@ -349,12 +457,14 @@ export default function DayBoard({
                       onRemoveTruck={onRemoveTruck}
                       onAddExtraTruck={onAddExtraTruck}
                       onSetJobTruckDriver={onSetJobTruckDriver}
-                      onEditJob={canEdit ? openJobOrChooser : undefined}
+                      onEditJob={openJobOrChooser}
                       onResizeJob={canEdit ? (jobId, newDuration) => onUpdateJobFields(jobId, { duration: newDuration }) : undefined}
                       onDeleteJob={canEdit ? handleDeleteJob : undefined}
                       TIMELINE_START={TIMELINE_START}
                       TIMELINE_END={TIMELINE_END}
                       highlighted={j.id === highlightedJobId}
+                      laneIndex={laneByJobId.get(j.id) ?? 0}
+                      laneCount={laneCount}
                     />
                   ))}
                   {nowLineVisible && <div className="now-line" style={{ left: `${nowPct}%` }} />}
@@ -391,10 +501,13 @@ export default function DayBoard({
         onAddExtraTruck={onAddExtraTruck}
         onRemoveTruck={onRemoveTruck}
         onSetJobTruckDriver={onSetJobTruckDriver}
+        onSetJobColor={onSetJobColor}
         onSave={(fields) => { onUpdateJobFields(editingJob.id, fields); closeEditModal(); }}
+        onClearManualEdit={onClearManualEdit ? () => onClearManualEdit(editingJob.id) : undefined}
         onClose={closeEditModal}
         onBack={chooserState ? () => setEditingJobId(null) : undefined}
         onDelete={onDeleteJob ? () => handleDeleteJob(editingJob.id, editingJob.customer) : undefined}
+        colorOnly={!canEdit}
       />
     )}
 

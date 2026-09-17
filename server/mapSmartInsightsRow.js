@@ -66,7 +66,7 @@ function mapAllJobsRowToJob(row, opportunity) {
   if (!row.jobNumber || !row.jobDate) return null;
   if (!opportunity) return null;
 
-  const { type, serviceCategory, miles } = classifyFromRow(row, opportunity);
+  const { type, serviceCategory, serviceCategoryLabel, miles } = classifyFromRow(row, opportunity);
 
   return {
     id: `SI-${row.jobNumber}`,
@@ -84,6 +84,7 @@ function mapAllJobsRowToJob(row, opportunity) {
     status: 'scheduled',
     miles,
     serviceCategory,
+    serviceCategoryLabel,
     source: 'smartmoving-insights',
     // Holds the full JOB number ("24100-1"), not just the opportunity id — this is what makes each
     // sibling job (24100-1/2/3) get its own Firestore doc id (`SI-${smartInsightsQuoteNumber}`)

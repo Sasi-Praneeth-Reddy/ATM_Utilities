@@ -1,5 +1,43 @@
 import { useEffect, useState } from 'react';
-import { jobTruckIds, driversBusyOnDate } from '../../utils/jobs';
+import { jobTruckIds, driversBusyOnDate, JOB_COLOR_OPTIONS } from '../../utils/jobs';
+import { fmtDateTime } from '../../utils/dates';
+
+/** The 5-swatch color picker (added 2026-09-15, "All users to change these colors when clicking on
+ *  the job") — shared between the full modal below and its colorOnly (crew) mode, so the two never
+ *  drift apart. Applies immediately on click, same "not part of Save/Cancel" pattern the trucks/
+ *  drivers section already uses (see this file's header) — clicking the job's CURRENT color again
+ *  clears the override back to the automatic military/LD/packing/storage/local color, same toggle-
+ *  off convenience a checkbox would give. Rendered as nothing (not even the section) if the caller
+ *  didn't wire up onSetJobColor at all, same "optional prop, optional UI" pattern the truck/driver
+ *  controls use. */
+function ColorSwatchPicker({ job, onSetJobColor }) {
+  if (!onSetJobColor) return null;
+  const current = job.colorOverride || null;
+  return (
+    <div className="job-edit-field job-edit-colors">
+      <span>Color</span>
+      <div className="job-edit-color-swatches">
+        {JOB_COLOR_OPTIONS.map((c) => (
+          <button
+            key={c.key}
+            type="button"
+            className={`job-edit-color-swatch ${c.key} ${current === c.key ? 'active' : ''}`}
+            title={c.label}
+            aria-label={c.label}
+            onClick={() => onSetJobColor(job.id, current === c.key ? null : c.key)}
+          >
+            {current === c.key ? '✓' : ''}
+          </button>
+        ))}
+      </div>
+      {current && (
+        <button type="button" className="job-edit-color-clear" onClick={() => onSetJobColor(job.id, null)}>
+          Clear override (use automatic color)
+        </button>
+      )}
+    </div>
+  );
+}
 
 /**
  * Click-to-edit modal for a job — opened by clicking a job block on the day-view timeline (see
@@ -12,9 +50,11 @@ import { jobTruckIds, driversBusyOnDate } from '../../utils/jobs';
  * SmartMoving-sourced jobs. All of these are plain fields on the job document (see db.js's
  * updateJob) — nothing here is source-specific, so this works the same for placeholder and
  * SmartMoving-imported jobs alike (editing a SmartMoving job's fields locally doesn't push back to
- * SmartMoving — see SyncPanel's one-way-sync note — and a future re-sync only refreshes
- * SmartMoving-owned fields like date/customer, never trucksNeeded/status, so a local edit here to
- * those two specifically won't get silently overwritten).
+ * SmartMoving — see SyncPanel's one-way-sync note). trucksNeeded/status were always dispatcher-owned
+ * and never touched by a re-sync; as of 2026-09-08, saving a real change to any of the other fields
+ * here (customer/date/time/addresses/crewSize — db.js's MANUAL_EDIT_LOCK_FIELDS) now locks the WHOLE
+ * job, so a subsequent REST poll/calendar/Smart Insights sync can't silently revert it either — see
+ * the manual-edit-lock notice/"Resync from source" button rendered below when that's active.
  *
  * Deliberately a separate small component rather than folded into JobBlock — JobBlock is a
  * presentational piece reused across day-view truck rows, and a modal has its own lifecycle
@@ -39,10 +79,12 @@ import { jobTruckIds, driversBusyOnDate } from '../../utils/jobs';
  */
 export default function JobEditModal({
   job, trucks = [], drivers = [], jobs = [],
-  onAddExtraTruck, onRemoveTruck, onSetJobTruckDriver,
-  onSave, onClose, onDelete, onBack,
+  onAddExtraTruck, onRemoveTruck, onSetJobTruckDriver, onSetJobColor,
+  onSave, onClose, onDelete, onBack, onClearManualEdit,
+  colorOnly = false,
 }) {
   const isLd = job.type === 'long_distance';
+
   const [date, setDate] = useState(job.date || '');
   const [endDate, setEndDate] = useState(job.endDate || job.date || '');
   const [startTime, setStartTime] = useState(job.startTime || '');
@@ -82,6 +124,36 @@ export default function JobEditModal({
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [onClose]);
 
+  // colorOnly (added 2026-09-15 at the user's request, "All users to change these colors when
+  // clicking on the job") — the crew role's stripped-down view of this same modal (see DayBoard.jsx,
+  // the only caller that ever passes colorOnly=true). Crew has no access to any other field here
+  // (canEdit gates the rest of the app's editing UI — see DayBoard.jsx's own comment), so this
+  // renders just enough to identify the job plus the color picker and a close button — no Save/
+  // Cancel form, no truck/driver section, no delete — rather than exposing (even read-only) fields
+  // crew was never meant to see the internals of. This early return sits AFTER every hook above
+  // (not before, and not a `colorOnly` short-circuit at the top of the function) specifically so
+  // this component still calls the same hooks in the same order on every render regardless of
+  // colorOnly's value — the local form state, autofocus/escape effect etc. above go unused in this
+  // branch, but React's rules require they still run.
+  if (colorOnly) {
+    return (
+      <div className="job-edit-overlay" onClick={onClose}>
+        <div className="job-edit-modal" onClick={(e) => e.stopPropagation()}>
+          <h3>{job.customer}</h3>
+          <div className="job-edit-hint">
+            {job.date}{job.startTime ? ` · ${job.startTime}` : ''}
+            {job.origin || job.destination ? ` · ${job.origin || '(no origin)'} → ${job.destination || '(no destination)'}` : ''}
+          </div>
+          <ColorSwatchPicker job={job} onSetJobColor={onSetJobColor} />
+          <div className="job-edit-actions">
+            <span className="job-edit-actions-spacer" />
+            <button type="button" className="btn secondary" onClick={onClose}>Close</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   function handleSave(e) {
     e.preventDefault();
     if (!date) { setError('Date is required.'); return; }
@@ -91,6 +163,18 @@ export default function JobEditModal({
       customer: customer.trim(), origin: origin.trim(), destination: destination.trim(),
       trucksNeeded: trucks, crewSize: crewSize === '' ? null : Number(crewSize),
     };
+    // Re-base trucksNeededOriginal (db.js's floor for useSchedulerData.js's removeTruckFromJob/
+    // unassignJob roll-back) ONLY when the dispatcher actually changed this number here — never on
+    // every Save, since handleSave always resends whatever's currently in the field regardless of
+    // whether it was touched (see this modal's file header). Blindly re-basing on every Save would
+    // let an unrelated edit (fixing the customer name, say) silently lock in a trucksNeeded value
+    // that had only been auto-bumped by a truck-assignment mistake, defeating the whole point of
+    // that roll-back. Comparing against `job.trucksNeeded` (what this modal opened with) rather than
+    // the local `trucksNeeded` state's initial value keeps this correct even if a truck was
+    // added/removed live while the modal was open (trucks apply immediately — see the file header).
+    if (trucks !== (job.trucksNeeded ?? 1)) {
+      shared.trucksNeededOriginal = trucks;
+    }
     if (isLd) {
       if (endDate && endDate < date) { setError('End date must be on or after the start date.'); return; }
       onSave({ ...shared, date, endDate: endDate || date, startTime: startTime || null });
@@ -139,6 +223,56 @@ export default function JobEditModal({
           >
             Open in SmartMoving ↗
           </a>
+        )}
+
+        {/* Manual edit lock (added 2026-09-08 at the user's request) — shown whenever a previous
+            edit here (or a resize/date-move elsewhere on the board that touched one of db.js's
+            MANUAL_EDIT_LOCK_FIELDS: customer/type/date/endDate/startTime/endTime/duration/origin/
+            destination/crewSize/notes) has already locked this job. Truck/driver reassignment does
+            NOT lock the job (reverted 2026-09-14 — see MANUAL_EDIT_LOCK_FIELDS's own comment in
+            db.js), so dragging a job onto a different truck here never triggers this note by itself.
+            While locked, the REST poll, calendar sync, and Smart Insights sync all skip this job
+            entirely — see db.js's markJobManuallyEdited — so a dispatcher's correction can't be
+            silently reverted by the next automatic sync. "Resync from source" lifts the lock (db.js's
+            clearJobManualEdit) without forcing an immediate re-sync — the job just goes back to
+            updating normally on the next one. */}
+        {job.manuallyEditedAt && (
+          <div className="job-edit-lock-note">
+            {/* WHO + WHEN, not just "manually edited" (added at the user's follow-up request, "reduce
+                the confusion") — a dispatcher opening this months later, or a different dispatcher
+                than whoever locked it, needs both to know whether the correction is still current or
+                worth double-checking, not just that a lock exists at all. */}
+            🔒 Manually edited{job.manuallyEditedBy ? ` by ${job.manuallyEditedBy}` : ''}
+            {fmtDateTime(job.manuallyEditedAt) ? ` on ${fmtDateTime(job.manuallyEditedAt)}` : ''} — SmartMoving,
+            calendar, and Smart Insights syncs won't overwrite this job's details until you resync it.
+            {onClearManualEdit && (
+              <button type="button" className="btn secondary job-edit-resync-btn" onClick={onClearManualEdit}>
+                Resync from source
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Truck-assignment lock (added 2026-09-14, split out from the note above — see db.js's
+            markTruckAssignmentManual/MANUAL_EDIT_LOCK_FIELDS comments for the full history) — shown
+            whenever a truck/driver was assigned, reassigned, or removed here (or a real "Trucks
+            needed" edit was saved), independent of whether the job's date/customer/etc. is ALSO
+            locked above. Only the calendar sync currently has real truck data to sync from (see
+            db.js's syncTruckAssignmentUnlessLocked) — while locked, it leaves this job's truck/driver
+            assignment alone entirely, the same "Resync from source" button below lifts both locks at
+            once (db.js's clearJobManualEdit), so a job locked on both fronts shows both notes but only
+            needs one click to resume syncing everything. */}
+        {job.truckLockedAt && (
+          <div className="job-edit-lock-note">
+            🔒 Truck assignment set{job.truckLockedBy ? ` by ${job.truckLockedBy}` : ''}
+            {fmtDateTime(job.truckLockedAt) ? ` on ${fmtDateTime(job.truckLockedAt)}` : ''} — the calendar
+            sync won't change or clear this job's truck/driver until you resync it.
+            {onClearManualEdit && (
+              <button type="button" className="btn secondary job-edit-resync-btn" onClick={onClearManualEdit}>
+                Resync from source
+              </button>
+            )}
+          </div>
         )}
 
         <label className="job-edit-field">
@@ -252,6 +386,8 @@ export default function JobEditModal({
             )}
           </div>
         )}
+
+        <ColorSwatchPicker job={job} onSetJobColor={onSetJobColor} />
 
         <label className="job-edit-field">
           Crew size

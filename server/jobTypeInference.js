@@ -92,19 +92,33 @@ function milesBetweenAddresses(originAddress, destinationAddress) {
 }
 
 /** Label-only classification for BOARD COLOR GRADING — never changes `type` or any scheduling
- * behavior (confirmed 2026-08-28: "color/label only" scope). Checked in this order because a real
- * heading can contain more than one of these terms: long-distance first since it's the most
- * operationally distinct category (and already drives `type`), then the two specific job-shape
- * labels the user named (DEL/UPK, LOAD), then a bare "moving" catch-all, then 'other' for anything
- * with a label that matches none of the above. Returns null (not 'other') when there's no label
- * text at all, so a caller can tell "no signal" apart from "labeled, but unrecognized". */
+ * behavior (confirmed 2026-08-28: "color/label only" scope).
+ *
+ * Order changed 2026-09-08 (user-reported: job 23060-3 / Bill Fischer, label "DELIVER: Long
+ * Distance", stayed a bare uncategorized "LD" block on the board with no DEL/UPK-style badge).
+ * Root cause was this function itself, not the caller: 'long distance' used to be checked FIRST and
+ * returned immediately on a match, before ever looking for a more specific sub-type in the same
+ * string — so a label combining both (as SmartMoving labels genuinely do: "DELIVER: Long Distance"
+ * says both "this is long-distance" AND "this specific job is a delivery") always lost the more
+ * specific half, no matter what the caller did with the result. Checking the specific job-shape
+ * labels (DEL/UPK-or-DELIVER, LOAD, a bare "moving" catch-all) BEFORE 'long distance' fixes that: a
+ * label naming both now keeps its specific type, and a label that ONLY says "long distance" with no
+ * other signal still correctly falls through every specific check and lands on 'long_distance' at
+ * the end, same as before. 'other' remains the final catch-all for a label that matches none of
+ * these. Returns null (not 'other') when there's no label text at all, so a caller can tell "no
+ * signal" apart from "labeled, but unrecognized".
+ *
+ * DEL/UPK's pattern was also widened the same day to catch "DELIVER"/"DELIVERY" as a bare word, not
+ * just the "DEL/UPK" or "DEL / UPK" shorthand — 23060-3's own label is exactly this case, and
+ * there's no reason a dispatcher who typed out "Deliver" instead of the abbreviation should land in
+ * the generic 'other' bucket instead of the dedicated delivery category. */
 function inferServiceCategory(...labels) {
   const text = labels.filter(Boolean).join(' ');
   if (!text) return null;
-  if (/long distance/i.test(text)) return 'long_distance';
-  if (/\bDEL\s*\/\s*UPK\b/i.test(text)) return 'delivery_unpack';
+  if (/\bDEL\s*\/\s*UPK\b|\bDELIVERY?\b/i.test(text)) return 'delivery_unpack';
   if (/\bLOAD\b/i.test(text)) return 'load';
   if (/\bmoving\b/i.test(text)) return 'moving';
+  if (/long distance/i.test(text)) return 'long_distance';
   return 'other';
 }
 
@@ -140,9 +154,29 @@ function classifyJob({ jobTypeLabel, originAddress, destinationAddress, labelSay
     : isLongDistanceByStates(stateFromAddress(originAddress), stateFromAddress(destinationAddress));
 
   const type = (labelLD || distanceLD) ? 'long_distance' : 'local';
-  const serviceCategory = type === 'long_distance' ? 'long_distance' : inferServiceCategory(jobTypeLabel);
+  // Changed 2026-09-08 at the user's request ("add these labels in longdistance"): used to force
+  // serviceCategory to the fixed string 'long_distance' whenever `type` was long_distance,
+  // discarding whatever the actual label said (DEL/UPK, LOAD, etc.) — reasonable when `type` became
+  // long_distance FROM the label itself (the label already says "long distance", so there's nothing
+  // more specific underneath it), but wrong when it became long_distance purely from the mileage
+  // override (distanceLD) while the label said something else entirely — a long-haul DEL/UPK job
+  // was showing as a bare, uncategorized long-distance bar instead of getting its own DEL/UPK
+  // color/label like a local DEL/UPK job does. Now always classifies straight from the label text —
+  // still lands on 'long_distance' on its own when the label genuinely says so (inferServiceCategory
+  // checks that first), but otherwise reports the job's real category regardless of `type`, letting
+  // the board apply the same color grading to a long-distance job's specific type as it already does
+  // for local jobs (see JobVisuals.jsx's JobBlock — both branches now read catClass).
+  const serviceCategory = inferServiceCategory(jobTypeLabel);
+  // Raw label text this classification was based on, added 2026-09-08 at the user's request so the
+  // board can show what an 'other' job specifically IS (e.g. "Storage Out Bound") instead of a
+  // generic "OTHER" that told a dispatcher nothing beyond "not one of the known types" — see
+  // utils/jobs.js's serviceCategoryText. Not just meaningful for 'other': kept for every category so
+  // the field is consistently present rather than sometimes-null-sometimes-absent depending on which
+  // bucket a job landed in. null when no label text was available at all (same case that makes
+  // inferServiceCategory itself return null above).
+  const serviceCategoryLabel = jobTypeLabel ? String(jobTypeLabel).trim() || null : null;
 
-  return { type, serviceCategory, miles };
+  return { type, serviceCategory, serviceCategoryLabel, miles };
 }
 
 module.exports = {

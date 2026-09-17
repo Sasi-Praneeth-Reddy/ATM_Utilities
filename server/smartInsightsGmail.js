@@ -9,8 +9,10 @@
  * backend doesn't have) that produces a refresh token. That refresh token is stored as a Firebase
  * secret (GMAIL_OAUTH_REFRESH_TOKEN) and reused indefinitely from then on on every scheduled sync.
  *
- * Scope is read-only (`gmail.readonly` + `gmail.labels` to mark messages processed) — this project
- * never needs to send or delete mail. Ported from the SM_Insights project's proven
+ * Scope is `gmail.readonly` + `gmail.modify` (label + trash processed messages, see
+ * markMessageProcessed below) — this project never sends mail and never permanently deletes it
+ * (messages.trash only, recoverable for ~30 days — see markMessageProcessed's own comment). Ported
+ * from the SM_Insights project's proven
  * ingest/gmailAuth.js + ingest/gmail.js (built and tested against this exact account's real report
  * email on 2026-08-19/24) — see project memory (project_sm_insights.md) for that history. Adapted
  * here to feed Scheduler_ATM's own job board directly instead of a separate service.
@@ -35,6 +37,10 @@ const { google } = require('googleapis');
 // superset (everything except permanent delete) but there's no narrower official scope that covers
 // messages.modify. Reading an attachment's bytes (attachments.get, used for the "All Jobs" report
 // below) is also covered by gmail.readonly — no additional scope needed for that.
+// gmail.modify ALSO covers messages.trash (2026-09-04, see markMessageProcessed below) — moving a
+// message to Gmail's Trash is explicitly listed under gmail.modify in Google's own scope docs,
+// distinct from permanent delete (messages.delete, which needs the much broader
+// https://mail.google.com/ scope and is NOT requested here). No new consent/re-auth needed.
 // calendar.readonly added 2026-08-26 for googleCalendarClient.js — SmartMoving can sync its
 // dispatch calendar into a Google Calendar under this SAME Gmail account (confirmed live with the
 // user), which reads the same rich per-job DESCRIPTION text as the old iCal-URL feed
@@ -58,14 +64,33 @@ const LABEL_NAME = 'ATM-Scheduler/SmartInsights-Processed';
 const SEARCH_QUERY_BOOKED_OPPORTUNITIES = 'from:no-reply@smartmoving.com subject:"SmartMoving Report is Ready"';
 // Sigma's sending address has historically been info@send.sigmacomputing.com, but matching the
 // whole send.sigmacomputing.com domain is more robust to Sigma changing the local part than
-// pinning the exact address — the "ALL Jobs" subject suffix is what actually distinguishes this
-// from any other Sigma-delivered report that might get added to this same inbox later.
-const SEARCH_QUERY_ALL_JOBS = 'from:send.sigmacomputing.com subject:"SmartMoving Report is Ready" subject:"ALL Jobs"';
+// pinning the exact address.
+//
+// Bug fixed 2026-08-31 (reported: a manually/on-demand-requested "All Jobs" report never got
+// picked up by Sync Now even though the email was sitting right there): this query used to also
+// require the literal phrase "ALL Jobs" in the SUBJECT line, on the assumption that's what
+// distinguishes this report from any other Sigma-delivered report that might land in this same
+// inbox. That held for the daily *scheduled* delivery, but a one-time/on-demand request from
+// Sigma came through with a generic subject — "Your SmartMoving Report is Ready!" — with "All
+// Jobs" appearing only in the body text, never in the subject at all. Gmail's `subject:` operator
+// only searches the subject field, so that clause silently matched zero messages for this kind of
+// email. The subject requirement is dropped here; findUnprocessedAllJobsFiles() below now
+// verifies the report identity a more reliable way — by checking the actual .xlsx attachment's
+// filename (which the report itself carries, not a delivery-template quirk) — after fetching each
+// candidate message, so a different Sigma report landing in this inbox still gets correctly
+// ignored rather than misread as an All Jobs report.
+const SEARCH_QUERY_ALL_JOBS = 'from:send.sigmacomputing.com subject:"SmartMoving Report is Ready"';
 
 /** Azure Blob Storage link inside the Booked Opportunities email body — confirmed 2026-08-24 (see
  * project memory) to be a real, unauthenticated, directly-fetchable URL, valid ~30 days from when
  * SmartMoving sends it. Not used for the "All Jobs" report — see findUnprocessedAllJobsFiles(). */
 const DOWNLOAD_URL_PATTERN = /https:\/\/smfilestore\.blob\.core\.windows\.net\/report-exports\/[a-zA-Z0-9-]+\/[^\s"'<>]+\.xlsx/;
+
+// The real "is this actually the All Jobs report" check (see SEARCH_QUERY_ALL_JOBS's comment above
+// for why the search query alone can't tell) — matched against the .xlsx attachment's own filename
+// (e.g. "All Jobs_All Jobs Report....xlsx"), case-insensitively, tolerant of the space between the
+// two words being missing/doubled/replaced with an underscore.
+const ALL_JOBS_FILENAME_PATTERN = /all[\s_]*jobs/i;
 
 function getOAuth2Client() {
   const clientId = process.env.GMAIL_OAUTH_CLIENT_ID;
@@ -242,6 +267,17 @@ async function findUnprocessedAllJobsFiles() {
         results.push({ messageId, skipped: true, reason: 'no .xlsx attachment found on message' });
         continue;
       }
+      // See SEARCH_QUERY_ALL_JOBS's comment: the Gmail search alone can match a Sigma email that
+      // isn't actually the All Jobs report (any other Sigma-delivered report sharing this inbox's
+      // generic "SmartMoving Report is Ready" subject) — this is the real report-identity check,
+      // against the attachment's own filename rather than delivery-template subject text.
+      if (!ALL_JOBS_FILENAME_PATTERN.test(attachment.filename)) {
+        results.push({
+          messageId, skipped: true,
+          reason: `attachment "${attachment.filename}" doesn't look like an All Jobs report — likely a different Sigma-delivered report sharing this inbox`,
+        });
+        continue;
+      }
       const buffer = await fetchAttachmentBuffer(gmail, messageId, attachment.attachmentId);
       results.push({ messageId, buffer, filename: attachment.filename });
     } catch (err) {
@@ -253,12 +289,25 @@ async function findUnprocessedAllJobsFiles() {
 
 /** Marks a message processed once its file has been successfully ingested — see the doc comments
  * above for why this is a separate step, not automatic. Works the same regardless of which of the
- * two reports the message was — both share LABEL_NAME. */
+ * two reports the message was — both share LABEL_NAME.
+ *
+ * Added 2026-09-04 (user request, "can we delete the mail once it is processed"): also moves the
+ * message to Gmail's Trash, where it sits recoverable for ~30 days before Gmail auto-purges it —
+ * deliberately NOT a permanent delete (messages.delete), which is one-way immediately and needs a
+ * broader scope than this app has ever requested (see SCOPES's comment above). The label is still
+ * applied FIRST and kept even after trashing: it's what findUnprocessedBookedOpportunityFiles()/
+ * findUnprocessedAllJobsFiles() use to skip already-handled mail, and Gmail's default search already
+ * excludes Trash — but if the user manually recovers a message from Trash before the 30 days are up,
+ * the label is what stops it from being read as a brand-new report and reprocessed a second time.
+ * Trashing runs after labeling, not before, so a failure here (network blip, etc.) still leaves the
+ * message correctly labeled — worst case it just lingers in the inbox instead of moving to Trash,
+ * never double-processed. */
 async function markMessageProcessed(messageId) {
   const auth = getAuthenticatedClient();
   const gmail = google.gmail({ version: 'v1', auth });
   const labelId = await getOrCreateLabelId(gmail);
   await gmail.users.messages.modify({ userId: 'me', id: messageId, requestBody: { addLabelIds: [labelId] } });
+  await gmail.users.messages.trash({ userId: 'me', id: messageId });
 }
 
 module.exports = {
@@ -273,4 +322,9 @@ module.exports = {
   // change any existing behavior.
   extractDownloadUrl, fetchReportFile, extractXlsxAttachmentPart, fetchAttachmentBuffer,
   fetchAndSortByDate, SEARCH_QUERY_BOOKED_OPPORTUNITIES, SEARCH_QUERY_ALL_JOBS,
+  // Exported 2026-08-31 alongside the SEARCH_QUERY_ALL_JOBS fix (see its comment) — the diagnostic
+  // scripts' "newest, regardless of already-processed" fallback paths call extractXlsxAttachmentPart
+  // directly rather than through findUnprocessedAllJobsFiles(), so they need this same filename
+  // check to avoid mistaking some other Sigma-delivered report for the All Jobs one.
+  ALL_JOBS_FILENAME_PATTERN,
 };

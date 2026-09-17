@@ -22,15 +22,19 @@
  *    now that pollSweep's own status filter cuts REST call volume. The function definition is kept
  *    below, just commented out of `exports`, so it's a one-line change to reactivate if ever needed.
  *  - `smartInsightsSyncScheduled` — added 2026-08-24, tightened to every 5 minutes (weekdays,
- *    8 AM-5 PM ET) 2026-08-27. Runs the Smart Insights report pipeline (smartInsightsSync.js:
- *    Gmail -> parse -> upsert) — see its own comment below for the cadence and why it's cheap to run
- *    this often. Separate from pollSweepScheduled above — this reads SmartMoving's emailed report
- *    exports via Gmail, not the SmartMoving REST API, so it needs its own Gmail OAuth secrets
- *    (GMAIL_OAUTH_*, see smartInsightsGmail.js and server/gmail-oauth-setup.js) rather than
- *    SMARTMOVING_API_KEY.
- *  - `calendarSweepScheduled` — added 2026-08-26, tightened to every 5 minutes (weekdays, 8 AM-5 PM
- *    ET) 2026-08-27. Reads SmartMoving's dispatch calendar (truck/crew text, dates/times) via the
- *    Google Calendar API — see its own comment below for the cadence tradeoffs.
+ *    8 AM-5 PM ET) 2026-08-27, reverted 2026-09-04 to two fixed daily checks (12:00 PM / 4:00 PM ET,
+ *    every day) since the underlying report emails only ever go out at 11:51 AM / 3:51 PM ET anyway.
+ *    Runs the Smart Insights report pipeline (smartInsightsSync.js: Gmail -> parse -> upsert) — see
+ *    its own comment below for the exact cadence. Separate from pollSweepScheduled above — this reads
+ *    SmartMoving's emailed report exports via Gmail, not the SmartMoving REST API, so it needs its
+ *    own Gmail OAuth secrets (GMAIL_OAUTH_*, see smartInsightsGmail.js and
+ *    server/gmail-oauth-setup.js) rather than SMARTMOVING_API_KEY.
+ *  - `calendarSweepScheduled` / `calendarSweepScheduled403pm` — added 2026-08-26, tightened to every
+ *    5 minutes (weekdays, 8 AM-5 PM ET) 2026-08-27, reverted 2026-09-04 to three fixed daily check
+ *    times (8:00 AM, 1:00 PM, 4:03 PM ET, every day) — split across two functions since cron can't
+ *    express three arbitrary same-cadence times where the minute differs by hour; see the comment
+ *    above these two exports below. Reads SmartMoving's dispatch calendar (truck/crew text,
+ *    dates/times) via the Google Calendar API.
  *
  * Requiring ./server below runs its top-level code exactly once per cold start — including its
  * `if (!process.env.K_SERVICE)` guard, which Cloud Functions gen2 always sets, so it correctly
@@ -139,23 +143,17 @@ void pollSweepScheduled; // keep the linter quiet about the intentionally-unexpo
 
 exports.smartInsightsSyncScheduled = onSchedule(
   {
-    // Tightened 2026-08-27 at the user's explicit request ("also want the report sync to be done
-    // maybe for every 5 minutes") from two fixed daily checks (12:00 PM / 4:00 PM ET, ~15 minutes
-    // after the 11:45 AM / 3:45 PM ET report subscriptions) to continuous 5-minute polling across
-    // business hours, weekdays only — `*/5 8-16 * * 1-5` reads as "every 5 minutes, during hours
-    // 8 through 16 (i.e. up to 4:55 — the window closes before 5:00 PM), Monday through Friday
-    // (cron day-of-week: 1=Mon..5=Fri, 0=Sun/6=Sat excluded)". Safe to run this often because each
-    // check is CHEAP when there's nothing new: findUnprocessedBookedOpportunityFiles/
-    // findUnprocessedAllJobsFiles (smartInsightsGmail.js) just do a couple of Gmail message-list
-    // searches and return empty arrays on every run that isn't right after a report email lands —
-    // no Firestore reads/writes happen at all until an actual new report is found (unlike
-    // calendarSweepScheduled below, which re-walks its whole event window on every single run — see
-    // that function's comment for why 5 minutes was chosen carefully there instead of tighter).
-    // `timeZone` handles the ET/EDT-vs-EST switch automatically — the cron string alone would need
-    // manual adjustment twice a year otherwise. Each run only picks up messages the OTHER runs
-    // haven't already labeled processed (see smartInsightsGmail.js), so overlapping/frequent runs
-    // never double-process the same report email.
-    schedule: '*/5 8-16 * * 1-5',
+    // Reverted 2026-09-04 at the user's explicit request, back to two fixed daily checks instead of
+    // the 5-minute polling window this had been tightened to on 2026-08-27. Reason given: the actual
+    // SmartMoving/Sigma report emails only ever go out at two fixed times — 11:51 AM and 3:51 PM
+    // ET — so checking every 5 minutes all day was mostly wasted runs finding nothing; a single check
+    // shortly after each real send time (12:00 PM and 4:00 PM ET, ~9 minutes after 11:51/3:51) covers
+    // it. `0 12,16 * * *` = 12:00 PM and 4:00 PM ET, every day — no weekday restriction this time (the
+    // user said "daily"), unlike the old `1-5`-only cron. `timeZone` still handles the ET/EDT-vs-EST
+    // switch automatically. Each run only picks up messages OTHER runs haven't already labeled
+    // processed (see smartInsightsGmail.js), so this is still safe to fire more than strictly needed
+    // if the report send times ever drift — it just won't find anything new to do.
+    schedule: '0 12,16 * * *',
     timeZone: 'America/New_York',
     secrets: ALL_SECRETS,
     region: 'us-central1',
@@ -231,29 +229,53 @@ void icalSweepScheduled; // keep the linter quiet about the intentionally-unexpo
 // below) was deliberately left untouched by this change — that one has a real hard quota (see its
 // own comment: 15-minute polling burned through the account's 20,000-calls/month Basic-tier quota
 // in about two days), so tightening it the same way would be a real risk, not just a cost question.
+// Shared handler for both calendar-sweep schedules below — factored out 2026-09-04 so the two fixed
+// firing times (see the comment above each exports.calendarSweepScheduled* below for why they're two
+// separate functions instead of one cron string) don't duplicate this logging/error-handling block.
+async function runCalendarSweep(label) {
+  await ensureInit();
+  const result = await pollGoogleCalendarFeed().catch((err) => {
+    console.error(`Scheduled calendar sweep (${label}) failed:`, err);
+    return null;
+  });
+  if (result) {
+    console.log(
+      `Calendar sweep (${label}): ${result.matchedCount} job(s) matched to an existing entry (${result.mergedCount} ` +
+      `merged with a Smart Insights record), ${result.skippedNoMatch} calendar event(s) had no existing ` +
+      `job to attach to and were skipped (not added — see pollGoogleCalendarFeed's 2026-08-27 doc comment), ` +
+      `${result.autoAssignedTruckCount} truck(s)/${result.autoAssignedDriverCount} driver(s) auto-assigned, ` +
+      `${result.errors.length} error(s).`
+    );
+    result.errors.forEach((e) => console.error(`Calendar sweep (${label}) error:`, e));
+  }
+}
+
+// Reverted 2026-09-04 at the user's explicit request, from 5-minute weekday/business-hours polling
+// back to three fixed daily check times: 8:00 AM, 1:00 PM, and 4:03 PM ET, every day (no weekday
+// restriction this time — the old `1-5` cron is gone). Split into TWO exported functions rather than
+// one, because a single cron expression can't express three arbitrary (hour, minute) pairs where the
+// minute differs by hour — cron's minute and hour fields are independent, so e.g. `0,3 8,13,16 * * *`
+// would actually fire at 8:00, 8:03, 13:00, 13:03, 16:00, AND 16:03 (every minute-value crossed with
+// every hour-value), not just the three times wanted. `0 8,13 * * *` covers the two on-the-hour times
+// (8:00 AM and 1:00 PM); the odd 4:03 PM time needs its own `3 16 * * *` schedule.
 exports.calendarSweepScheduled = onSchedule(
   {
-    schedule: '*/5 8-16 * * 1-5',
+    schedule: '0 8,13 * * *', // 8:00 AM and 1:00 PM ET, daily
     timeZone: 'America/New_York',
     secrets: ALL_SECRETS,
     region: 'us-central1',
     memory: '512MiB',
   },
-  async () => {
-    await ensureInit();
-    const result = await pollGoogleCalendarFeed().catch((err) => {
-      console.error('Scheduled calendar sweep failed:', err);
-      return null;
-    });
-    if (result) {
-      console.log(
-        `Calendar sweep: ${result.matchedCount} job(s) matched to an existing entry (${result.mergedCount} ` +
-        `merged with a Smart Insights record), ${result.skippedNoMatch} calendar event(s) had no existing ` +
-        `job to attach to and were skipped (not added — see pollGoogleCalendarFeed's 2026-08-27 doc comment), ` +
-        `${result.autoAssignedTruckCount} truck(s)/${result.autoAssignedDriverCount} driver(s) auto-assigned, ` +
-        `${result.errors.length} error(s).`
-      );
-      result.errors.forEach((e) => console.error('Calendar sweep error:', e));
-    }
-  }
+  async () => { await runCalendarSweep('8:00 AM / 1:00 PM'); }
+);
+
+exports.calendarSweepScheduled403pm = onSchedule(
+  {
+    schedule: '3 16 * * *', // 4:03 PM ET, daily — see the shared comment above exports.calendarSweepScheduled
+    timeZone: 'America/New_York',
+    secrets: ALL_SECRETS,
+    region: 'us-central1',
+    memory: '512MiB',
+  },
+  async () => { await runCalendarSweep('4:03 PM'); }
 );

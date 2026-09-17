@@ -1,15 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import DuplicateAlertBanner from '../DuplicateAlertBanner';
 import DriverLegend from '../DriverLegend';
 import DayBoard from './DayBoard';
 import MonthBoard from './MonthBoard';
 import OverlappedAlertsTab from './OverlappedAlertsTab';
-import DayPrintSheet from './DayPrintSheet';
-import DayPrintTimeline from './DayPrintTimeline';
-import JobSearch from './JobSearch';
 import { useDragAutoScroll } from '../../hooks/useDragAutoScroll';
-import { todayStr, addDays, jobActiveOn } from '../../utils/dates';
-import { isTransitOnlyDay, jobTruckIds, overlappingClusterFor, conflictIdsFrom } from '../../utils/jobs';
+import { todayStr, addDays, jobActiveOn, jobActiveInMonth } from '../../utils/dates';
+import { isTransitOnlyDay } from '../../utils/jobs';
 
 // Both print sheets are always in the DOM (hidden on screen) so printing never has to wait on a
 // React re-render. Which one shows up on paper is decided by a plain DOM class toggle right before
@@ -19,12 +16,22 @@ import { isTransitOnlyDay, jobTruckIds, overlappingClusterFor, conflictIdsFrom }
 // no such race.
 //
 // Orientation is applied the same way, for the same reason a plain CSS `@page` + named-page
-// selector wasn't reliable enough on its own (styles.css still has it as a fallback): a
-// dynamically-injected <style> tag setting `@page { size: ... }` right before print() actually
-// gets picked up by every major browser's print engine, whereas `page: pt-landscape` (CSS Paged
-// Media's named-page feature) only has solid support in Chromium — Firefox/Safari mostly ignore
-// it and fall back to whatever the print dialog defaults to. Removed again on 'afterprint' so the
-// next "Print List" (portrait) isn't left landscape from a prior "Print Board".
+// selector wasn't reliable enough on its own (styles.css still has a plain `@page` as a fallback):
+// a dynamically-injected <style> tag setting `@page { size: ... }` right before print() actually
+// gets picked up by every major browser's print engine, whereas CSS Paged Media's named-page
+// feature only has solid support in Chromium — Firefox/Safari mostly ignore it and fall back to
+// whatever the print dialog defaults to. Removed again on 'afterprint' so a later print never
+// inherits a stale orientation from an earlier one.
+//
+// "Print List" always prints portrait; "Print Board" (DayPrintTimeline) went landscape -> portrait
+// -> landscape again, all on 2026-09-15: it started landscape, switched to match "Print List" at the
+// user's request ("make the print board portrait so that it will fit like the old scheduler fit"),
+// then switched back once a later request that same day ("make sure that every detail of the job is
+// getting printed...if needed convert the print board page to landscape") made clear portrait's
+// narrower page was exactly what was squeezing some jobs' detail text — see measureAndPrintBoard
+// below for its own orientation call. This function still takes an explicit orientation argument
+// (rather than being hardcoded) since it's a plain, general-purpose helper — nothing about it
+// assumes both callers agree, which they now genuinely don't.
 let printOrientationStyleEl = null;
 function setPrintOrientation(orientation) {
   if (!printOrientationStyleEl) {
@@ -36,23 +43,35 @@ function setPrintOrientation(orientation) {
   printOrientationStyleEl.textContent = `@page{size:letter ${orientation};margin:${margin};}`;
 }
 
-// "Print Board" (DayPrintTimeline) needs every truck on ONE Letter-landscape page, however many
-// trucks are running that day — a fixed font size either overflowed onto extra pages for a
-// bigger-than-usual fleet, or (if shrunk to always be safe) printed smaller than necessary on a
-// normal day. Instead, --pt-scale (consumed throughout styles.css's .pt-* rules via
-// `calc(<base> * var(--pt-scale, 1))`) is computed fresh from the actual truck count every time
-// "Print Board" is clicked, and set as an inline CSS variable on the print-sheet root right before
-// printing — see printSheet() below. A small fleet still prints at full (scale 1) size; only a
-// fleet big enough to overflow shrinks, and only as much as it needs to.
+// "Print Board" (DayPrintTimeline) needs every working truck on ONE Letter-portrait page, however
+// much vertical room that day's actual jobs need — a truck with two overlapping jobs needs two
+// stacked lanes, and (since 2026-09-15's one-line-per-job rework, see DayPrintTimeline.jsx's
+// BASE_ROW_HEIGHT_PX comment) every lane is now a fixed height, so "how much room a day needs" is
+// just its total lane count. A fixed font size either overflowed onto extra pages for an unusually
+// busy day, or (if shrunk to always be safe) printed smaller than necessary on a normal one. Instead,
+// --pt-scale (consumed throughout styles.css's .pt-* rules via `calc(<base> * var(--pt-scale, 1))`)
+// is computed fresh every time "Print Board" is clicked (see measureAndPrintBoard below for the real
+// DOM-measurement pass that actually drives this, and printSheet() for the plain "Print List"
+// manifest's simpler arithmetic-only version) and set as an inline CSS variable on the print-sheet
+// root right before printing. A normal day still prints at full (scale 1) size; only a day with
+// enough content to overflow shrinks, and only as much as it needs to.
 //
-// This is arithmetic, not a DOM measurement — the print-sheet is normally display:none (see
-// styles.css) until the instant before window.print(), and even once shown, the screen viewport's
-// width doesn't match the actual ~11in print page width, so measuring on-screen height first would
-// be an unreliable proxy for the real printed layout anyway. Instead these constants mirror the
-// *unscaled* (scale 1) pixel values already tuned in styles.css's .pt-hour/.pt-track/etc. rules —
-// if those base sizes ever change, update the matching constant here too.
+// These constants mirror the *unscaled* (scale 1) pixel values already tuned in styles.css's
+// .pt-hour/.pt-track/etc. rules — if those base sizes ever change, update the matching constant here
+// too.
+// PAGE_HEIGHT_IN/MARGIN_IN switched from landscape (8.5in height, 10mm margin) to portrait (11in
+// height, 14mm margin) 2026-09-15 at the user's request ("make the print board portrait so that it
+// will fit like the old scheduler fit"), then back to landscape again the SAME day once a later
+// request ("make sure that every detail of the job is getting printed in the print board...if
+// needed convert the print board page to landscape") made it clear portrait's narrower width was
+// exactly what was making some jobs' full detail line not fit — see setPrintOrientation's own margin
+// table below and measureAndPrintBoard's now-'landscape' call. Landscape's *wider* page (11in vs.
+// portrait's 8.5in short side) means more horizontal room per truck row for a job's one-line detail
+// text, at the cost of less vertical room per page than portrait had — DayPrintTimeline.jsx's own
+// TRACK_WIDTH_PX mirrors the wider width. "Print List" (the plain manifest) is UNAFFECTED — it still
+// prints portrait, only "Print Board" (DayPrintTimeline) uses these constants.
 const PAGE_HEIGHT_IN = 8.5; // US Letter landscape short side (11in x 8.5in)
-const MARGIN_IN = 10 / 25.4; // matches the 10mm landscape @page margin above
+const MARGIN_IN = 10 / 25.4; // matches the 10mm landscape @page margin below
 const PX_PER_IN = 96; // CSS's fixed reference pixel density — independent of actual print DPI
 // .print-sheet.print-active{padding:20px} (styles.css, @media print) adds its OWN 20px padding on
 // every side of the sheet, INSIDE the @page margin already subtracted below — found 2026-09-02
@@ -83,106 +102,196 @@ const CONTENT_HEIGHT_PX = (PAGE_HEIGHT_IN - MARGIN_IN * 2) * PX_PER_IN - SHEET_P
 // so (unlike the truck rows) not worth also shrinking via --pt-scale just to claw back a few more
 // px of headroom.
 const HEADER_FOOTER_THEAD_PX = 46 + 26 + 28;
+// "Print All Trucks" variant only — added 2026-09-15 at the user's request ("remove the main
+// heading"). DayPrintTimeline.jsx skips rendering .print-header entirely when includeAllTrucks is
+// true (see its own return statement), so that 46px never actually occupies any space on that
+// printout — budgeting for it here anyway would just make this variant shrink its text MORE than
+// it needs to. Same footer + thead, minus the header.
+const HEADER_FOOTER_THEAD_PX_ALL_TRUCKS = 26 + 28;
 const SAFETY_BUFFER_PX = 12; // rounding/line-height slack so the last row never juuust spills over
-const BASE_ROW_HEIGHT_PX = 55; // .pt-track's 54px min-height + its 1px border-bottom, at scale 1 — shrunk from 98 to 51 then bumped to 55 on 2026-08-28 alongside .pt-track's own min-height (see that CSS rule's comment)
+// .pt-track's per-lane height at scale 1 — was 55 (54px min-height + 1px border-bottom) back when a
+// lane's real height varied by how many lines its job's text wrapped to. Reworked 2026-09-15
+// alongside DayPrintTimeline.jsx's move to a one-line-per-job layout (see that file's own
+// BASE_ROW_HEIGHT_PX comment for the full story): every lane is now always exactly one line tall, so
+// this is simply that line's height instead of a "tallest job in this lane" estimate. Kept in sync
+// with DayPrintTimeline.jsx's own BASE_ROW_HEIGHT_PX by hand — the two have to agree for the same
+// "known before the other file's math runs" reason noted throughout this file.
+const BASE_ROW_HEIGHT_PX = 46;
 // Floor — below this the text stops being "readable" (the whole point of this feature), so an
-// unusually large fleet is allowed to spill onto a 2nd page rather than shrink past legibility.
+// unusually busy day (a big fleet, or several stacked overlaps) is allowed to spill onto a 2nd page
+// rather than shrink past legibility.
 const MIN_TRUCK_PRINT_SCALE = 0.55;
+// "Print All Trucks" variant only — added 2026-09-15 at the user's explicit request ("make the font
+// size adjustments to print in only one page, no matter how many jobs there are"), overriding the
+// legibility floor above JUST for that button. Printing the entire fleet (not just today's working
+// trucks) means this variant's content height can genuinely exceed what MIN_TRUCK_PRINT_SCALE would
+// still fit on one page — the user explicitly said a guaranteed single page matters more than
+// legibility here, unlike "Print Board" (which still respects MIN_TRUCK_PRINT_SCALE and is allowed
+// to spill onto a 2nd page on a busy day). Not literally 0 — a couple percent keeps the scaled text
+// from collapsing to an unrenderable sliver — but low enough that, combined with
+// HEADER_FOOTER_THEAD_PX_ALL_TRUCKS above, the one-page guarantee holds for any realistic fleet size.
+const MIN_TRUCK_PRINT_SCALE_ALL_TRUCKS = 0.08;
+// Ceiling on the OTHER end — originally added 2026-09-11 after a light day (few trucks, one job
+// each) came out printed at full, uncapped scale 1, and raised 2026-09-15 at the user's request for
+// a bigger, old-scheduler-style printout ("all jobs are in one line, with big font size"): now that
+// every job is a single line instead of a wrapped 2-4 line block, a typical day needs far less total
+// content height, so most days will land at (or near) this ceiling rather than deep inside it —
+// raising it is what actually makes the printed text bigger day to day, not just the base .pt-*
+// font-size values in styles.css. Only a genuinely busy day still shrinks further (down to
+// MIN_TRUCK_PRINT_SCALE) to fit one page.
+const MAX_TRUCK_PRINT_SCALE = 0.85;
 
-function truckPrintScale(truckCount) {
-  if (!truckCount) return 1;
-  const availableForRows = CONTENT_HEIGHT_PX - HEADER_FOOTER_THEAD_PX - SAFETY_BUFFER_PX;
-  const scale = availableForRows / (truckCount * BASE_ROW_HEIGHT_PX);
-  return Math.max(MIN_TRUCK_PRINT_SCALE, Math.min(1, scale));
+// `forAllTrucks` (added 2026-09-15) swaps in the "Print All Trucks" variant's own header/footer
+// budget and legibility floor — see HEADER_FOOTER_THEAD_PX_ALL_TRUCKS and
+// MIN_TRUCK_PRINT_SCALE_ALL_TRUCKS above for why those need to differ from "Print Board"'s. Default
+// (false) keeps "Print Board" byte-for-byte identical to its prior behavior.
+function truckPrintScale(contentHeightPx, forAllTrucks = false) {
+  if (!contentHeightPx) return MAX_TRUCK_PRINT_SCALE;
+  const headerFooterTheadPx = forAllTrucks ? HEADER_FOOTER_THEAD_PX_ALL_TRUCKS : HEADER_FOOTER_THEAD_PX;
+  const minScale = forAllTrucks ? MIN_TRUCK_PRINT_SCALE_ALL_TRUCKS : MIN_TRUCK_PRINT_SCALE;
+  const availableForRows = CONTENT_HEIGHT_PX - headerFooterTheadPx - SAFETY_BUFFER_PX;
+  const scale = availableForRows / contentHeightPx;
+  return Math.max(minScale, Math.min(MAX_TRUCK_PRINT_SCALE, scale));
 }
 
-// Conflicts and Unassigned Jobs used to print as extra rows/blocks stacked BELOW the truck grid —
-// an inline conflict panel under every truck that had one, then a whole separate Unassigned table
-// after the whole grid — and neither one was ever budgeted into truckPrintScale's page-fit math
-// above, which only ever looked at truck count. A day with a handful of conflicts or several
-// unassigned jobs routinely pushed the printout onto a second page even though the truck grid
-// alone fit fine. Fixed 2026-09-02 at the user's request by moving both into a side column BESIDE
-// the grid instead (see DayPrintTimeline.jsx's `.pt-side-panel` and its own restructure comment) —
-// a column adds WIDTH, never height, so it can never be the reason the page spills onto a second
-// sheet. That side column gets its own independent scale (`--pt-side-scale`, separate from the
-// truck grid's `--pt-scale`) sized from how much conflict/unassigned content there actually is
-// today, computed here.
-//
-// This mirrors — deliberately, not by import — the exact grouping DayPrintTimeline.jsx's own render
-// does (activeJobs/conflictsToday/conflictIdsToday/per-truck overlappingClusterFor clusters), same
-// "duplicated on purpose" tradeoff transitOnlyJobCount above already makes: the scale has to be
-// known and set as a CSS var on the print-sheet root BEFORE window.print() is called, which is
-// necessarily before DayPrintTimeline ever renders with today's data, so there's no DOM measurement
-// available to read this from — see printSheet()'s own comment for why this is arithmetic, not a
-// measurement, throughout this file.
-function countPrintSideContent(jobs, trucks, date, conflicts) {
-  const activeJobs = jobs.filter((j) => jobActiveOn(j, date) && !isTransitOnlyDay(j, date));
-  const activeJobIds = new Set(activeJobs.map((j) => j.id));
-  const conflictsToday = (conflicts || []).filter((c) => activeJobIds.has(c.a.id) && activeJobIds.has(c.b.id));
-  const conflictIdsToday = conflictIdsFrom(conflictsToday);
+// A character-count-based version of the truck grid's content-height estimate used to live here
+// (jobDetailTextLength -> estimateHeaderBitsLength/estimateAddressBitsLength, several iterations
+// across 2026-09-11 trying to model how a job's detail text wraps). Removed the same day, once it
+// became clear no amount of retuning the constants would settle: widening it to stop undercounting
+// a text-heavy job (a DEL/UPK job with a long address, whose real ~4 lines it once read as 2, and
+// spilled into the very next lane) then started overcounting short simple ones enough to shrink the
+// whole page more than that day's actual workload needed, erasing the fix's benefit. The truck
+// grid's real scale/lane sizes now come from measureAndPrintBoard below, which reads every job's
+// TRUE rendered height straight from the browser instead of guessing it from its text — see that
+// function's comment for the full story. A character-count estimate (countPrintSideContent/
+// sidePanelPrintScale, an independent --pt-side-scale) used to size the Unassigned Jobs side column
+// the same arithmetic way, back when it printed in its own column beside the grid and so was never
+// part of this measurement pass. Removed 2026-09-15 when Unassigned Jobs moved to a full-width
+// section below the grid instead (see DayPrintTimeline.jsx's own restructure comment) — now that it
+// adds HEIGHT like everything else on the page, it gets measured for real right alongside the truck
+// rows below instead of estimated separately, and shares this one --pt-scale instead of having its
+// own.
 
-  let conflictTruckCount = 0;
-  let conflictJobEntryCount = 0;
-  trucks.forEach((t) => {
-    const tjobs = activeJobs.filter((j) => jobTruckIds(j).includes(t.id));
-    const seen = new Set();
-    let truckHasConflict = false;
-    tjobs.forEach((j) => {
-      if (!conflictIdsToday.has(j.id) || seen.has(j.id)) return;
-      const cluster = overlappingClusterFor(conflictsToday, t.id, j);
-      cluster.forEach((cj) => seen.add(cj.id));
-      conflictJobEntryCount += cluster.length;
-      truckHasConflict = true;
-    });
-    if (truckHasConflict) conflictTruckCount += 1;
-  });
-
-  const unassignedCount = jobs.filter((j) => jobTruckIds(j).length === 0 && j.date === date).length;
-  return { conflictTruckCount, conflictJobEntryCount, unassignedCount };
-}
-
-// Per-entry height budgets for the side panel, at scale 1 — deliberately generous (biased toward
-// shrinking a bit more than strictly necessary) since a real conflict/unassigned entry can wrap to
-// 2 lines (name+time on one, the full origin -> destination address on another) and there's no DOM
-// to measure ahead of time — same reasoning as BASE_ROW_HEIGHT_PX above, just for the narrower
-// side column instead of a truck row.
-const SIDE_SECTION_HEADER_PX = 20; // "⚠ Conflicts Today" / "Unassigned Jobs" section title
-const SIDE_TRUCK_HEADER_PX = 18; // one per truck with a conflict, inside the Conflicts section
-const SIDE_CONFLICT_ENTRY_PX = 34; // one per job listed in a conflict cluster
-const SIDE_UNASSIGNED_ENTRY_PX = 30; // one per unassigned job
-// Side panel is secondary/reference detail, not the primary thing being handed to a crew — allowed
-// to shrink further than the truck grid's own MIN_TRUCK_PRINT_SCALE floor before anything would
-// need to be cut, since legibility matters less here than it does for the truck bars themselves.
-const MIN_SIDE_PRINT_SCALE = 0.45;
-
-// Independent from truckPrintScale — see countPrintSideContent's comment above for why the two
-// columns (truck grid vs. side panel) each get their own scale instead of sharing one, even though
-// both are sized against the exact same page content-height budget.
-function sidePanelPrintScale({ conflictTruckCount, conflictJobEntryCount, unassignedCount }) {
-  const availableForRows = CONTENT_HEIGHT_PX - HEADER_FOOTER_THEAD_PX - SAFETY_BUFFER_PX;
-  const conflictsNeeded = conflictJobEntryCount > 0
-    ? SIDE_SECTION_HEADER_PX + conflictTruckCount * SIDE_TRUCK_HEADER_PX + conflictJobEntryCount * SIDE_CONFLICT_ENTRY_PX
-    : 0;
-  const unassignedNeeded = unassignedCount > 0
-    ? SIDE_SECTION_HEADER_PX + unassignedCount * SIDE_UNASSIGNED_ENTRY_PX
-    : 0;
-  const needed = conflictsNeeded + unassignedNeeded;
-  if (needed <= 0) return 1;
-  const scale = availableForRows / needed;
-  return Math.max(MIN_SIDE_PRINT_SCALE, Math.min(1, scale));
-}
-
-function printSheet(id, orientation = 'portrait', truckCount, sideCounts) {
+function printSheet(id, orientation = 'portrait', contentHeightPx) {
   document.querySelectorAll('.print-sheet').forEach((el) => el.classList.remove('print-active'));
   const el = document.getElementById(id);
   if (el) {
     el.classList.add('print-active');
-    // Only "Print Board" passes truckCount/sideCounts — "Print List" (the plain manifest) doesn't
-    // use --pt-scale/--pt-side-scale at all, so setting both to 1 there is harmless, just unused.
-    el.style.setProperty('--pt-scale', String(truckCount != null ? truckPrintScale(truckCount) : 1));
-    el.style.setProperty('--pt-side-scale', String(sideCounts ? sidePanelPrintScale(sideCounts) : 1));
+    // Only "Print Board" passes contentHeightPx — "Print List" (the plain manifest) doesn't use
+    // --pt-scale at all, so setting it to 1 there is harmless, just unused.
+    el.style.setProperty('--pt-scale', String(contentHeightPx != null ? truckPrintScale(contentHeightPx) : 1));
   }
   setPrintOrientation(orientation);
+  window.print();
+}
+
+// "Print Board"'s REAL page-fit pass — added 2026-09-11 after a character-count line-wrap estimate
+// kept needing recalibration in opposite directions (too narrow for a text-heavy job, which spilled
+// into the next lane; widened to fix that, then over-crediting short simple jobs and shrinking the
+// page more than a light day actually needed). Rather than keep tuning constants for shapes of job
+// text this file can't fully enumerate, this reads each job's TRUE rendered height directly from the
+// browser instead of guessing it: the print sheet is briefly given a real (off-screen, invisible —
+// see .print-sheet.print-measuring in styles.css) layout at --pt-scale 1, every job line's
+// `scrollHeight` is read (that DOM property reports an element's full content height regardless of
+// its own explicit CSS height or overflow:hidden clipping it visually), and the actual page-fit
+// scale/every lane's real top+height are computed from those true numbers before the final, visible
+// print happens.
+//
+// Reworked 2026-09-15 alongside DayPrintTimeline.jsx's move to a one-line-per-job layout: every job
+// line is now `white-space:nowrap` (styles.css's .pt-jobline/.pt-job-bar), so unlike the old wrapped
+// block this no longer needs measuring to catch a job that wraps to more lines than expected — every
+// job is always exactly one line, full stop. What this pass still catches is ordinary rendering
+// variance (font metrics, an unusually tall badge) between BASE_ROW_HEIGHT_PX's placeholder guess and
+// the real thing, so it's kept rather than removed — cheap insurance for something that used to be a
+// real, recurring bug.
+//
+// Still measured at a FIXED scale of 1 (not whatever the final scale turns out to be), for the same
+// reason as before: the real final scale (computed from that worst case, and always <= 1) never needs
+// MORE room than what was measured at the largest size, so the actual print can never clip or
+// overflow — it can only ever end up very slightly taller than the strict minimum on a day that
+// shrinks a lot.
+//
+// Also measures the Unassigned Jobs section's real height now (added 2026-09-15 when that section
+// moved from a side column beside the grid to a full-width block below it, at the user's request —
+// see DayPrintTimeline.jsx's own restructure comment for the full story). A side column only ever
+// added WIDTH, so it never needed to be part of this pass; a bottom section adds HEIGHT just like
+// every truck row does, so it has to be folded into the same `total` the truck rows build up, or a
+// busy day's worth of unassigned jobs could silently push the page onto a 2nd sheet the way this
+// whole measurement pass exists to prevent. .pt-unassigned-section's own scrollHeight (read at the
+// same forced --pt-scale:1 layout as the truck rows above) is simplest here — unlike a truck's
+// lanes, these rows just stack top to bottom in normal flow (see styles.css's .pt-jobline.static),
+// so there's no need to walk individual rows or compute per-row offsets the way byLane does above.
+// `id` (added 2026-09-15 for "Print All Trucks") lets this same real-measurement pass serve TWO
+// fully independent print-sheet DOM nodes — 'day-print-timeline' (the default, "Print Board":
+// active trucks only) and 'day-print-timeline-all' ("Print All Trucks": every truck, no Unassigned
+// Jobs section — see App.jsx/DayPrintTimeline.jsx). Two separate, always-in-the-DOM elements rather
+// than one shared element toggled by a state flag — an EARLIER version of this feature tried a
+// single 'day-print-timeline' whose truck list was driven by a React state flag
+// (includeAllTrucksPrint) flipped by the button and reset on 'afterprint'; that broke exactly the
+// way the user reported ("print board and print all trucks are working only when refreshed
+// seperately, or else they are printing the same thing") once window.print() turned out to block
+// synchronously in the browsers actually being used — the 'afterprint' listener got registered
+// AFTER window.print() already returned, so it could miss an event that had already fired during
+// the block, leaving the flag stuck and every later print (of either button) reusing whichever
+// truck list was already rendered. Two separate DOM ids sidesteps the whole class of bug: each
+// button's print pulls from its own always-current, independently-rendered element — no shared
+// mutable state, no event-ordering race, no dependency on 'afterprint' firing at all for this to
+// work correctly twice in a row without a page refresh.
+// Also handles the "Print All Trucks" one-page guarantee (added 2026-09-15 at the user's request:
+// "remove the main heading and make the font size adjustments to print in only one page, no matter
+// how many jobs there are") — `forAllTrucks` below is derived straight from `id` rather than being a
+// separate parameter, since the two already have a fixed 1:1 mapping (see the id doc comment above)
+// and deriving it here means a caller can never pass a mismatched pair.
+function measureAndPrintBoard(id = 'day-print-timeline') {
+  document.querySelectorAll('.print-sheet').forEach((el) => el.classList.remove('print-active', 'print-measuring'));
+  const el = document.getElementById(id);
+  if (!el) return;
+  const forAllTrucks = id === 'day-print-timeline-all';
+  el.classList.add('print-measuring');
+  el.style.setProperty('--pt-scale', '1');
+  // Reading a layout property here forces the browser to actually lay the sheet out before the
+  // scrollHeight reads below, now that print-measuring has swapped it off display:none — querying
+  // for the rows next would force this anyway, but this makes that dependency explicit.
+  void el.offsetHeight;
+
+  let total = 0;
+  const measuredTracks = [];
+  el.querySelectorAll('tr.pt-truck-row').forEach((row) => {
+    const track = row.querySelector('.pt-track');
+    if (!track) return;
+    const byLane = new Map();
+    track.querySelectorAll('[data-lane]').forEach((node) => {
+      const lane = Number(node.getAttribute('data-lane'));
+      const h = node.scrollHeight;
+      byLane.set(lane, Math.max(byLane.get(lane) || 0, h));
+    });
+    const laneCount = byLane.size ? Math.max(...byLane.keys()) + 1 : 1;
+    const laneHeightsPx = [];
+    for (let i = 0; i < laneCount; i++) laneHeightsPx.push(Math.max(BASE_ROW_HEIGHT_PX, byLane.get(i) || 0));
+    const laneOffsetsPx = [];
+    laneHeightsPx.reduce((cum, h) => { laneOffsetsPx.push(cum); return cum + h; }, 0);
+    const trackHeightPx = laneHeightsPx.reduce((sum, h) => sum + h, 0);
+    total += trackHeightPx;
+    measuredTracks.push({ track, laneHeightsPx, laneOffsetsPx, trackHeightPx });
+  });
+
+  const unassignedSection = el.querySelector('.pt-unassigned-section');
+  if (unassignedSection) total += unassignedSection.scrollHeight;
+
+  const finalScale = truckPrintScale(total || null, forAllTrucks);
+  measuredTracks.forEach(({ track, laneHeightsPx, laneOffsetsPx, trackHeightPx }) => {
+    track.style.height = `calc(${trackHeightPx}px * var(--pt-scale, 1))`;
+    track.querySelectorAll('[data-lane]').forEach((node) => {
+      const lane = Number(node.getAttribute('data-lane'));
+      node.style.top = `calc(${laneOffsetsPx[lane] + 2}px * var(--pt-scale, 1))`;
+      node.style.height = `calc(${laneHeightsPx[lane] - 4}px * var(--pt-scale, 1))`;
+    });
+  });
+
+  el.classList.remove('print-measuring');
+  el.classList.add('print-active');
+  el.style.setProperty('--pt-scale', String(finalScale));
+  setPrintOrientation('landscape');
   window.print();
 }
 
@@ -202,8 +311,20 @@ function transitOnlyJobCount(jobs, date) {
 export default function BoardTab({
   role, boardMode, setBoardMode, boardDate, setBoardDate, monthCursor, setMonthCursor,
   trucks, drivers, jobs, currentCrewTruck, conflicts, conflictIds, placeholderDuplicates,
-  onUnassignJob, onAddTruckToJob, onRemoveTruck, onMoveJobDate, onAddExtraTruck, onSetJobTruckDriver, onUpdateJobFields,
+  onUnassignJob, onAddTruckToJob, onRemoveTruck, onMoveJobDate, onAddExtraTruck, onSetJobTruckDriver, onSetJobColor, onUpdateJobFields,
+  onClearManualEdit,
   onCreateJob, onDeleteJob,
+  // Job search itself now lives in the title bar (Header, via App.jsx) so it's reachable from every
+  // tab, not just Board — moved 2026-09-10. handleJumpToJob and the highlight-timeout state moved
+  // up to App.jsx with it (a search result has to be able to switch tabs to Board, which only
+  // App.jsx can do); highlightedJobId/onJumpToJob arrive here as plain props now instead of being
+  // owned locally, but still flow to DayBoard/OverlappedAlertsTab exactly as before.
+  highlightedJobId, onJumpToJob,
+  // "Print Board"'s in-transit checkbox state — moved up to App.jsx 2026-09-11 alongside
+  // DayPrintSheet/DayPrintTimeline themselves (see App.jsx's .app-shell comment for why); the
+  // checkbox and the print button's onClick handler still live here, just reading/writing this via
+  // props instead of local state now.
+  includeTransitPrint, setIncludeTransitPrint,
 }) {
   const title = role === 'crew'
     ? 'Company truck board — view only'
@@ -217,23 +338,6 @@ export default function BoardTab({
   // DayBoard to attach to the actual scrollable element.
   const timelineRef = useRef(null);
   useDragAutoScroll({ horizontalScrollRef: timelineRef });
-
-  // Search always jumps to day view — that's the one place a job's exact truck/time is visible —
-  // and briefly highlights the job once the board lands on its date, so "find this job" ends with
-  // actually seeing it, not just guessing it's somewhere on the right day.
-  const [highlightedJobId, setHighlightedJobId] = useState(null);
-  useEffect(() => {
-    if (!highlightedJobId) return undefined;
-    const timer = setTimeout(() => setHighlightedJobId(null), 4000);
-    return () => clearTimeout(timer);
-  }, [highlightedJobId]);
-
-  function handleJumpToJob(job) {
-    setBoardMode('day');
-    setBoardDate(job.date);
-    setMonthCursor(new Date(`${job.date}T00:00:00`));
-    setHighlightedJobId(job.id);
-  }
 
   // Month view only (day view already shows everything for one date at a time, and Overlapped
   // Alerts is already conflicts-only by nature) — lets a dispatcher see local moves, long-distance
@@ -262,6 +366,19 @@ export default function BoardTab({
   const [hideInTransit, setHideInTransit] = useState(false);
   const transitHiddenCount = boardMode === 'day' ? transitOnlyJobCount(jobs, boardDate) : 0;
 
+  // includeTransitPrint/setIncludeTransitPrint ("Print Board" only — separate from hideInTransit
+  // above, which controls the interactive on-screen board) arrive as props from App.jsx now — see
+  // this component's own prop-list comment for why.
+
+  // "Print All Trucks" (added 2026-09-15) prints its OWN always-in-the-DOM DayPrintTimeline instance
+  // (id="day-print-timeline-all", rendered by App.jsx with includeAllTrucks hardcoded true — see its
+  // own comment) rather than toggling a shared state flag on the regular "Print Board" sheet. An
+  // earlier version tried the shared-flag approach and broke under real use — see
+  // measureAndPrintBoard's own comment above for the full race-condition story. No hook needed here
+  // at all now: this button's onClick below calls measureAndPrintBoard('day-print-timeline-all')
+  // directly and synchronously, exactly like every other print button in this file, since that
+  // element's content never depends on anything this component's state has to wait a render for.
+
   const [monthFilter, setMonthFilter] = useState('all');
   const monthFilteredJobs = useMemo(() => {
     if (monthFilter === 'local') return jobs.filter((j) => j.type !== 'long_distance');
@@ -270,11 +387,37 @@ export default function BoardTab({
     return jobs;
   }, [jobs, monthFilter, conflictIds]);
 
+  // Overlapped Alerts used to just dump every conflict in the whole dataset (utils/jobs.js's
+  // getConflicts runs over ALL jobs, not just what's currently on screen — see App.jsx), which
+  // meant a dispatcher looking at one day's board saw conflicts from months away too. Re-scoped
+  // 2026-09-08 at the user's request so the tab instead shows only what's relevant to whichever
+  // view it was opened from: the day's conflicts from day view, the month's conflicts from month
+  // view. "Overlapped Alerts" is itself a third boardMode value (see the toggle buttons below), so
+  // by the time it's active boardMode no longer says whether the dispatcher came from day or month
+  // — this ref remembers the last real (non-"conflicts") view so that choice survives the switch.
+  // Mutating a ref mid-render like this is safe here because it only ever reads its OWN prior value
+  // (never stale props/state) and every reader below sees the update in the very same render pass.
+  const lastViewModeRef = useRef(boardMode === 'month' ? 'month' : 'day');
+  if (boardMode === 'day' || boardMode === 'month') lastViewModeRef.current = boardMode;
+
+  const conflictsInView = useMemo(() => {
+    if (lastViewModeRef.current === 'month') {
+      const year = monthCursor.getFullYear();
+      const month = monthCursor.getMonth();
+      return conflicts.filter((c) => jobActiveInMonth(c.a, year, month) || jobActiveInMonth(c.b, year, month));
+    }
+    return conflicts.filter((c) => jobActiveOn(c.a, boardDate) || jobActiveOn(c.b, boardDate));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- lastViewModeRef.current is read, not a dep, but boardMode covers every render where it can change
+  }, [conflicts, boardDate, monthCursor, boardMode]);
+
+  const conflictsScopeLabel = lastViewModeRef.current === 'month'
+    ? `this month (${monthCursor.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })})`
+    : `on ${new Date(`${boardDate}T00:00:00`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}`;
+
   return (
     <section>
       <div className="toolbar">
         <h2 className="section-title">{title}</h2>
-        <JobSearch jobs={jobs} trucks={trucks} onJumpToJob={handleJumpToJob} />
         <div className="board-controls">
           <div className="view-toggle">
             <button className={`btn secondary ${boardMode === 'day' ? 'active' : ''}`} onClick={() => setBoardMode('day')}>Day</button>
@@ -284,9 +427,13 @@ export default function BoardTab({
                 produces dozens of these and the banner was crowding out the board itself. The count
                 badge means a dispatcher still sees at a glance whether there's anything to look at,
                 without switching tabs first. */}
-            <button className={`btn secondary oa-toggle-btn ${boardMode === 'conflicts' ? 'active' : ''}`} onClick={() => setBoardMode('conflicts')}>
+            <button
+              className={`btn secondary oa-toggle-btn ${boardMode === 'conflicts' ? 'active' : ''}`}
+              onClick={() => setBoardMode('conflicts')}
+              title={`Scheduling conflicts ${conflictsScopeLabel}`}
+            >
               Overlapped Alerts
-              {conflicts.length > 0 && <span className="oa-count-badge">{conflicts.length}</span>}
+              {conflictsInView.length > 0 && <span className="oa-count-badge">{conflictsInView.length}</span>}
             </button>
           </div>
           {boardMode === 'day' && (
@@ -310,31 +457,68 @@ export default function BoardTab({
                 {hideInTransit && transitHiddenCount > 0 && <span className="oa-count-badge">{transitHiddenCount}</span>}
               </button>
               <button className="btn secondary" onClick={() => printSheet('day-print-list')} title="Print a plain text list of the day's jobs">🖨 Print List</button>
+              <label
+                className="btn secondary"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+                title="Print a long-distance job that's only in transit today (not picking up or delivering) too, as a plain gray bar showing which truck it's tied up on — instead of leaving it off the printout entirely."
+              >
+                <input type="checkbox" checked={includeTransitPrint} onChange={(e) => setIncludeTransitPrint(e.target.checked)} />
+                Include in-transit
+              </label>
               <button
                 className="btn secondary"
                 onClick={() => {
                   // A long-distance job "in transit" on this specific date (not starting or ending
-                  // today) never appears on this printout (see DayPrintTimeline.jsx's
-                  // isTransitOnlyDay) — confirm first so a dispatcher printing for a crew isn't
-                  // surprised later that one of those jobs isn't on the page.
+                  // today) is left off this printout unless "Include in-transit" (above) is checked
+                  // — confirm first so a dispatcher printing for a crew isn't surprised later that
+                  // one of those jobs isn't on the page.
                   const skipped = transitOnlyJobCount(jobs, boardDate);
-                  if (skipped > 0) {
+                  if (skipped > 0 && !includeTransitPrint) {
                     const ok = window.confirm(
                       `${skipped} long-distance job${skipped === 1 ? ' is' : 's are'} in transit today (not starting or ending) and won't appear on this printed board. ` +
-                      `Print the rest anyway?`
+                      `Print the rest anyway? (Check "Include in-transit" above to print it instead.)`
                     );
                     if (!ok) return;
                   }
-                  // Conflicts/Unassigned Jobs print in their own side column, not stacked below the
-                  // grid — see countPrintSideContent/sidePanelPrintScale above and
-                  // DayPrintTimeline.jsx's restructure comment — so their own scale is computed here
-                  // from today's actual conflict/unassigned counts, independent of truck count.
-                  const sideCounts = countPrintSideContent(jobs, trucks, boardDate, conflicts);
-                  printSheet('day-print-timeline', 'landscape', trucks.length, sideCounts);
+                  // Unassigned Jobs now prints as a full-width section below the grid and shares its
+                  // real-height measurement with the truck rows — see measureAndPrintBoard's own
+                  // comment and DayPrintTimeline.jsx's restructure comment for the full story.
+                  measureAndPrintBoard();
                 }}
-                title="Print the truck board as it looks on screen — colors, bars, trucks on the left, 6am-6pm — with Conflicts and Unassigned Jobs in their own column beside the calendar. Everything is fit onto one page, shrinking text only as much as the fleet size and side-panel content require. Long-distance jobs print on their start and end day; days in between (in transit) are left off, and you'll be asked to confirm first if any would be skipped today."
+                title="Print the truck board as it looks on screen — colors, bars, trucks on the left, 6am-6pm — with Unassigned Jobs listed in a section below the calendar. Only trucks working that day get a row, and two jobs overlapping on the same truck each print in full on their own stacked line. Everything is fit onto one page, shrinking text only as much as that day's actual workload requires. Long-distance jobs print on their start and end day; days in between (in transit) are left off unless 'Include in-transit' is checked, and you'll be asked to confirm first if any would be skipped today."
               >
                 🖨 Print Board
+              </button>
+              {/* "Print All Trucks" — added 2026-09-15 at the user's request ("a new button beside
+                  print full day, which will print all the truck board, like that will includes the
+                  trucks that are not been assigned with jobs"), then reworked the same day once the
+                  first version (a shared state flag toggling the SAME print-sheet "Print Board"
+                  uses) turned out to break under real use — see measureAndPrintBoard's own comment
+                  for the full story, and the user's own report: "print board and print all trucks
+                  are working only when refreshed seperately, or else they are printing the same
+                  thing" / "i want them to be two different seperate mechanisms even when we don't
+                  do the refresh". Now genuinely independent: this targets its OWN always-rendered
+                  DayPrintTimeline instance (id="day-print-timeline-all", App.jsx) that always shows
+                  every truck and never the Unassigned Jobs section, so this button and "Print Board"
+                  never share any state, DOM node, or timing dependency — each one measures and
+                  prints its own sheet directly, synchronously, right here, exactly like every other
+                  print button in this file. */}
+              <button
+                className="btn secondary"
+                onClick={() => {
+                  const skipped = transitOnlyJobCount(jobs, boardDate);
+                  if (skipped > 0 && !includeTransitPrint) {
+                    const ok = window.confirm(
+                      `${skipped} long-distance job${skipped === 1 ? ' is' : 's are'} in transit today (not starting or ending) and won't appear on this printed board. ` +
+                      `Print the rest anyway? (Check "Include in-transit" above to print it instead.)`
+                    );
+                    if (!ok) return;
+                  }
+                  measureAndPrintBoard('day-print-timeline-all');
+                }}
+                title="Print the truck board with EVERY truck in the fleet, including ones with nothing assigned today (just an empty row) — everything else is identical to Print Board except no Unassigned Jobs section: colors, bars, one page, shrinking text only as much as the (now larger) fleet needs."
+              >
+                🖨 Print All Trucks
               </button>
             </div>
           )}
@@ -361,8 +545,14 @@ export default function BoardTab({
 
       {boardMode !== 'conflicts' && (
         <>
-          <DuplicateAlertBanner duplicates={placeholderDuplicates || []} />
-          <DriverLegend trucks={trucks} drivers={drivers} jobs={jobs} date={boardDate} />
+          <DuplicateAlertBanner duplicates={placeholderDuplicates || []} trucks={trucks} />
+          {/* Day view (2026-09-08, at the user's request): job blocks no longer color-code by
+              driver (see JobVisuals.jsx's JobBlock — border-left is now a conflict indicator, and
+              the driver's name already prints directly on the block), so this legend's color key
+              has nothing left to explain there. Month view keeps it — MonthChip (JobVisuals.jsx)
+              still uses driver color as its only way to show who's driving (no room to print the
+              name), so the key is still needed to read it. */}
+          {boardMode !== 'day' && <DriverLegend trucks={trucks} drivers={drivers} jobs={jobs} date={boardDate} />}
         </>
       )}
 
@@ -387,14 +577,19 @@ export default function BoardTab({
             onRemoveTruck={onRemoveTruck}
             onAddExtraTruck={onAddExtraTruck}
             onSetJobTruckDriver={onSetJobTruckDriver}
+            onSetJobColor={onSetJobColor}
             onUpdateJobFields={onUpdateJobFields}
+            onClearManualEdit={onClearManualEdit}
             onCreateJob={onCreateJob}
             onDeleteJob={onDeleteJob}
             highlightedJobId={highlightedJobId}
             timelineRef={timelineRef}
           />
-          <DayPrintSheet id="day-print-list" date={boardDate} trucks={trucks} drivers={drivers} jobs={jobs} conflictIds={conflictIds} />
-          <DayPrintTimeline id="day-print-timeline" date={boardDate} trucks={trucks} drivers={drivers} jobs={jobs} conflicts={conflicts} />
+          {/* DayPrintSheet/DayPrintTimeline used to render here — moved up to App.jsx 2026-09-11 as
+              true top-level siblings of the rest of the app, fixing a persistent blank-2nd-page
+              print bug (see App.jsx's .app-shell comment for the full reasoning). printSheet()
+              above still targets them purely by DOM id, so nothing about how "Print List"/"Print
+              Board" actually work here needed to change. */}
         </>
       )}
       {boardMode === 'month' && monthFilter !== 'all' && (
@@ -420,7 +615,13 @@ export default function BoardTab({
         />
       )}
       {boardMode === 'conflicts' && (
-        <OverlappedAlertsTab conflicts={conflicts} trucks={trucks} drivers={drivers} onJumpToJob={handleJumpToJob} />
+        <OverlappedAlertsTab
+          conflicts={conflictsInView}
+          scopeLabel={conflictsScopeLabel}
+          trucks={trucks}
+          drivers={drivers}
+          onJumpToJob={onJumpToJob}
+        />
       )}
     </section>
   );

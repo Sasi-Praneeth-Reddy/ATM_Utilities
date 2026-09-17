@@ -53,6 +53,11 @@ const driversCol = fs.collection('drivers');
 const jobsCol = fs.collection('jobs');
 const usersCol = fs.collection('users');
 const allowedExternalEmailsCol = fs.collection('allowedExternalEmails');
+// One-doc-per-key "app settings" collection — currently only holds gmailAuth (below), but kept as
+// a general small collection rather than a gmailAuth-specific one in case something else small and
+// singleton-ish needs a home later (a doc id, not a whole new top-level collection, is cheap to add).
+const systemCol = fs.collection('system');
+const GMAIL_AUTH_DOC_ID = 'gmailAuth';
 
 /** Each job's own audit trail lives as a `history` SUBcollection under that job's own document —
  * `jobs/{jobId}/history/{entryId}` — rather than one flat collection with a `jobId` field to filter
@@ -340,11 +345,29 @@ function jobData(job) {
     // every frontend spot that calls `.split(',')` on origin/destination assuming it's a string.
     origin: job.origin ?? null, destination: job.destination ?? null,
     crewSize: job.crewSize ?? null, trucksNeeded: job.trucksNeeded || 1,
+    // "Original" trucks-needed floor — added 2026-09-08 at the user's request. Snapshot of what
+    // trucksNeeded was on FIRST creation (from SmartMoving/Smart Insights/iCal mapping, or whatever
+    // a dispatcher typed creating a placeholder). trucksNeeded itself gets pushed UP afterward
+    // whenever a dispatcher assigns extra trucks (see useSchedulerData.js's addTruckToJob/
+    // addExtraTruckToJob's Math.max bump), but removeTruckFromJob/unassignJob must never let it drop
+    // BELOW this floor — otherwise undoing an accidental extra-truck assignment on a job that
+    // genuinely needs 2+ trucks (SmartMoving itself says 2) would erase that real requirement right
+    // along with the mistake, which is indistinguishable from the mistake using trucksNeeded/
+    // truckIds.length alone at removal time. Frozen at creation; the only other writer is
+    // JobEditModal's handleSave, and only when a dispatcher actually types a new number into
+    // "Trucks needed" there (a deliberate override, re-basing the floor) — never when a Save just
+    // resends the same value untouched, or when a truck-assignment action bumps trucksNeeded.
+    trucksNeededOriginal: job.trucksNeededOriginal ?? job.trucksNeeded ?? 1,
     status: job.status || null, miles: job.miles ?? null, transitDays: job.transitDays ?? null,
     // Label-derived category for board color grading only (DEL/UPK, LOAD, moving, long_distance,
     // other) — see jobTypeInference.js's inferServiceCategory. Never drives scheduling behavior;
     // `type` above is still the only field that does. Added 2026-08-28.
     serviceCategory: job.serviceCategory || null,
+    // Raw label text serviceCategory was classified from (e.g. "Storage Out Bound") — added
+    // 2026-09-08 at the user's request, so the board can show what an 'other'-category job
+    // specifically IS instead of a generic "OTHER" — see jobTypeInference.js's classifyJob and
+    // utils/jobs.js's serviceCategoryText/otherCategoryColor.
+    serviceCategoryLabel: job.serviceCategoryLabel || null,
     stage: job.stage || null, source: job.source || null,
     smartMovingJobId: job.smartMovingJobId || null,
     smartMovingOpportunityId: job.smartMovingOpportunityId || null,
@@ -363,12 +386,37 @@ function jobData(job) {
     smartInsightsEstimatedAmount: job.smartInsightsEstimatedAmount ?? null,
     smartInsightsBranch: job.smartInsightsBranch || null,
     smartInsightsSalesPerson: job.smartInsightsSalesPerson || null,
+    // "Manual edit lock" — added 2026-09-08 at the user's request, after confirming that every sync
+    // source (REST poll, calendar, Smart Insights) was unconditionally overwriting a job's own
+    // detail fields (customer/date/time/addresses/crewSize/notes/type — see MANUAL_EDIT_LOCK_FIELDS
+    // below) on every re-sync, with no protection at all beyond truckIds/trucksNeeded/status (those
+    // were already dispatcher-owned — see upsertSmartMovingJob's header). Set by
+    // markJobManuallyEdited (called from server.js's PATCH /api/jobs/:id handler, only when the
+    // diffed changes actually touch one of those fields) and cleared by clearJobManualEdit (the
+    // "Resync from source" action) — see both functions below for the full mechanics. null until a
+    // dispatcher has ever hand-edited one of those fields.
+    manuallyEditedAt: job.manuallyEditedAt ?? null,
+    manuallyEditedBy: job.manuallyEditedBy ?? null,
+    // Truck-assignment lock — same idea as manuallyEditedAt/By just above, but its own separate flag
+    // scoped to truckIds/trucksNeeded/truckDrivers only (added 2026-09-14, split out of the combined
+    // lock — see MANUAL_EDIT_LOCK_FIELDS's comment for why). Set by markTruckAssignmentManual, cleared
+    // by clearJobManualEdit alongside the detail lock. null until a dispatcher has ever hand-assigned
+    // a truck/driver on this job.
+    truckLockedAt: job.truckLockedAt ?? null,
+    truckLockedBy: job.truckLockedBy ?? null,
     truckIds: job.truckIds || [],
     // Per-truck driver assignment for this job — `{ [truckId]: driverId }`. See the file header for
     // why this replaced a standing driver-to-truck link. New jobs start with an empty map; entries
     // are added/removed one key at a time via setJobTruckDriver, never written wholesale here after
     // creation (updateJob only ever deletes individual keys, when a truck leaves truckIds).
     truckDrivers: job.truckDrivers || {},
+    // Manual color override, settable at creation time as of 2026-09-16 ("for placeholder give
+    // option for colors") — same field setJobColor writes post-creation (see that function below),
+    // just also accepted here so a placeholder job can start out with a pick already applied
+    // instead of needing a second click right after it's created. Server.js's POST /api/jobs
+    // handler validates this against the same 5-color set setJobColor does before it ever reaches
+    // here.
+    colorOverride: job.colorOverride || null,
   };
 }
 
@@ -380,7 +428,7 @@ async function createJob(job) {
 async function updateJob(id, fields) {
   const allowed = [
     'customer', 'type', 'date', 'endDate', 'startTime', 'endTime', 'duration', 'origin', 'destination',
-    'crewSize', 'trucksNeeded', 'status', 'miles', 'serviceCategory', 'transitDays', 'stage', 'source',
+    'crewSize', 'trucksNeeded', 'trucksNeededOriginal', 'status', 'miles', 'serviceCategory', 'serviceCategoryLabel', 'transitDays', 'stage', 'source',
     'smartMovingJobId', 'smartMovingOpportunityId', 'smartMovingStatus', 'smartMovingStatusCode',
     'smartMovingTruckText', 'smartMovingCrewText', 'notes',
     'smartInsightsQuoteNumber', 'smartInsightsStatus', 'smartInsightsEstimatedAmount',
@@ -407,6 +455,122 @@ async function updateJob(id, fields) {
   return getJob(id);
 }
 
+/** What counts as a "manual edit" that trips the freeze below — the fields a sync source treats as
+ *  its own (customer/date/time/addresses/crewSize/notes/type — always refreshed on every re-sync,
+ *  see upsertSmartMovingJob/mergeCalendarDataOntoExistingJob/upsertSmartInsightsJob below).
+ *
+ *  Briefly (2026-09-08 to 2026-09-14) also covered truckIds/trucksNeeded/truckDrivers, so assigning
+ *  a truck or driver locked the whole job — including customer/date/address/etc. — against further
+ *  syncing. Reverted 2026-09-14 (user-reported on job 21973-2/-3): SmartMoving corrected those jobs'
+ *  dates, but a routine truck assignment made earlier had already locked them, so the REST poll AND
+ *  the calendar sync both silently skipped the jobs entirely — including the date fix — until
+ *  someone noticed and ran "Resync from source" by hand. That's a worse failure mode than the one
+ *  the 2026-09-08 change was guarding against, and unnecessary besides: assignment fields were
+ *  already protected from ever being overwritten by a sync without needing the lock's help — no sync
+ *  source writes truckIds/truckDrivers onto an existing job at all (see fillAssignmentIfEmpty's
+ *  "only if empty" rule), and trucksNeeded is only ever raised, never lowered, by
+ *  fillTrucksNeededIfUnset. So dropping these three back out costs nothing on the "don't silently
+ *  revert a dispatcher's assignment" front, while letting genuine SmartMoving-owned fields (the date
+ *  fix, in particular) keep flowing onto an assigned job instead of freezing along with it.
+ *
+ *  server.js's PATCH /api/jobs/:id handler checks its diffJobFields() output against this same list
+ *  before calling markJobManuallyEdited, since customer/date/etc. all flow through that one generic
+ *  handler. POST /api/jobs/:id/set-truck-driver no longer calls markJobManuallyEdited at all — driver
+ *  assignment doesn't touch anything in this list anymore, so there's nothing for it to trip. Kept as
+ *  one shared list (mirrored in the frontend's utils/jobs.js) so the definition can't drift between
+ *  call sites. */
+const MANUAL_EDIT_LOCK_FIELDS = [
+  'customer', 'type', 'date', 'endDate', 'startTime', 'endTime', 'duration', 'origin', 'destination',
+  'crewSize', 'notes',
+];
+
+/** Sibling of MANUAL_EDIT_LOCK_FIELDS above, for the separate truck-assignment lock (added
+ *  2026-09-14 — see markTruckAssignmentManual's comment). truckDrivers isn't listed here for the
+ *  same reason it isn't mechanically checked against MANUAL_EDIT_LOCK_FIELDS either — it never flows
+ *  through the generic PATCH /api/jobs/:id handler this list is consulted from (POST
+ *  /api/jobs/:id/set-truck-driver has its own dedicated before/after comparison instead). Mirrored
+ *  in the frontend's utils/jobs.js for the same optimistic-prediction reason MANUAL_EDIT_LOCK_FIELDS
+ *  is. */
+const TRUCK_LOCK_FIELDS = ['truckIds', 'trucksNeeded'];
+
+/** One-line ops visibility for a manual-edit-lock skip (see MANUAL_EDIT_LOCK_FIELDS above) — the
+ *  REST poll sweep and Smart Insights sync don't thread a skip count back up to their own callers
+ *  the way pollGoogleCalendarFeed's skippedManualEdit does (see server.js), so this console.log is
+ *  the only record of it for those two paths; shows up in `firebase functions:log`. */
+function logManualEditSkip(source, existing) {
+  console.log(`[manualEditLock] ${source} sync skipped ${existing.id} — manually edited ${existing.manuallyEditedAt} by ${existing.manuallyEditedBy || 'unknown'}`);
+}
+
+/**
+ * "Manual edit lock" — see jobData()'s comment on manuallyEditedAt/manuallyEditedBy for the full
+ * background. Called from one place in server.js, right after a REAL change to one of
+ * MANUAL_EDIT_LOCK_FIELDS (customer/type/date/endDate/startTime/endTime/duration/origin/destination/
+ * crewSize/notes) is confirmed against the job's previous state via diffJobFields (so merely opening
+ * JobEditModal and clicking Save without changing anything doesn't spuriously lock a job) — the
+ * PATCH /api/jobs/:id handler. Once set, upsertSmartMovingJob/mergeCalendarDataOntoExistingJob/
+ * upsertSmartInsightsJob all skip this job ENTIRELY on their next sync — not just the fields that
+ * were actually edited; see this repo's "freeze the whole job" decision (as opposed to per-field
+ * tracking) — until clearJobManualEdit (below) is called.
+ *
+ * Truck/driver assignment (truckIds/trucksNeeded/truckDrivers) used to also trip this SAME lock
+ * (2026-09-08 to 2026-09-14) but no longer does — see MANUAL_EDIT_LOCK_FIELDS's own comment for why.
+ * It now has its own separate, narrower lock — see markTruckAssignmentManual below — so a truck
+ * reassignment doesn't freeze customer/date/etc, and editing customer/date/etc doesn't freeze truck
+ * syncing either. Two independent locks, two independent trigger/target field sets.
+ */
+async function markJobManuallyEdited(id, actor) {
+  await safeUpdate(jobsCol.doc(id), {
+    manuallyEditedAt: new Date().toISOString(),
+    manuallyEditedBy: actor?.email || null,
+  });
+  return getJob(id);
+}
+
+/**
+ * Truck-assignment lock (added 2026-09-14, replacing the truckIds/trucksNeeded/truckDrivers share of
+ * the old combined manual-edit lock — see markJobManuallyEdited's comment above and
+ * MANUAL_EDIT_LOCK_FIELDS's comment for the full history). Called from server.js right after a REAL
+ * change to truckIds/trucksNeeded (PATCH /api/jobs/:id, via diffJobFields) or truckDrivers (POST
+ * /api/jobs/:id/set-truck-driver, via its own priorDriverId/newDriverId comparison — that field never
+ * flows through the generic PATCH path).
+ *
+ * Once set, a job's truck/driver assignment is frozen against the calendar sync specifically — see
+ * syncTruckAssignmentUnlessLocked below, used by mergeCalendarDataOntoExistingJob — the only sync
+ * path that currently carries real truck-assignment data (the calendar event's "Trucks:"/"Crew:"
+ * text, matched via findTruckIdBySmartMovingLabel/findDriverIdBySmartMovingLabel). The REST/webhook
+ * opportunity poll (mapOpportunity.js) doesn't expose an equivalent truck field at all right now — it
+ * always builds jobs with truckIds: [] — so upsertSmartMovingJob's own truck handling (still just
+ * fillAssignmentIfEmpty, unchanged) deliberately stays "fill if empty" rather than "sync fully" even
+ * once this lock exists: treating that endpoint's permanently-empty truckIds as "SmartMoving says no
+ * truck" would silently wipe every non-locked job's assignment on every REST poll. Smart Insights
+ * never carries truck data at all (see mapSmartInsightsRow.js), so it's unaffected either way.
+ */
+async function markTruckAssignmentManual(id, actor) {
+  await safeUpdate(jobsCol.doc(id), {
+    truckLockedAt: new Date().toISOString(),
+    truckLockedBy: actor?.email || null,
+  });
+  return getJob(id);
+}
+
+/** "Resync from source" — clears BOTH locks (the detail-field lock above and the truck-assignment
+ *  lock above) in one write, so this job goes back to accepting automatic updates from whichever
+ *  sync source(s) still recognize it (matched by id/counterpart id, same as any other job — see
+ *  findCounterpartJobId). Doesn't force an immediate re-sync itself; it just lifts both blocks so
+ *  the next regular poll sweep / calendar sweep / Smart Insights sync (automatic or manually
+ *  triggered via the sync buttons) picks this job up normally again. One combined button/endpoint
+ *  for both locks — a dispatcher asking to "resync" a job almost certainly means all of it, and two
+ *  separate resync actions for one job would just be confusing for no real benefit. */
+async function clearJobManualEdit(id) {
+  await safeUpdate(jobsCol.doc(id), {
+    manuallyEditedAt: null,
+    manuallyEditedBy: null,
+    truckLockedAt: null,
+    truckLockedBy: null,
+  });
+  return getJob(id);
+}
+
 /** Sets (or, when driverId is falsy, clears) which driver is driving one specific truck on one
     specific job. Uses a single-key dot-path update so sibling trucks' driver assignments on the
     same job — and every other field on the job — are left untouched. Doesn't verify truckId is
@@ -415,6 +579,23 @@ async function setJobTruckDriver(jobId, truckId, driverId) {
   const updates = driverId
     ? { [`truckDrivers.${truckId}`]: driverId }
     : { [`truckDrivers.${truckId}`]: FieldValue.delete() };
+  await safeUpdate(jobsCol.doc(jobId), updates);
+  return getJob(jobId);
+}
+
+/** Sets (or, when color is falsy, clears) a job's manual color override — added 2026-09-15 at the
+    user's request ("All users to change these colors when clicking on the job"), so a dispatcher's
+    (or crew's) deliberate pick always wins over the automatic military/LD/packing/storage/local
+    color computed from the job's own fields. Deliberately its OWN narrow field, not part of
+    updateJob's `allowed` list and NOT in MANUAL_EDIT_LOCK_FIELDS/TRUCK_LOCK_FIELDS above: it's a
+    pure display preference, unrelated to the customer/date/truck data those two locks protect, so
+    setting it should never freeze a job against SmartMoving/calendar syncing the way a real detail
+    edit does. server.js's own route validates `color` is one of the 5 allowed values (or null to
+    clear) before ever calling this — this function trusts its caller. */
+async function setJobColor(jobId, color) {
+  const updates = color
+    ? { colorOverride: color }
+    : { colorOverride: FieldValue.delete() };
   await safeUpdate(jobsCol.doc(jobId), updates);
   return getJob(jobId);
 }
@@ -453,9 +634,15 @@ function findCounterpartJobId(ownId) {
  *  Mirrors this file's established "never overwrite a dispatcher's assignment" rule (see
  *  upsertSmartMovingJob's own header above) but applied at merge time: a job that already exists
  *  under the *other* source's id, with no truck ever assigned to it, is functionally still
- *  unassigned — this fills that gap from freshly synced calendar data rather than overwriting
- *  anything a dispatcher did. Never touches `updates` at all once `existing.truckIds` is non-empty.
- */
+ *  unassigned — this fills that gap from freshly synced data rather than overwriting anything a
+ *  dispatcher did. Never touches `updates` at all once `existing.truckIds` is non-empty.
+ *
+ *  As of 2026-09-14, this is ONLY still used by upsertSmartMovingJob's counterpart-merge branch below
+ *  (the REST/webhook + dormant iCal path) — mergeCalendarDataOntoExistingJob (the calendar sync) uses
+ *  syncTruckAssignmentUnlessLocked instead, which can also CLEAR an assignment, not just fill one.
+ *  Kept at "fill only" here deliberately: the REST/webhook opportunity path (mapOpportunity.js) has no
+ *  real truck signal to actively sync from — see markTruckAssignmentManual's comment for why
+ *  "sync fully" would be unsafe there specifically. */
 function fillAssignmentIfEmpty(updates, existing, incoming) {
   const alreadyAssigned = existing && Array.isArray(existing.truckIds) && existing.truckIds.length > 0;
   if (alreadyAssigned) return;
@@ -465,6 +652,83 @@ function fillAssignmentIfEmpty(updates, existing, incoming) {
   Object.keys(incomingDrivers).forEach((truckId) => {
     updates[`truckDrivers.${truckId}`] = incomingDrivers[truckId];
   });
+}
+
+/**
+ * Calendar-sync sibling of fillAssignmentIfEmpty above, added 2026-09-14 (user-reported: a truck
+ * unassigned on SmartMoving's side stayed assigned here forever, with no way for a sync to ever pick
+ * that up). Where fillAssignmentIfEmpty only ever ADDS a truck onto a job that has none yet — so it
+ * can never undo a dispatcher's assignment, but also never reflects an assignment SmartMoving removed
+ * — this actively keeps truckIds/truckDrivers in sync with the calendar's own current "Trucks:"/
+ * "Crew:" match, in both directions, UNLESS the job's truck assignment has been manually fixed here
+ * (existing.truckLockedAt — see markTruckAssignmentManual above). Unlocked and the calendar now shows
+ * a different truck, or none at all (`incoming.truckIds` empty): this REPLACES `existing.truckIds`/
+ * `truckDrivers` to match, including clearing them — that's the whole point of "sync them" rather
+ * than "only ever fill them."
+ *
+ * Deliberately only wired into mergeCalendarDataOntoExistingJob (calendar sync), NOT
+ * upsertSmartMovingJob (REST/webhook poll) — see markTruckAssignmentManual's own comment for why:
+ * the REST/webhook opportunity path has no real truck signal to sync FROM (mapOpportunity.js always
+ * builds truckIds: []), so treating that as "SmartMoving says no truck" would wipe every unlocked
+ * job's assignment on every ordinary poll. Only the calendar event's "Trucks:" text is an actual,
+ * current signal from SmartMoving about what truck is on the job right now.
+ *
+ * Known limitation, same one fillAssignmentIfEmpty always had: `incoming.truckIds` being empty could
+ * mean the calendar genuinely shows no truck, OR that today's "Trucks:" text just didn't match any
+ * truck's smartMovingLabels (typo, unmapped label, reworded text). Both look identical here, so an
+ * unlocked job's assignment can now be cleared by a label that stops matching, not just by a real
+ * removal — the tradeoff for actually reflecting a real removal instead of never reflecting one at
+ * all. A dispatcher who wants an assignment to stick regardless should fix it here once (locks it)
+ * rather than relying on the label to keep matching forever.
+ */
+function syncTruckAssignmentUnlessLocked(updates, existing, incoming) {
+  if (existing && existing.truckLockedAt) return;
+  const incomingTruckIds = incoming.truckIds || [];
+  const currentTruckIds = (existing && existing.truckIds) || [];
+  if (JSON.stringify(incomingTruckIds) !== JSON.stringify(currentTruckIds)) {
+    updates.truckIds = incomingTruckIds;
+  }
+  const incomingDrivers = incoming.truckDrivers || {};
+  const currentDrivers = (existing && existing.truckDrivers) || {};
+  Object.keys(currentDrivers).forEach((truckId) => {
+    if (!(truckId in incomingDrivers)) updates[`truckDrivers.${truckId}`] = FieldValue.delete();
+  });
+  Object.keys(incomingDrivers).forEach((truckId) => {
+    if (currentDrivers[truckId] !== incomingDrivers[truckId]) updates[`truckDrivers.${truckId}`] = incomingDrivers[truckId];
+  });
+}
+
+/**
+ * Adopts a sync source's own trucks-needed figure onto an existing job whose trucksNeeded has
+ * never actually been engaged with by anything — added 2026-09-08, user-reported on job 23773-1:
+ * the calendar description said "Quoted: 2 trucks, 5 crew" (mapIcalEvent.js parses this into
+ * `job.trucksNeeded`), the ONE matching truck (ARC 130-2) got correctly auto-assigned by
+ * fillAssignmentIfEmpty above, but the job kept showing "1 truck" regardless. Root cause: this job
+ * was first created via a Smart Insights report (which never carries a truck count at all — see
+ * mapSmartInsightsRow.js — so it always writes the hardcoded trucksNeeded:1 placeholder), and
+ * neither upsertSmartMovingJob's/mergeCalendarDataOntoExistingJob's smFields nor
+ * fillAssignmentIfEmpty ever refresh trucksNeeded on an EXISTING doc — by design, since it's meant
+ * to be dispatcher-owned once genuinely set (see this file's header on truckIds/trucksNeeded/
+ * status). The gap: that "never overwrite the dispatcher's number" rule was also protecting a
+ * number nobody had actually set — an untouched placeholder default, not a real decision.
+ *
+ * Distinguishes "never touched" from "a dispatcher's real number" via trucksNeededOriginal (added
+ * the same day, for useSchedulerData.js's removeTruckFromJob/unassignJob roll-back) — every path
+ * that meaningfully sets trucksNeeded (JobEditModal's deliberate edit, or a truck-assignment
+ * auto-bump) also sets that floor, so its absence here means this job's trucksNeeded has never been
+ * through any of those. Deliberately INDEPENDENT of fillAssignmentIfEmpty's truckIds guard above —
+ * 23773-1 already had its one truck assigned by the time this runs in the same merge, which is
+ * exactly the case that needs covering, not excluding. Only ever raises the number (`incomingNeeded
+ * <= currentNeeded` bails out), so a genuinely smaller dispatcher-set value already recorded via
+ * trucksNeededOriginal is never overridden by a sync's own figure.
+ */
+function fillTrucksNeededIfUnset(updates, existing, incoming) {
+  if (existing && existing.trucksNeededOriginal != null) return;
+  const incomingNeeded = incoming.trucksNeeded;
+  const currentNeeded = (existing && existing.trucksNeeded) || 1;
+  if (!incomingNeeded || incomingNeeded <= currentNeeded) return;
+  updates.trucksNeeded = incomingNeeded;
+  updates.trucksNeededOriginal = incomingNeeded;
 }
 
 /**
@@ -525,9 +789,29 @@ function preserveSmartMovingIdentity(updates, existing) {
  * none yet) onto that existing Smart-Insights-sourced record instead of creating a duplicate
  * scheduler entry for the same real-world job.
  */
+/** Never lets this source's endDate downgrade a job's already-known multi-day span. Same "genuine
+ * improvement only, never a demotion" pattern as fillTrucksNeededIfUnset below: a REST-poll job's
+ * endDate (mapOpportunity.js) is either a real multi-day span — when SmartMoving's own tripInfo has
+ * a confirmed delivery date — or, when that isn't in SmartMoving yet, just a same-day guess
+ * (endDate defaults to `date` there). The reliable source for a real multi-day span is the calendar
+ * sync (mergeCalendarDataOntoExistingJob, which applies its own endDate unconditionally below,
+ * since it's never guessing) — this poll should never overwrite that with its own guess.
+ *
+ * Bug fixed 2026-09-10, same root cause/symptom as upsertSmartInsightsJob's siFields fix just below
+ * (reported: a multi-day long-distance job's endDate "suddenly" reverted to a single day, so it
+ * stopped appearing on any day but its first): clicking "Sync Now" on a job whose multi-day span
+ * SmartMoving itself hasn't confirmed yet (no tripInfo.confirmedDeliveryDate) would silently
+ * collapse that job's already-correct calendar-set span back to a single day, exactly like the
+ * automatic Smart Insights sync used to do unconditionally. */
+function applyNonRegressingEndDate(updates, existing, job) {
+  if (!job.endDate) return;
+  const existingEnd = existing && existing.endDate;
+  if (!existingEnd || job.endDate >= existingEnd) updates.endDate = job.endDate;
+}
+
 async function upsertSmartMovingJob(job) {
   const smFields = {
-    customer: job.customer, type: job.type, date: job.date, endDate: job.endDate,
+    customer: job.customer, type: job.type, date: job.date,
     startTime: job.startTime, endTime: job.endTime, duration: job.duration, origin: job.origin, destination: job.destination,
     crewSize: job.crewSize,
     // Computed from origin/destination ZIPs (jobTypeInference.js) — refreshed on every sync just
@@ -538,6 +822,7 @@ async function upsertSmartMovingJob(job) {
     // update entirely, matching the old SQLite layer's "missing key = don't touch that column".
     // Added 2026-08-28.
     miles: job.miles ?? undefined, serviceCategory: job.serviceCategory ?? undefined,
+    serviceCategoryLabel: job.serviceCategoryLabel ?? undefined,
     smartMovingJobId: job.smartMovingJobId,
     smartMovingOpportunityId: job.smartMovingOpportunityId,
     smartMovingStatus: job.smartMovingStatus, smartMovingStatusCode: job.smartMovingStatusCode,
@@ -548,7 +833,18 @@ async function upsertSmartMovingJob(job) {
   const existingSnap = await jobsCol.doc(job.id).get();
   if (existingSnap.exists) {
     const existingId = job.id;
-    await updateJob(existingId, { ...smFields, source: 'smartmoving' });
+    const existing = docToJob(existingSnap);
+    // Manual edit lock (added 2026-09-08 — see jobData()'s comment on manuallyEditedAt): a
+    // dispatcher's hand-corrected date/time/address/etc. should never get silently reverted by the
+    // next poll sweep just because SmartMoving's own copy still says something else. Skip this job
+    // entirely rather than refreshing smFields onto it.
+    if (existing && existing.manuallyEditedAt) {
+      logManualEditSkip('REST poll', existing);
+      return { job: existing, created: false, skippedManualEdit: true };
+    }
+    const updates = { ...smFields, source: 'smartmoving' };
+    applyNonRegressingEndDate(updates, existing, job);
+    await updateJob(existingId, updates);
     return { job: await getJob(existingId), created: false };
   }
 
@@ -556,11 +852,17 @@ async function upsertSmartMovingJob(job) {
   const counterpartSnap = counterpartId ? await jobsCol.doc(counterpartId).get() : null;
   if (counterpartSnap && counterpartSnap.exists) {
     const existing = docToJob(counterpartSnap);
+    if (existing && existing.manuallyEditedAt) {
+      logManualEditSkip('REST poll', existing);
+      return { job: existing, created: false, merged: false, skippedManualEdit: true };
+    }
     // Prefer 'smartmoving' as the merged doc's source label: the calendar/REST path carries the
     // richer per-job dispatch detail (real start time, Trucks:/Crew: text) that a Smart-Insights-
     // sourced record never had — this is an upgrade, not a demotion, of what that record can show.
     const updates = { ...smFields, source: 'smartmoving' };
     fillAssignmentIfEmpty(updates, existing, job);
+    fillTrucksNeededIfUnset(updates, existing, job);
+    applyNonRegressingEndDate(updates, existing, job);
     await safeUpdate(counterpartSnap.ref, updates);
     return { job: await getJob(counterpartId), created: false, merged: true };
   }
@@ -603,6 +905,7 @@ async function mergeCalendarDataOntoExistingJob(job) {
     // update entirely, matching the old SQLite layer's "missing key = don't touch that column".
     // Added 2026-08-28.
     miles: job.miles ?? undefined, serviceCategory: job.serviceCategory ?? undefined,
+    serviceCategoryLabel: job.serviceCategoryLabel ?? undefined,
     smartMovingJobId: job.smartMovingJobId,
     smartMovingOpportunityId: job.smartMovingOpportunityId,
     smartMovingStatus: job.smartMovingStatus, smartMovingStatusCode: job.smartMovingStatusCode,
@@ -617,18 +920,30 @@ async function mergeCalendarDataOntoExistingJob(job) {
   // the caller explicitly passes it. So a job that already exists under its own SM- id (i.e. was
   // already seen by a PRIOR calendar sync, before any truck labels were registered) could never
   // pick up a truck on a LATER sync even once labels were added and matching started working — only
-  // the counterpart-merge branch below ever called fillAssignmentIfEmpty. Now mirrors that branch
-  // exactly: fetch the existing doc, let fillAssignmentIfEmpty add a truck only if one isn't already
-  // set (never overwrites a dispatcher's assignment, same guarantee as everywhere else), and write
-  // via safeUpdate directly (not updateJob) since fillAssignmentIfEmpty's dot-path
-  // `truckDrivers.<id>` keys aren't in updateJob's field allowlist and would silently be dropped by
-  // it.
+  // the counterpart-merge branch below used to call the truck-sync helper. Now mirrors that branch
+  // exactly: fetch the existing doc, let syncTruckAssignmentUnlessLocked keep the truck/driver
+  // assignment in step with the calendar's own current match UNLESS this job's assignment has been
+  // manually fixed here (see that function's own comment), and write via safeUpdate directly (not
+  // updateJob) since its dot-path `truckDrivers.<id>` keys aren't in updateJob's field allowlist and
+  // would silently be dropped by it.
   const existingSnap = await jobsCol.doc(job.id).get();
   if (existingSnap.exists) {
     const existingId = job.id;
     const existing = docToJob(existingSnap);
+    // Manual edit lock (added 2026-09-08 — see jobData()'s comment on manuallyEditedAt): skip this
+    // job entirely rather than refreshing smFields onto it. Still counts as `matched` (the calendar
+    // sync did find this job) but not `merged` (nothing was actually written) — see
+    // pollGoogleCalendarFeed's skippedManualEdit tally in server.js. This is the DETAIL lock only —
+    // truck assignment has its own separate lock, checked inside syncTruckAssignmentUnlessLocked
+    // below, so a job can still get its truck synced even while nothing else about it is locked
+    // (and vice versa).
+    if (existing && existing.manuallyEditedAt) {
+      logManualEditSkip('calendar', existing);
+      return { job: existing, matched: true, merged: false, skippedManualEdit: true };
+    }
     const updates = { ...smFields, source: 'smartmoving' };
-    fillAssignmentIfEmpty(updates, existing, job);
+    syncTruckAssignmentUnlessLocked(updates, existing, job);
+    fillTrucksNeededIfUnset(updates, existing, job);
     preserveSmartMovingIdentity(updates, existing);
     await safeUpdate(existingSnap.ref, updates);
     return { job: await getJob(existingId), matched: true, merged: false };
@@ -638,8 +953,13 @@ async function mergeCalendarDataOntoExistingJob(job) {
   const counterpartSnap = counterpartId ? await jobsCol.doc(counterpartId).get() : null;
   if (counterpartSnap && counterpartSnap.exists) {
     const existing = docToJob(counterpartSnap);
+    if (existing && existing.manuallyEditedAt) {
+      logManualEditSkip('calendar', existing);
+      return { job: existing, matched: true, merged: false, skippedManualEdit: true };
+    }
     const updates = { ...smFields, source: 'smartmoving' };
-    fillAssignmentIfEmpty(updates, existing, job);
+    syncTruckAssignmentUnlessLocked(updates, existing, job);
+    fillTrucksNeededIfUnset(updates, existing, job);
     preserveSmartMovingIdentity(updates, existing);
     await safeUpdate(counterpartSnap.ref, updates);
     return { job: await getJob(counterpartId), matched: true, merged: true };
@@ -672,13 +992,30 @@ async function mergeCalendarDataOntoExistingJob(job) {
  */
 async function upsertSmartInsightsJob(job) {
   const siFields = {
-    customer: job.customer, type: job.type, date: job.date, endDate: job.endDate,
+    // Bug fixed 2026-09-10 (reported: a multi-day long-distance job's endDate "suddenly" reverted
+    // to a single day, so it stopped appearing on any day but its first — even though nobody
+    // touched it, and only non-manually-edited jobs were affected). Root cause: `endDate` used to
+    // be included here unconditionally, but mapSmartInsightsRow.js ALWAYS sets endDate: null for
+    // every row (this source has no delivery-date data at all — see its own file). The ONLY source
+    // that ever computes a real multi-day endDate is the Google Calendar sync
+    // (mapIcalEvent.js/mergeCalendarDataOntoExistingJob). Smart Insights syncs run automatically
+    // twice a day; every one of those runs was silently overwriting whatever real endDate a prior
+    // calendar sync had set, right back to null — exactly the "all of a sudden, all of them"
+    // pattern reported, and exactly why manually-edited jobs were spared (the manual-edit-lock skip
+    // above bails out before siFields is ever applied to them). Fix: don't include endDate here at
+    // all — same reasoning as why truckIds/trucksNeeded/status aren't in siFields either: this
+    // source has nothing real to contribute to that field on an UPDATE, so it shouldn't touch it.
+    // (Still fine at job CREATION time below/in jobData() — a brand-new Smart-Insights-only job
+    // simply starts single-day (endDate falls back to date) until a calendar sync can extend it,
+    // same as before.)
+    customer: job.customer, type: job.type, date: job.date,
     origin: job.origin, destination: job.destination,
     // See upsertSmartMovingJob's smFields for the `?? undefined` reasoning — matters even more
     // here, since `movingFrom`/`movingTo` (Smart Insights report text) don't always carry a ZIP,
     // so this source often can't compute miles at all; `?? undefined` keeps that from clobbering
     // a good value a calendar sync already computed for the same job. Added 2026-08-28.
     miles: job.miles ?? undefined, serviceCategory: job.serviceCategory ?? undefined,
+    serviceCategoryLabel: job.serviceCategoryLabel ?? undefined,
     smartInsightsQuoteNumber: job.smartInsightsQuoteNumber,
     smartInsightsStatus: job.smartInsightsStatus,
     smartInsightsEstimatedAmount: job.smartInsightsEstimatedAmount,
@@ -689,6 +1026,13 @@ async function upsertSmartInsightsJob(job) {
   const existingSnap = await jobsCol.doc(job.id).get();
   if (existingSnap.exists) {
     const existingId = job.id;
+    const existing = docToJob(existingSnap);
+    // Manual edit lock (added 2026-09-08 — see jobData()'s comment on manuallyEditedAt): skip this
+    // job entirely rather than refreshing siFields onto it.
+    if (existing && existing.manuallyEditedAt) {
+      logManualEditSkip('Smart Insights', existing);
+      return { job: existing, created: false, skippedManualEdit: true };
+    }
     await updateJob(existingId, { ...siFields, source: 'smartmoving-insights' });
     return { job: await getJob(existingId), created: false };
   }
@@ -696,6 +1040,11 @@ async function upsertSmartInsightsJob(job) {
   const counterpartId = findCounterpartJobId(job.id);
   const counterpartSnap = counterpartId ? await jobsCol.doc(counterpartId).get() : null;
   if (counterpartSnap && counterpartSnap.exists) {
+    const existing = docToJob(counterpartSnap);
+    if (existing && existing.manuallyEditedAt) {
+      logManualEditSkip('Smart Insights', existing);
+      return { job: existing, created: false, merged: false, skippedManualEdit: true };
+    }
     // No fillAssignmentIfEmpty call here — a Smart Insights row never carries truck/crew data, so
     // there's nothing for it to contribute to an assignment either way.
     await safeUpdate(counterpartSnap.ref, siFields);
@@ -768,6 +1117,23 @@ async function setUserOtp(id, otpHash, otpExpiresAt) {
 
 async function clearUserOtp(id) {
   await safeUpdate(usersCol.doc(id), { otpHash: null, otpExpiresAt: null });
+}
+
+/* ---------- Gmail/Calendar OAuth re-auth tracking ----------
+   Google's OAuth "Testing" publishing status auto-expires the refresh token
+   server/smartInsightsGmail.js runs on every 7 days (see that file's header) — this doc is what
+   lets the board warn about that BEFORE it actually breaks a sync, instead of everyone finding out
+   from an invalid_grant error days later. Written only by server/gmail-oauth-setup.js, right after
+   a successful re-auth (it's the one place that actually knows "a brand new token was just
+   issued" — the deployed backend just sees whatever token is in the secret and has no way to tell
+   a fresh one from a week-old one). Read by GET /api/gmail-auth-status (server.js). */
+async function getGmailAuthStatus() {
+  const doc = await systemCol.doc(GMAIL_AUTH_DOC_ID).get();
+  return doc.exists ? doc.data() : null;
+}
+
+async function setGmailAuthRefreshed(refreshedAt) {
+  await systemCol.doc(GMAIL_AUTH_DOC_ID).set({ refreshedAt }, { merge: true });
 }
 
 /* ---------- Allowed external emails ----------
@@ -933,11 +1299,13 @@ module.exports = {
   createTruck, updateTruck, deleteTruck, reorderTrucks,
   findTruckIdBySmartMovingLabel, findDriverIdBySmartMovingLabel,
   createDriver, updateDriver, deleteDriver,
-  createJob, updateJob, deleteJob, setJobTrucks, setJobTruckDriver, upsertSmartMovingJob,
+  createJob, updateJob, deleteJob, setJobTrucks, setJobTruckDriver, setJobColor, upsertSmartMovingJob,
   upsertSmartInsightsJob, findCounterpartJobId, fillAssignmentIfEmpty, mergeCalendarDataOntoExistingJob,
-  logJobChange,
+  logJobChange, markJobManuallyEdited, markTruckAssignmentManual, clearJobManualEdit,
+  MANUAL_EDIT_LOCK_FIELDS, TRUCK_LOCK_FIELDS,
   resetToSampleData, clearJobs,
   createUser, listUsers, getUserByEmail, getUserById, updateUserRole, deleteUser, countAdmins,
   setUserPassword, setUserOtp, clearUserOtp,
   addAllowedExternalEmail, listAllowedExternalEmails, isEmailAllowedExternally, removeAllowedExternalEmail,
+  getGmailAuthStatus, setGmailAuthRefreshed,
 };

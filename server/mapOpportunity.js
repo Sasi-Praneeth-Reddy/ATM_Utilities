@@ -79,7 +79,7 @@ function mapOpportunityToJobs(opportunity, premiumJobsById = {}) {
     // runs on top of it (see this function's own comment above on why: it can only ever ADD
     // long-distance jobs jobTypeInference.js's classifyJob wouldn't otherwise have caught, never
     // remove one opportunityType already confirmed).
-    const { type, serviceCategory, miles } = classifyJob({
+    const { type, serviceCategory, serviceCategoryLabel, miles } = classifyJob({
       originAddress: origin, destinationAddress: destination,
       labelSaysLongDistance: inferredType === 'long_distance',
     });
@@ -114,6 +114,7 @@ function mapOpportunityToJobs(opportunity, premiumJobsById = {}) {
       status: 'scheduled',
       miles,
       serviceCategory,
+      serviceCategoryLabel,
       source: 'smartmoving',
       smartMovingStatus,
       smartMovingStatusCode,

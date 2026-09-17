@@ -4,14 +4,21 @@ import { todayStr } from '../../utils/dates';
 
 function AddTruckForm({ onSave, onCancel, truckCount }) {
   const [name, setName] = useState('');
-  const [size, setSize] = useState('');
   const [capacity, setCapacity] = useState('');
   const [homeBase, setHomeBase] = useState('');
 
   async function save() {
     await onSave({
       name: name.trim() || `Truck ${truckCount + 1}`,
-      size: size.trim() || '26ft Box',
+      // "Size" dropped from this form entirely 2026-09-16, at the user's request — it used to
+      // default to '26ft Box' whenever the field was left blank (which was most of the time, since
+      // the placeholder text "26ft Box" looked like a real value), silently mislabeling trucks that
+      // were never actually 26ft box trucks (e.g. "M&C VAN", "Penske Rental"). There was also no way
+      // to fix a wrong size afterward — the size edit box was removed from existing truck cards back
+      // on 2026-09-10 (see TruckCard's own comment below). Rather than keep guessing a default or
+      // re-adding that edit box, new trucks just start with no size at all (db.js's createTruck
+      // already handles size being omitted, storing it as null) — nothing here asks for it or fills
+      // one in.
       capacity: capacity.trim() || '—',
       homeBase: homeBase.trim() || 'Denver, CO',
     });
@@ -21,7 +28,6 @@ function AddTruckForm({ onSave, onCancel, truckCount }) {
     <div className="admin-card add-form">
       <h3>New Truck</h3>
       <div className="row"><span className="field-label">Name</span><input type="text" value={name} placeholder="Truck 6" onChange={(e) => setName(e.target.value)} /></div>
-      <div className="row"><span className="field-label">Size</span><input type="text" value={size} placeholder="26ft Box" onChange={(e) => setSize(e.target.value)} /></div>
       <div className="row"><span className="field-label">Capacity</span><input type="text" value={capacity} placeholder="12,000 lbs" onChange={(e) => setCapacity(e.target.value)} /></div>
       <div className="row"><span className="field-label">Home Base</span><input type="text" value={homeBase} placeholder="Denver, CO" onChange={(e) => setHomeBase(e.target.value)} /></div>
       <div className="row" style={{ justifyContent: 'flex-end' }}>
@@ -70,12 +76,14 @@ function TruckCard({ t, jobs, onUpdateField, onUpdateStatus, onDeleteTruck, drag
           style={{ fontWeight: 700, fontSize: 13, width: 110 }}
           onChange={(e) => onUpdateField(t.id, 'name', e.target.value)}
         />
-        <input
-          type="text" value={t.size}
-          style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 12, width: 150 }}
-          onChange={(e) => onUpdateField(t.id, 'size', e.target.value)}
-        />
       </h3>
+      {/* The "size" edit box that used to sit right next to the name (e.g. "26ft Box") was removed
+          here 2026-09-10 at the user's request — unused in practice, and it was rendering as a
+          conspicuous empty box for any truck without a size set. `t.size` itself is still a real,
+          displayed field elsewhere (Header's crew truck selector, CrewTab, the day board's truck
+          row, both printed sheets) — only its one edit affordance is gone, not the field or its
+          value. If it ever needs editing again, it'll need a new home; nothing here still writes to
+          it. */}
       <div className="row">
         <span className="field-label">Today</span>
         <span className={statusClass(derived)} title="Automatic — reflects whether this truck has a job assigned today.">
@@ -121,6 +129,15 @@ function TruckCard({ t, jobs, onUpdateField, onUpdateStatus, onDeleteTruck, drag
           <button className="btn secondary" style={{ color: 'var(--red)' }} onClick={handleDelete}>Delete truck</button>
         </div>
       )}
+      {/* Firestore doc id, added 2026-09-10 at the user's request ("show me example before
+          developing it" — see truck-card-example.html, Option B). Genuinely blurred (not just
+          faint) at rest and sharpens on hover — a reference for support/debugging, not something a
+          dispatcher needs to read day to day. Trucks aren't keyed by Firestore's usual long
+          auto-generated ids — createTruck (server.js) assigns a short one instead, e.g. "T7" — so
+          this line stays short regardless of how a truck was created. */}
+      <div className="truck-id-footer">
+        <span className="truck-id-line" title={`Firestore doc id: ${t.id}`}>id: {t.id}</span>
+      </div>
     </div>
   );
 }

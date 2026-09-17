@@ -12,15 +12,16 @@
 
   --green:#2e9e5b; --amber:#d69b1f; --red:#d0453c; --blue:#3672d9;
 
-  /* Service-category color grading (day board + print board) — added 2026-08-28. 'moving' and
-     'long_distance' deliberately have no entry here: 'moving' is the majority/default case and
-     keeps the board's plain default styling, 'long_distance' already has its own long-standing
-     orange (--orange-dk, via .job-block.ld/.pt-block.ld) — see utils/jobs.js's
-     serviceCategoryLabels for the full rationale. Not reused from DRIVER_COLORS (utils/jobs.js) —
-     different visual channel (fill vs. a job block's border-left accent) but picked to stay
-     visually distinct from that palette anyway. Fixed across light/dark (like --green/--amber/
-     --red/--blue above), since these sit on a solid, always-white-text job block either theme. */
-  --cat-delivery-unpack:#0c8599; --cat-load:#6d4aa6; --cat-other:#5b6472;
+  /* --cat-load is the last survivor of what used to be a 3-color 'other'-category grading added
+     2026-08-28 (delivery_unpack/load/other each had their own color). 2026-09-15's --jobblock-*
+     rework moved light mode onto a separate fixed 5-color theme, and its own same-day follow-up
+     ("No other colors") then dropped delivery_unpack/other from dark mode's palette too, leaving
+     only 'load' (packing, still purple) with a dedicated color in either theme — see .job-block's own
+     comment and the dark-mode --jobblock-* block below, which is the only remaining place this var
+     is read (--jobblock-load:var(--cat-load)). Not reused from DRIVER_COLORS (utils/jobs.js) —
+     different visual channel (fill vs. a job block's border-left accent) but picked to stay visually
+     distinct from that palette anyway. */
+  --cat-load:#6d4aa6;
 
   /* Tinted surfaces for job blocks, chips and banners — replace what used to be hardcoded pale
      hex values sprinkled through this file, so the whole app (not just the base page/cards)
@@ -34,6 +35,33 @@
   --shadow-sm:0 1px 2px rgba(20,30,60,.06); --shadow-md:0 2px 10px rgba(20,30,60,.10);
   --radius-sm:6px; --radius-md:10px; --radius-lg:12px;
   color-scheme:light;
+
+  /* Day-board job-block fills — light mode only (dark mode's own values are set in the
+     :root[data-theme='dark'] block below). First added 2026-09-15 so every job block would read with
+     black text in light mode instead of the white text the old, much darker fills needed — see
+     .job-block's own comment for that story. Recolored the same day to a fixed theme instead of the
+     type/category palette that came before it, at the user's own follow-up request ("remove the old
+     color scheme for transit and others, instead use this color theme, red for identified military
+     jobs, yellow for long distance, purple for packing jobs, green for local jobs, orange for storage
+     jobs") plus "make the colors little darker". A brief --jobblock-delivery/--jobblock-other pair
+     existed for one round as a flat fallback for DEL/UPK and non-storage 'other' jobs, but the user's
+     very next message made the theme's own "No other colors" explicit — removed the same day, so
+     .job-block.cat-delivery_unpack/.cat-other below no longer have dedicated rules at all and those
+     jobs just fall through to whatever their local/long-distance color already is. Exactly 5 colors
+     now, matching the 5-item list above one-to-one. */
+  --jobblock-local:#a8ddb8; --jobblock-ld:#f0d878; --jobblock-load:#cfaeea; --jobblock-storage:#f4b87a;
+  --jobblock-military:rgba(208, 69, 60, 0.42);
+
+  /* Day-board per-lane row height (added 2026-09-15, "make the jobs look like in print board, one
+     below another" — see .track.multi-lane and JobBlock's laneVerticalStyle, JobVisuals.jsx/
+     DayBoard.jsx). Same 44px a single-lane truck row's own min-height already used (.truck-row
+     .track below), kept as one shared var rather than a hardcoded 44 in JS specifically so the
+     mobile breakpoint's existing 44px->56px bump (see that media query) automatically keeps a
+     multi-lane truck's per-lane height in step with it, instead of drifting out of sync the way a
+     second hardcoded number in DayBoard.jsx/JobVisuals.jsx would risk. Not theme-dependent (a
+     layout size, not a color), so it lives in this single :root block rather than being repeated in
+     the dark-mode one below. */
+  --track-lane-height:44px;
 }
 
 :root[data-theme='dark']{
@@ -49,6 +77,18 @@
 
   --shadow-sm:0 1px 3px rgba(0,0,0,.35); --shadow-md:0 4px 16px rgba(0,0,0,.45);
   color-scheme:dark;
+
+  /* Day-board job-block fills — dark mode. Kept the ORIGINAL solid --blue/--orange-dk fills
+     (unchanged from before 2026-09-15's light-mode rework) until that same day's follow-up request
+     ("remove the old color scheme...instead use this color theme: red/yellow/purple/green/orange,
+     no other colors") recolored dark mode too, reusing existing solid brand vars for the same hues
+     instead of adding new dark-mode-specific ones: --green for local, --amber for long-distance (a
+     solid gold/yellow — plain yellow would be too low-contrast with dark mode's white .job-block
+     text), --cat-load (already purple) for packing, --orange-dk for storage. No delivery/other
+     entries — those categories have no dedicated color in either theme now, see the :root block
+     above for why. White text via .job-block's own dark-mode override, unaffected by any of this. */
+  --jobblock-local:var(--green); --jobblock-ld:var(--amber); --jobblock-load:var(--cat-load); --jobblock-storage:var(--orange-dk);
+  --jobblock-military:rgba(208, 69, 60, 0.22);
 }
 
 *{box-sizing:border-box;}
@@ -290,8 +330,18 @@ h2.section-title{font-size:15px;margin:0 0 12px;color:var(--heading);}
    24 columns (calc(100%/24)) — the underlying timeline is still the full 24-hour day (see
    DayBoard.jsx's TIMELINE_START/END), only what's visible BY DEFAULT narrowed to 6am-6pm via the
    stretch on .timeline-inner above. */
-.truck-row .track{flex:1;position:relative;min-height:44px;background-image:repeating-linear-gradient(to right, var(--border) 0, var(--border) 1px, transparent 1px, transparent calc(100%/24));}
+.truck-row .track{flex:1;position:relative;min-height:var(--track-lane-height);background-image:repeating-linear-gradient(to right, var(--border) 0, var(--border) 1px, transparent 1px, transparent calc(100%/24));}
 .track.dragover{background-color:var(--tint-orange-bg);}
+/* Multi-lane grouping border (added 2026-09-15, "make a hard border to identify they both are on
+   same truck") — DayBoard.jsx adds this class (and sets an explicit height, see its own comment)
+   only once a truck actually has 2+ jobs overlapping in time today (laneCount > 1 there), so this
+   never shows on the ordinary single-job-per-truck row. Once jobs are stacked into separate lanes
+   (JobBlock's laneVerticalStyle, JobVisuals.jsx) instead of the old on-top-of-each-other overlap,
+   there's nothing left on screen to visually tie the stacked boxes back to ONE truck the way the
+   old overlapping stack did just by being in the same spot — this border draws that boundary
+   explicitly instead. var(--heading) rather than the page's plain --border, specifically so it
+   reads as a deliberate "these belong together" frame and not just another faint gridline. */
+.track.multi-lane{border:2px solid var(--heading);border-radius:6px;}
 .now-line{position:absolute;top:0;bottom:0;width:2px;background:var(--red);z-index:2;}
 .now-line::after{content:'now';position:absolute;top:-13px;left:-13px;font-size:9px;color:var(--red);font-weight:700;}
 
@@ -306,25 +356,69 @@ h2.section-title{font-size:15px;margin:0 0 12px;color:var(--heading);}
    blue, long-distance overrides to orange, and conflict overrides either to red (see .ld/.conflict
    below); this is the app's own existing type-based color convention carried into the new dense
    look, not a new palette, so it stays consistent with every other conflict/type indicator already
-   on the board (chips, month view chips/bars, the print board). White text throughout for contrast
-   against all three flat fill colors. */
+   on the board (chips, month view chips/bars, the print board).
+   Fill colors and text color reworked 2026-09-15 at the user's request ("make the full text on bars
+   to black...make the light military red color a little darker and make other colors little
+   lighter") — this started from the military block's transparent red going unreadable in light mode
+   (white text on a pale pink that lets the light page show through it), and the fix was generalized
+   to every job block rather than a military-only patch: light mode now fills every block with the
+   SAME pale pastel colors the print board's .pt-job-bar already uses per category (--jobblock-*
+   below, defined from those exact hex values so the two surfaces genuinely match, not just
+   coincidentally look similar) and reads them with black text throughout, while dark mode keeps
+   the original solid --blue/--orange-dk/--cat-* fills with white text completely unchanged (those
+   were never reported as a readability problem — only light mode was). The military block's own
+   fill is a CSS var too now (--jobblock-military, consumed by JobVisuals.jsx's MILITARY_BG inline
+   style as `var(--jobblock-military)` instead of a hardcoded rgba string) — its light-mode value is
+   a noticeably more saturated red-pink than the pale --jobblock-* pastels above, at the user's
+   request, so it still reads as "the urgent one" now that every other block is just as light as it
+   is; dark mode's value is unchanged from the original rgba(208,69,60,.22). See the :root/:root[data-
+   theme='dark'] variable blocks near the top of this file for every --jobblock-* value. */
 /* Bumped 11px->12px (and .jb-detail 10px->11px below) on 2026-08-28 at the user's request — the
    dense single-line block still truncates with an ellipsis when a line is too long for its width
    (the hover tooltip always has the full text regardless — see JobVisuals.jsx's tip), so a block
    that already fit comfortably on one line just reads bigger now; a block that was already tight
    simply truncates a little sooner. The row itself (.truck-row .track's 44px min-height) has
    plenty of headroom for either size, so no other layout change was needed. */
-.job-block{position:absolute;top:3px;bottom:3px;display:flex;align-items:center;gap:6px;border-radius:4px;background:var(--blue);border:none;border-left:4px solid rgba(0,0,0,.22);padding:0 8px;font-size:12px;color:#fff;overflow:hidden;cursor:grab;box-shadow:var(--shadow-sm);}
-.job-block.ld{background:var(--orange-dk);}
-/* Service-category color grading — added 2026-08-28, see utils/jobs.js's serviceCategoryClass for
-   which categories get a class here (delivery_unpack/load/other only — 'moving' keeps the default
-   blue above, 'long_distance' keeps .ld's orange above and is never also given a .cat-* class). */
-.job-block.cat-delivery_unpack{background:var(--cat-delivery-unpack);}
-.job-block.cat-load{background:var(--cat-load);}
-.job-block.cat-other{background:var(--cat-other);}
-/* Conflict overrides EITHER type OR category color to red, with a white ring so it still reads as
-   "conflict" distinctly from a plain saturated type/category block at a glance. */
-.job-block.conflict{background:var(--red);box-shadow:0 0 0 2px var(--card),0 0 0 3px var(--red);}
+.job-block{position:absolute;top:3px;bottom:3px;display:flex;align-items:center;gap:6px;border-radius:4px;background:var(--jobblock-local);border:none;border-left:4px solid rgba(0,0,0,.22);padding:0 8px;font-size:12px;color:#000;overflow:hidden;cursor:grab;box-shadow:var(--shadow-sm);}
+:root[data-theme='dark'] .job-block{color:#fff;}
+.job-block.ld{background:var(--jobblock-ld);}
+/* Service-category color grading — added 2026-08-28 (delivery_unpack/load/other each got their own
+   color; 'moving' kept the default, 'long_distance' kept .ld's orange). Cut back down 2026-09-15 at
+   the user's explicit request for exactly 5 colors, "no other colors" — only .cat-load (packing,
+   still purple) and .storage (below) keep a dedicated rule now; a delivery_unpack or plain
+   non-storage 'other' job has no .cat-* CSS rule to match anymore and just falls through to
+   whatever this job's local/long-distance color already is (green or yellow) — still gets its
+   `cat-${catClass}` class from JobVisuals.jsx (harmless, unused by CSS) and its label text in the
+   detail run either way, just no separate background color. */
+.job-block.cat-load{background:var(--jobblock-load);}
+/* Storage — a sub-type of 'other' (isStorageJob, utils/jobs.js). Declared after .cat-load so cascade
+   order alone would settle a same-specificity tie if a job somehow matched both (shouldn't happen in
+   practice — storage and load are different serviceCategory values). */
+.job-block.storage{background:var(--jobblock-storage);}
+/* Manual color override (2026-09-15, "All users to change these colors when clicking on the job") —
+   job.colorOverride, set via JobEditModal's swatch picker (utils/jobs.js's JOB_COLOR_OPTIONS/
+   jobColorOverrideClass), always wins over the automatic ld/cat-load/storage color above AND over
+   JobBlock's own inline military background style (an inline style with no !important still loses
+   to a stylesheet rule that has one). !important is used deliberately here for exactly that reason —
+   this is the one place in this file that needs it; every other rule here wins on cascade order or
+   specificity alone. Same var(--jobblock-*) as the automatic colors, so an override still respects
+   dark mode the same way the automatic colors do. */
+.job-block.override-green{background:var(--jobblock-local) !important;}
+.job-block.override-yellow{background:var(--jobblock-ld) !important;}
+.job-block.override-purple{background:var(--jobblock-load) !important;}
+.job-block.override-red{background:var(--jobblock-military) !important;}
+.job-block.override-orange{background:var(--jobblock-storage) !important;}
+/* Conflict — changed 2026-09-08 at the user's request: used to override the whole block's
+   background to flat red, which meant a conflicted job's type/category color (LD orange, DEL/UPK
+   teal, LOAD purple, a per-label 'other' color) was lost the moment it conflicted — exactly when a
+   dispatcher most needs to see what kind of job it is, not just that it conflicts. Background now
+   ALWAYS stays the type/category color (JobVisuals.jsx's catStyle no longer special-cases conflict
+   either — see its comment); conflict shows via the left border accent + ring instead. Red for a
+   local conflict, orange for a long-distance one (.ld.conflict below, at the user's explicit
+   follow-up request) — orange matches .ld's own base color so an LD conflict still reads as "long
+   distance" at a glance, not as a same-color, hard-to-tell-apart-from-local red flag. */
+.job-block.conflict{border-left-color:var(--red);box-shadow:0 0 0 2px var(--card),0 0 0 3px var(--red);}
+.job-block.ld.conflict{border-left-color:var(--orange-dk);box-shadow:0 0 0 2px var(--card),0 0 0 3px var(--orange-dk);}
 .job-block:hover{z-index:999 !important;}
 .job-block:active{cursor:grabbing;}
 .job-block.resizing{box-shadow:0 0 0 2px var(--card),0 0 0 3px var(--blue);}
@@ -340,12 +434,19 @@ h2.section-title{font-size:15px;margin:0 0 12px;color:var(--heading);}
    same "nothing is ever fully hidden, just visually condensed" approach used on the print board. */
 .jb-line-wrap{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:5px;overflow:hidden;}
 .jb-name{flex:0 1 auto;max-width:42%;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.jb-detail{flex:1 1 auto;min-width:0;font-size:11px;font-weight:600;color:rgba(255,255,255,.92);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+/* Both of these were still hardcoded for the OLD always-dark, always-white-text .job-block fills —
+   missed in 2026-09-15's earlier light-mode pass, which only fixed .job-block's OWN text color, not
+   these two children's separately-set colors ("not only names, make all the text on bar to black in
+   light mode"). Same split as .job-block itself: black in light mode, original near-white/white kept
+   in dark mode where the underlying fills are unchanged and already read fine. */
+.jb-detail{flex:1 1 auto;min-width:0;font-size:11px;font-weight:600;color:rgba(0,0,0,.82);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+:root[data-theme='dark'] .jb-detail{color:rgba(255,255,255,.92);}
 /* Names of the OTHER job(s) a block conflicts with on the same truck (see JobVisuals.jsx's
    otherConflictNames/conflictNamesLabel) — a small trailing pill on the same line now rather than
    its own stacked row below, matching the rest of this block's single-line layout. Dark instead of
    the block's own red-tint so it still stands out even on an already-red .conflict background. */
-.jb-conflict-names{flex:0 0 auto;background:rgba(0,0,0,.24);border-radius:3px;padding:1px 6px;font-size:9.5px;font-weight:800;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px;}
+.jb-conflict-names{flex:0 0 auto;background:rgba(0,0,0,.24);border-radius:3px;padding:1px 6px;font-size:9.5px;font-weight:800;color:#000;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px;}
+:root[data-theme='dark'] .jb-conflict-names{color:#fff;}
 /* Thin strip along the right edge — drag it to change a local job's duration. Only rendered for
    local (non-LD) jobs; a bit wider on hover so it's easy to grab without needing pixel-perfect
    aim. cursor:ew-resize is the standard "resize horizontally" affordance. */
@@ -385,7 +486,30 @@ h2.section-title{font-size:15px;margin:0 0 12px;color:var(--heading);}
 .job-edit-truck-remove{flex:0 0 auto;width:20px;height:20px;line-height:18px;text-align:center;border-radius:50%;background:var(--card);color:var(--red);font-size:12px;font-weight:800;cursor:pointer;border:1px solid var(--red);padding:0;}
 .job-edit-truck-empty{font-size:12px;color:var(--muted);font-weight:400;font-style:italic;}
 .job-edit-add-truck{font-weight:400;font-size:12px;padding:6px 8px;border:1px solid var(--blue);border-radius:6px;background:var(--card);color:var(--blue);align-self:flex-start;}
+/* Color swatch picker (added 2026-09-15, "All users to change these colors when clicking on the
+   job") — 5 fixed swatches (JOB_COLOR_OPTIONS, utils/jobs.js) that set job.colorOverride, applying
+   immediately on click same as the trucks/drivers section above (not part of the Save/Cancel form
+   state). Same var(--jobblock-*) colors the day board itself uses for these 5 categories, so the
+   swatch a user clicks looks like what the block will actually turn. Rendered for EVERY role,
+   including crew — see JobEditModal.jsx's colorOnly mode, the one thing crew's stripped-down view of
+   this modal shows. */
+.job-edit-colors{gap:6px;}
+.job-edit-color-swatches{display:flex;gap:8px;flex-wrap:wrap;}
+.job-edit-color-swatch{width:30px;height:30px;border-radius:50%;border:2px solid var(--border);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;color:#000;font-weight:800;font-size:13px;}
+.job-edit-color-swatch.active{border-color:var(--text);box-shadow:0 0 0 2px var(--card),0 0 0 4px var(--text);}
+.job-edit-color-swatch.green{background:var(--jobblock-local);}
+.job-edit-color-swatch.yellow{background:var(--jobblock-ld);}
+.job-edit-color-swatch.purple{background:var(--jobblock-load);}
+.job-edit-color-swatch.red{background:var(--jobblock-military);}
+.job-edit-color-swatch.orange{background:var(--jobblock-storage);}
+.job-edit-color-clear{align-self:flex-start;font-size:11px;font-weight:400;padding:4px 9px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--muted);}
 .job-edit-error{font-size:12px;color:var(--red);background:var(--tint-red-bg);border:1px solid var(--tint-red-border);border-radius:6px;padding:6px 9px;}
+/* Manual edit lock notice (added 2026-09-08) — orange like .placeholder-badge/.duplicate-banner's
+   amber cousin but distinct from both (SM/SI/placeholder badges and the duplicate banner already
+   claim blue/green/amber), signaling "syncs are paused here" without reading as an error the way
+   .job-edit-error's red does. */
+.job-edit-lock-note{font-size:11px;color:var(--tint-orange-text);background:var(--tint-orange-bg);border:1px solid var(--tint-orange-border);border-radius:6px;padding:7px 9px;display:flex;flex-direction:column;gap:6px;align-items:flex-start;}
+.job-edit-resync-btn{font-size:11px;padding:4px 9px;}
 .job-edit-actions{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:4px;}
 .job-edit-actions-spacer{flex:1;}
 .btn.danger{background:var(--card);color:var(--red);border:1px solid var(--red);}
@@ -421,7 +545,12 @@ h2.section-title{font-size:15px;margin:0 0 12px;color:var(--heading);}
    chooser above — see JobEditModal.jsx's onBack prop). */
 .jc-back-link{font-size:11px;color:var(--blue);cursor:pointer;background:none;border:none;padding:0;text-align:left;font-weight:600;align-self:flex-start;}
 
-/* Job search (BoardTab toolbar) */
+/* Job search — lives in the title bar (Header.jsx) as of 2026-09-10, moved out of BoardTab's
+   toolbar so it's reachable from every tab, not just Board. Sits between .brand and .role-switch
+   in header's flex row (see the `header` rule above); flex:1 lets it take whatever space those two
+   fixed-width siblings leave, capped so it doesn't stretch absurdly wide on a big monitor. Its own
+   card-colored input reads as a light search field inset into the dark navy header, the same
+   pattern as .theme-toggle/.role-switch select already use there. */
 .job-search{position:relative;min-width:240px;flex:1;max-width:360px;}
 .job-search-input{width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--card);color:var(--text);}
 .job-search-results{position:absolute;top:100%;left:0;right:0;margin-top:4px;background:var(--card);border:1px solid var(--border);border-radius:8px;box-shadow:var(--shadow-md);z-index:500;max-height:280px;overflow-y:auto;}
@@ -528,6 +657,13 @@ h2.section-title{font-size:15px;margin:0 0 12px;color:var(--heading);}
 .admin-card .row:last-child{margin-bottom:0;}
 .admin-card h3{margin:0 0 10px;font-size:14px;color:var(--heading);}
 .admin-card.add-form{border:1px dashed var(--orange);background:var(--tint-orange-bg-soft);}
+/* Truck card's Firestore doc id (TruckAdminList.jsx), added 2026-09-10 — a reference for
+   support/debugging, not something a dispatcher needs to read day to day, so it's genuinely
+   blurred (not just faint) at rest and only sharpens on hover — see truck-card-example.html's
+   Option B for how this was previewed before building it. */
+.truck-id-footer{margin-top:10px;padding-top:8px;border-top:1px solid var(--border);}
+.truck-id-line{display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:10.5px;letter-spacing:.2px;color:var(--muted);filter:blur(2.4px);opacity:.7;transition:filter .15s ease,opacity .15s ease;cursor:default;}
+.truck-id-line:hover{filter:blur(0);opacity:1;}
 
 /* SMARTMOVING SYNC */
 .sync-panel{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-md);padding:14px 16px;margin-bottom:18px;transition:background-color .2s ease,border-color .2s ease;}
@@ -542,11 +678,17 @@ h2.section-title{font-size:15px;margin:0 0 12px;color:var(--heading);}
 .sm-badge{display:inline-block;background:var(--tint-blue-bg);color:var(--tint-blue-text);border:1px solid var(--tint-blue-border);font-size:9px;font-weight:700;padding:1px 6px;border-radius:9px;margin-left:5px;vertical-align:middle;}
 .si-badge{display:inline-block;background:var(--tint-green-bg);color:var(--tint-green-text);font-size:9px;font-weight:700;padding:1px 6px;border-radius:9px;margin-left:5px;vertical-align:middle;}
 .placeholder-badge{display:inline-block;background:var(--tint-amber-bg);color:var(--tint-amber-text);border:1px solid var(--tint-amber-border);font-size:9px;font-weight:700;padding:1px 6px;border-radius:9px;margin-left:5px;vertical-align:middle;}
+/* Manual edit lock badge (added 2026-09-08) — see JobVisuals.jsx's ManualEditBadge. Orange like
+   .job-edit-lock-note, distinct from the blue/green/amber SM/SI/placeholder badges it sits next to. */
+.lock-badge{display:inline-block;background:var(--tint-orange-bg);color:var(--tint-orange-text);border:1px solid var(--tint-orange-border);font-size:9px;font-weight:700;padding:1px 5px;border-radius:9px;margin-left:5px;vertical-align:middle;}
 select, input[type=text]{padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--card);color:var(--text);}
 .field-label{font-size:11px;color:var(--muted);min-width:90px;}
 .assign-row{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-md);padding:12px 14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;transition:background-color .2s ease,border-color .2s ease;}
 .assign-row .aj-title{font-weight:700;color:var(--heading);font-size:13px;}
 .assign-row .aj-meta{font-size:11px;color:var(--muted);margin-top:2px;}
+/* Manual edit lock note (added 2026-09-08) — orange like .job-edit-lock-note/.lock-badge, always
+   visible (not hover-only) since this list is scanned row by row. */
+.assign-row .aj-lock-note{color:var(--tint-orange-text);}
 
 /* CREW MOBILE VIEW */
 .crew-wrap{max-width:480px;margin:0 auto;}
@@ -591,8 +733,11 @@ select, input[type=text]{padding:6px 8px;border:1px solid var(--border);border-r
      overflow-x:auto (unchanged) is what scrolls the chips — contained inside the tray, exactly as
      already happens on desktop once there are enough chips to overflow 920px.
      .job-search's min/max-width are loosened the same way below, for the same reason: a fixed
-     240-360px range fought the toolbar for room on a narrow screen instead of just taking the full
-     width of its own row. */
+     240-360px range fought its container for room on a narrow screen instead of just taking the
+     full width of its own row — same fix, now applying to `header` (job-search moved there
+     2026-09-10) instead of `.toolbar`; header already wraps (see the `header` rule's
+     flex-wrap:wrap), so this just lets it fill that wrapped row edge-to-edge instead of leaving
+     dead space capped at 360px. */
   .unassigned-tray{min-width:0;width:100%;}
   .toolbar{flex-direction:column;align-items:stretch;}
   .job-search{min-width:0;max-width:none;}
@@ -613,8 +758,11 @@ select, input[type=text]{padding:6px 8px;border:1px solid var(--border);border-r
   /* Taller rows + bigger text than the desktop baseline (44px/11px — see .track's and .job-block's
      own comments) reads fine on a desktop monitor at arm's length, not on a phone a few inches from
      your face with a finger for a pointer, so mobile still gets extra height/size on top of the
-     desktop values rather than matching them 1:1. */
-  .truck-row .track{min-height:56px;}
+     desktop values rather than matching them 1:1. Overriding the --track-lane-height VAR here
+     (rather than a second min-height rule) is what keeps a multi-lane truck's per-lane height
+     (DayBoard.jsx/JobVisuals.jsx) bumped up to match on mobile too, automatically — see that var's
+     own comment near :root's top. */
+  :root{--track-lane-height:56px;}
   .job-block{font-size:12px;padding:0 8px;}
   .jb-name{font-size:13px;}
   .jb-detail{font-size:11px;}
@@ -656,11 +804,51 @@ select, input[type=text]{padding:6px 8px;border:1px solid var(--border);border-r
   .month-weekdays,.month-weeks-wrap{min-width:1360px;}
 }
 
+/* .app-shell (App.jsx) wraps the entire interactive app — everything EXCEPT the print sheets, which
+   render as its true top-level siblings now (moved there 2026-09-11, see App.jsx's own comment on
+   why). display:contents here means the wrapper adds no box of its own on screen — visually
+   identical to it not existing at all — so it costs nothing outside of @media print below, where
+   it's what makes hiding the whole app for printing a single, reliable rule instead of the fragile
+   visibility-based one this replaced. */
+.app-shell{display:contents;}
+
 /* PRINT — day view's "🖨 Print" button prints a clean manifest (DayPrintSheet.jsx) instead of the
    interactive drag-and-drop timeline, which relies on absolute positioning and hover-only controls
    that don't translate to paper. Always plain black/gray regardless of the on-screen day/night
    theme — a printed page shouldn't depend on which theme happened to be active when it was made. */
 .print-sheet{display:none;}
+/* print-measuring — added 2026-09-11 alongside BoardTab.jsx's DOM-measurement pass (see its
+   printBoardMeasured() comment for the full story: character-counting a job's detail text kept
+   getting recalibrated back and forth — too short for a text-heavy job like a DEL/UPK job with a
+   long address, which spilled into whatever lane was below it, then too generous once fixed for
+   that case, which over-shrunk everything else's font on a light day. Rather than keep guessing at
+   line-wrap width in the abstract, "Print Board" now briefly renders the real thing off-screen (this
+   class swaps display:none for a genuine layout, just parked at a huge negative offset and
+   visibility:hidden so nothing ever flashes on screen) and reads each job's OWN true rendered
+   height directly from the browser — the one source of truth no arithmetic estimate can match —
+   before computing the real page-fit scale and printing for real. Kept as its own class (not just
+   reusing .print-active) so the measuring pass never accidentally matches @media print's
+   `.print-sheet.print-active` rule while it's still mid-measurement. */
+/* width/padding here matter a lot more than they look — found 2026-09-11 the same day as the rule
+   above, from a "measured it, still identical bug" report after that fix was confirmed genuinely
+   deployed and live. `.print-sheet.print-active` (below, @media print) gets its width from
+   `width:100%` — which is safe THERE because during an actual print, the browser's "viewport" for
+   CSS purposes is the physical page's printable area (page size minus the `@page` margin, ~710px
+   for this US Letter portrait/14mm setup), so 100% correctly means "the real print page width". But
+   this measuring pass runs in normal on-screen browsing, BEFORE any print has started — with no
+   explicit width, `position:fixed` sizes to shrink-to-fit content instead, and if it were given
+   `width:100%` here it would resolve against the actual BROWSER WINDOW's width instead (whatever
+   that happens to be on whoever's screen, usually much wider than a printed page). Either way, every
+   job's text would wrap fewer times when measured than it actually will once printed at the real,
+   narrower page width — an under-measurement that reproduces exactly the "not enough room" bleed
+   this whole measuring pass exists to fix, just with a different root cause than the character-count
+   estimate it replaced. Hardcoded to the same physical page width `.print-active` resolves to
+   ((11in page - 2*10mm margin) * 96px/in ≈ 980.41px) plus the same 20px padding on every side, so
+   the CONTENT area a job's text actually wraps within during measurement is pixel-for-pixel the same
+   width it gets during the real, visible print. Went 980.41px (landscape) -> 710.17px (8.5in page,
+   14mm margin, when "Print Board" switched to portrait) -> back to 980.41px, all on 2026-09-15 — see
+   BoardTab.jsx's PAGE_HEIGHT_IN/MARGIN_IN comment for why it ended up back at landscape. */
+.print-sheet.print-measuring{display:block;position:fixed;left:-20000px;top:0;visibility:hidden;width:980.41px;padding:20px;box-sizing:border-box;}
 .print-header{margin-bottom:14px;}
 .print-title{font-size:18px;font-weight:800;color:#000;}
 .print-date{font-size:13px;color:#111;font-weight:600;margin-top:2px;}
@@ -691,138 +879,185 @@ select, input[type=text]{padding:6px 8px;border:1px solid var(--border);border-r
 col.pt-col-truck{width:calc(150px * var(--pt-scale, 1));}
 .pt-truck-col-spacer{border-bottom:2px solid #000;background:#fff;}
 /* Sizes bumped a second time (9px->11px->14px for hours, 8px->10px->13px for block text, etc.) —
-   the first pass still printed too small to read at a glance. These are the largest sizes that
-   still fit a 24-column full day on one landscape page WHEN there are few enough trucks that no
-   shrinking is needed — --pt-scale (set inline on the print-sheet root by BoardTab.jsx's
-   printSheet(), computed from the day's truck count — see truckPrintScale() there) uniformly
-   shrinks every value below via calc(base * var(--pt-scale, 1)) only as much as it takes to fit
-   every truck on one Letter-landscape page, so a small fleet still prints at full size and only a
-   large one gets smaller (never below a readable floor — see MIN_SCALE in BoardTab.jsx). The
-   `, 1` fallback means anything printed without JS setting the variable (or any other .print-sheet)
-   renders at these exact original sizes, unchanged. */
-.pt-hour{font-size:calc(14px * var(--pt-scale, 1));color:#000;font-weight:800;padding:calc(4px * var(--pt-scale, 1)) 0 calc(4px * var(--pt-scale, 1)) calc(4px * var(--pt-scale, 1));border-bottom:2px solid #000;border-left:1px solid #ccc;text-align:left;background:#fff;}
+   the first pass still printed too small to read at a glance. --pt-scale (set inline on the
+   print-sheet root by BoardTab.jsx's printSheet()/measureAndPrintBoard(), computed from the day's
+   actual content — see truckPrintScale() there) uniformly shrinks every value below via
+   calc(base * var(--pt-scale, 1)) only as much as it takes to fit every truck on one page — Letter
+   portrait since 2026-09-15 (was landscape before, at the user's request — see
+   BoardTab.jsx/setPrintOrientation's own comments), so a small fleet still prints at full size and
+   only a large one gets smaller (never below a readable floor — see MIN_TRUCK_PRINT_SCALE in
+   BoardTab.jsx). The `, 1` fallback means anything printed without JS setting the variable (or any
+   other .print-sheet) renders at these exact original sizes, unchanged. */
+.pt-hour{font-size:calc(15px * var(--pt-scale, 1));color:#000;font-weight:800;padding:calc(4px * var(--pt-scale, 1)) 0 calc(4px * var(--pt-scale, 1)) calc(4px * var(--pt-scale, 1));border-bottom:2px solid #000;border-left:1px solid #ccc;text-align:left;background:#fff;}
 .pt-truck-row{break-inside:avoid;}
 .pt-truck-info{width:calc(150px * var(--pt-scale, 1));padding:calc(6px * var(--pt-scale, 1)) calc(8px * var(--pt-scale, 1)) calc(6px * var(--pt-scale, 1)) 0;vertical-align:top;border-bottom:1px solid #ddd;}
 .pt-track-cell{padding:0;position:relative;vertical-align:top;border-bottom:1px solid #ddd;}
-.pt-truck-name{font-weight:800;font-size:calc(16px * var(--pt-scale, 1));color:#000;}
+.pt-truck-name{font-weight:800;font-size:calc(18px * var(--pt-scale, 1));color:#000;}
+/* Driver dropped from here 2026-09-15 — see DayPrintTimeline.jsx's comment — so this now only ever
+   holds the truck's size. */
 .pt-truck-meta{font-size:calc(12px * var(--pt-scale, 1));color:#222;font-weight:700;}
-/* Shrunk from 96px to 50px on 2026-08-28, now that the hybrid dense/wrap block layout (see
-   .pt-block-line below) puts the name and every detail bit on ONE line for most jobs instead of
-   always stacking name-then-wrapped-details on separate rows — a fixed height generous enough for
-   that old always-multi-line layout left a lot of visibly empty space under a block that only
-   ever needed one line now. Bumped again to 54px the same day, alongside .pt-block-name/.pt-bit's
-   own font-size increase below — still comfortably fits a block that wraps to 2 lines (a
-   fully-detailed multi-truck LD job with several bits) at the larger text without clipping; only a
-   rare 3-line block would start to feel tight. Scales with --pt-scale like everything else here —
-   BASE_ROW_HEIGHT_PX in BoardTab.jsx mirrors this 54px (plus the row's 1px border) when computing
-   how much a big fleet needs to shrink to fit one page. Box WIDTH is untouched by this — it's tied
-   to how many hours the job actually runs, which needs to stay accurate on a timeline, not to how
-   much text is in it. */
+/* "Print All Trucks" only — an idle truck with nothing assigned today still gets a row (see
+   DayPrintTimeline.jsx's activeTrucks/isEmptyTruck), but its name/size are pure filler next to a
+   truck that's actually working. Shrunk well below the normal .pt-truck-name/.pt-truck-meta size
+   2026-09-15 at the user's request ("make the font size even smaller for truck names that are not
+   having jobs in Print All trucks print") so an idle row doesn't visually compete with a working
+   one. */
+.pt-truck-name.pt-truck-name-empty{font-size:calc(10px * var(--pt-scale, 1));font-weight:600;color:#777;}
+.pt-truck-meta.pt-truck-meta-empty{font-size:calc(8px * var(--pt-scale, 1));color:#999;}
 /* Gridline spacing matches DayPrintTimeline.jsx's TIMELINE_START/END span — 12 columns (6am-6pm)
    since that was narrowed from a 24-hour grid to business hours only, 2026-08-27. Update this
    alongside that component if the printed board's hour range ever changes again. */
-.pt-track{position:relative;min-height:calc(54px * var(--pt-scale, 1));background-image:repeating-linear-gradient(to right, #eee 0, #eee 1px, transparent 1px, transparent calc(100%/12));}
-/* overflow:visible (not hidden) is a last-resort safety net, not the primary fix — see
-   DayPrintTimeline.jsx's BESIDE_THRESHOLD_FRAC comment for the actual fix (2026-09-03): a bar too
-   narrow to hold its own text now prints that text BESIDE it via .pt-block-label below, instead of
-   cramming it inside this box. That change is what keeps most rows at their normal single-line
-   height. This overflow:visible only matters for the remaining rare case (a wide/long-distance bar
-   whose in-bar text is unusually long, or a beside label with unusually little neighboring room) —
-   it lets that content grow past the row's generous but still finite estimate and print in full,
-   even if that means spilling a few px into the row below on paper, rather than have
-   `overflow:hidden` silently swallow it with no trace the way it used to. */
-.pt-block{position:absolute;top:2px;bottom:2px;overflow:visible;border-radius:3px;background:#e7effc;border:1px solid #a9c2f5;border-left:5px solid #2557b8;padding:calc(3px * var(--pt-scale, 1)) calc(7px * var(--pt-scale, 1));color:#000;display:flex;flex-direction:column;justify-content:center;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
-.pt-block.ld{background:#fff3ea;border-color:#ffbf94;border-left-color:#d94e10;}
-/* Service-category color grading (print) — added 2026-08-28, same pale-tint-plus-accent-border
-   pattern as .pt-block.ld above; only delivery_unpack/load/other get one, see .job-block.cat-*'s
-   comment for why. */
-.pt-block.cat-delivery_unpack{background:#e3f6f6;border-color:#a8d8d8;border-left-color:#0c8599;}
-.pt-block.cat-load{background:#f0ebf8;border-color:#cdb8e8;border-left-color:#6d4aa6;}
-.pt-block.cat-other{background:#eef0f2;border-color:#ccd2d9;border-left-color:#5b6472;}
-.pt-block.conflict{border-color:#d0453c;box-shadow:0 0 0 1px #d0453c;}
-/* Hybrid dense/wrap layout — added 2026-08-28 at the user's request, to match the on-screen board's
-   dense single-line job block (see .jb-line-wrap in JobVisuals.jsx). The name and every detail bit
-   are separate flex items in ONE flex-wrap row: when the block is wide enough, everything reads as
-   one compact line, same feel as the screen version; when it isn't, the browser's own wrapping
-   carries whichever bits don't fit onto a second (or third) line — plain flex-wrap, no JS
-   measurement or per-box class needed. Used both for a wide bar's in-bar text AND for a narrow
-   bar's .pt-block-label text beside it (DayPrintTimeline.jsx picks which one each job gets based on
-   its bar width — see BESIDE_THRESHOLD_FRAC there) — same rule either way: nothing is silently cut
-   off, a short job stays one line, a fully-detailed one just uses more lines. overflow:hidden was
-   removed 2026-09-03 (it used to clip any wrapped line once content grew past one line's worth of
-   box, contradicting that "never cut off" intent) — .pt-block's own overflow:visible is now the only
-   place any of this is ever allowed to spill past its box, as a last resort. */
-.pt-block-line{display:flex;flex-wrap:wrap;align-items:baseline;column-gap:6px;row-gap:1px;}
-/* Bumped 15px->17px / 12px->14px on 2026-08-28 at the user's request, alongside .pt-track's
-   matching min-height increase above — a box with room to stay on one line now reads bigger; a
-   box that doesn't have room just wraps sooner (see .pt-block-line's flex-wrap above), same
-   hybrid behavior as before, just with a larger baseline size.
-   white-space:normal (not nowrap) on both rules below, added 2026-09-03: nowrap was silently letting
-   a long customer name/note (.pt-block-name) or a long address bit (.pt-bit) run past the edge of a
-   narrow block and get clipped by .pt-block-line's overflow — .pt-bit additionally had an explicit
-   ellipsis doing the same on purpose. Both directly contradicted the "never truncated" intent
-   documented above; normal wrapping lets a long name or address break onto its own extra line(s)
-   within whatever width is actually available (the bar's own width for a wide bar, or the row's
-   free space for a beside label — see .pt-block-label below) instead of being cut, silently or with
-   "…", either way. */
-.pt-block-name{font-size:calc(17px * var(--pt-scale, 1));font-weight:800;color:#000;white-space:normal;line-height:1.25;}
-.pt-bit{font-size:calc(14px * var(--pt-scale, 1));font-weight:700;color:#111;white-space:normal;line-height:1.3;}
-.pt-bit::before{content:'· ';color:#666;}
-/* The bar (.pt-block) is now a plain colored time-span marker with no text of its own — this label
-   layered on top of it carries all the text instead. Positioned to START FLUSH AT THE BAR'S OWN
-   EDGE (not offset past it) and extend PAST the bar's other edge into whichever neighboring gap on
-   this same truck row has more free room — bounded by the job's immediate neighbor, not the whole
-   row, so two jobs on one truck never print their labels over each other. Revised 2026-09-03 from an
-   earlier version that started the label only AFTER the bar (leaving the bar's own width unused and
-   wrapping sooner than it needed to): starting flush at the bar means short text prints right on top
-   of the bar itself (readable — .pt-block's tints are pale, this text is near-black), and only the
-   overflow beyond the bar's own width spills into the neighboring free space, same as the surrounding
-   grid cells being blank paper either way. Same vertical centering as .pt-block (top/bottom 2px) so a
-   label and its bar always line up; overflow:visible for the same last-resort reason as .pt-block.
-   pointer-events:none since this is print-only content — never interactive, so it should never
-   intercept a click on the on-screen (non-print) rendering this same component tree is never actually
-   used for anyway (DayPrintTimeline only ever prints). */
-.pt-block-label{position:absolute;top:2px;bottom:2px;display:flex;flex-direction:column;justify-content:center;overflow:visible;pointer-events:none;}
-/* label-left = more free room was on the LEFT of the bar, so the label spans from that free space
-   through to the bar's own right edge and right-aligns — text grows leftward AWAY from the bar,
-   ending flush at it, so it still reads as "belonging" to that bar instead of drifting toward the
-   far edge of the row. label-right is the mirror case: spans from the bar's own left edge into the
-   free space on the right, left-aligned (the default flex-start already matches normal reading
-   order, starting right at/inside the bar). */
-.pt-block-label.label-left .pt-block-line{justify-content:flex-end;text-align:right;}
-.pt-block-label.label-right .pt-block-line{justify-content:flex-start;text-align:left;}
+/* min-height is now only a fallback (e.g. before any JS has run) — DayPrintTimeline.jsx sets this
+   track's real `height` inline, per truck, from how many lanes its jobs actually need (lane count *
+   one fixed row height, since 2026-09-15 — see DayPrintTimeline.jsx's BASE_ROW_HEIGHT_PX comment)
+   since a plain div's height never grows to fit position:absolute children on its own.
+   overflow:hidden keeps a truck's row from ever visually spilling into the NEXT truck's row on
+   paper — every job line clips at its own lane boundary too (see .pt-jobline below), so nothing can
+   bleed past either edge. */
+/* overflow-x:visible (was plain overflow:hidden) — 2026-09-15, see .pt-job-bar's own comment below
+   for why: a job bar's text is no longer allowed to truncate, so it needs somewhere to go on a line
+   that's genuinely too full for it, and this track was clipping it horizontally even after
+   .pt-jobline/.pt-job-bar themselves stopped doing so. overflow-y stays hidden — that's what keeps a
+   truck's lanes from visually bleeding down into the NEXT truck's row, completely unrelated to the
+   horizontal-overflow problem this change fixes, so it's kept exactly as before. */
+.pt-track{position:relative;min-height:calc(46px * var(--pt-scale, 1));overflow-x:visible;overflow-y:hidden;background-image:repeating-linear-gradient(to right, #eee 0, #eee 1px, transparent 1px, transparent calc(100%/12));}
+/* One-line-per-job layout — reworked 2026-09-15 at the user's request ("look at the old scheduler
+   printout, all jobs are in one line, with big font size... the blue placeholders before the job are
+   driver details"), replacing the old wrap-across-2-4-lines .pt-block/.pt-block-line/.pt-block-label
+   system. Each job is now a single flex row (`.pt-jobline`) containing up to two children: an
+   optional dark-blue driver badge (`.pt-driver-badge`, matching the old scheduler's "TRUCK: <driver>"
+   tag) and the job's own bar (`.pt-job-bar`) — both `white-space:nowrap`, so a job's text can never
+   wrap onto a second line no matter how long it is; anything that doesn't fit truncates with an
+   ellipsis instead (see .pt-job-bar below). DayPrintTimeline.jsx widens a short (<=1hr) job's box
+   past its true time-span so there's room for this — see its own comment — and shortens every
+   address down to just the city name (utils/jobs.js's mainCity) before it ever reaches this markup;
+   together those two changes are most of what makes "always one line" actually readable. */
+/* overflow:hidden -> visible, 2026-09-15 at the user's request ("make sure that every detail of the
+   job is getting printed in the print board") — this used to clip a too-long job's text at the
+   lane's own edge (on top of .pt-job-bar's own now-removed ellipsis, see below), which was silent
+   data loss on a printed page a dispatcher can't scroll or hover past. Nothing here can visually
+   overflow VERTICALLY (every line is a fixed one-line height, white-space:nowrap, no wrapping), so
+   the only real effect is horizontal: a line with more text than its slot has room for now visibly
+   runs on past its own background box into whatever's to its right, rather than disappearing. */
+.pt-jobline{position:absolute;top:2px;bottom:2px;display:flex;align-items:stretch;overflow:visible;border-radius:3px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+.pt-jobline.conflict{box-shadow:0 0 0 2px #d0453c;}
+/* Long-distance conflict gets orange instead of red (mirrors the old .pt-block.ld.conflict rule this
+   replaces, and .job-block.ld.conflict on the day board) — orange matches .pt-job-bar.ld's own base
+   color so a printed LD conflict still reads as "long distance" first, not just "conflict". */
+.pt-jobline.ld.conflict{box-shadow:0 0 0 2px var(--orange-dk);}
+/* Colored per-driver (DayPrintTimeline.jsx passes utils/jobs.js's driverColor as an inline
+   background, same DRIVER_COLORS palette the on-screen board already uses) so the badge still doubles
+   as an at-a-glance "which driver" signal — the job it replaced (a border-left tint on the old
+   wrapped block) did the same thing more subtly. Falls back to this flat navy when a driver's color
+   can't be resolved for some reason. */
+/* Taken OUT of the flex flow and anchored via right:100% (2026-09-15 at the user's follow-up
+   request — "make it before the jobs like if the job is at 8:00AM add that tag before that") —
+   as a normal flex:0 0 auto child it used to sit INSIDE .pt-jobline's own box, which starts exactly
+   at the job's true start time, so the badge ate into that box's left end and visually pushed
+   .pt-job-bar's colored start later than the job's real time. right:100% instead pins the badge's
+   own right edge to .pt-jobline's left edge (0%) — i.e. flush against, and entirely before, the
+   job's real start — so it now reads the same way the old scheduler's own "TRUCK: <driver>" tag
+   did (a label ahead of the job, not overlapping its time-span) while leaving .pt-job-bar (now the
+   only normal-flow flex child left) to fill .pt-jobline's full width unchanged, still starting
+   exactly at the job's real time. top/bottom:0 (not the parent's own top:2px/bottom:2px inset)
+   since those already apply to .pt-jobline itself; this just matches that same box, not shrinks
+   further inside it. Same "never truncate, let it run on" philosophy as the rest of this file — a
+   job scheduled right at the very start of the printed 6am-6pm window has nowhere earlier to put
+   this badge, so on paper it can visibly run past the grid's left edge rather than being clipped or
+   omitted; rare enough in practice (6am is before the business day for most trucks) not to be worth
+   more complexity to avoid. Font size dropped 15px->12px (and padding tightened to match, 9px->7px)
+   2026-09-15 at the user's immediate follow-up request ("make that tag font smaller") — also
+   shrinks the badge's own footprint, which eases (though doesn't eliminate) the left-edge-overrun
+   case just above. */
+.pt-driver-badge{position:absolute;top:0;bottom:0;right:100%;display:flex;align-items:center;background:#173a70;color:#fff;font-weight:800;font-size:calc(12px * var(--pt-scale, 1));padding:0 calc(7px * var(--pt-scale, 1));white-space:nowrap;letter-spacing:.2px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+/* min-width:0 + text-overflow:ellipsis removed 2026-09-15 at the user's request ("make sure that
+   every detail of the job is getting printed in the print board") — min-width:0 was specifically
+   what let this flex child shrink below its own content's natural width, which is exactly what let
+   text truncate/ellipsis in the first place; without it, a flex item's default min-width (auto) means
+   it never shrinks smaller than its content needs, so this bar always draws at its full natural
+   width instead. Paired with .pt-jobline/.pt-track's own overflow:visible/overflow-x:visible above,
+   nothing this box's text needs room for is ever silently cut — worst case on an unusually packed
+   row, it visibly runs past its own colored background into whatever's to its right, which is still
+   strictly better than data quietly vanishing off a printed page. */
+.pt-job-bar{flex:1 1 auto;display:flex;align-items:center;gap:calc(7px * var(--pt-scale, 1));background:#a8ddb8;border:1px solid #6cae82;color:#000;font-weight:700;padding:0 calc(9px * var(--pt-scale, 1));white-space:nowrap;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+.pt-job-bar.ld{background:#f0d878;border-color:#c9a930;}
+/* Fixed 5-color theme (2026-09-15, replacing the old per-category pale-tint palette, at the user's
+   request: "remove the old color scheme for transit and others, instead use this color theme, red
+   for identified military jobs, yellow for long distance, purple for packing jobs, green for local
+   jobs, orange for storage jobs" — then, same day, "No other colors") — the SAME hex values the day
+   board's light-mode .job-block now uses (see --jobblock-* near the top of this file), so the two
+   surfaces still genuinely share one palette, but as plain hex here rather than var(--jobblock-*): a
+   printed page is always white regardless of which theme the app happens to be in when "Print Board"
+   is clicked, and --jobblock-* is deliberately theme-reactive (it flips to solid, white-text-tuned
+   colors in dark mode) — this surface needs to stay fixed to the light values no matter what, or
+   printing from dark mode would silently pick up the wrong, much-lower-contrast fills under this
+   rule's own hardcoded black text. Only .cat-load (packing) and .storage below get a dedicated color
+   — delivery_unpack and a non-storage 'other' job have no .cat-* rule to match here anymore, per
+   "No other colors", and just draw as whatever this job's base/.ld color already is. */
+.pt-job-bar.cat-load{background:#cfaeea;border-color:#9968c2;}
+.pt-job-bar.storage{background:#f4b87a;border-color:#d98a3d;}
+/* Manual color override (2026-09-15) — mirrors .job-block.override-* above, same reason for
+   !important (beats .ld/.cat-load/.storage and this bar's own inline military background style).
+   Fixed hex, same "print always stays light-mode-fixed" rule as the rest of this rule block — the
+   colors are the SAME 5 the day board's light mode shows, just not var(--jobblock-*) here. */
+.pt-job-bar.override-green{background:#a8ddb8 !important;border-color:#6cae82 !important;}
+.pt-job-bar.override-yellow{background:#f0d878 !important;border-color:#c9a930 !important;}
+.pt-job-bar.override-purple{background:#cfaeea !important;border-color:#9968c2 !important;}
+.pt-job-bar.override-red{background:rgba(208, 69, 60, 0.42) !important;border-color:#b23a30 !important;}
+.pt-job-bar.override-orange{background:#f4b87a !important;border-color:#d98a3d !important;}
+.pt-job-name{font-size:calc(17px * var(--pt-scale, 1));font-weight:800;color:#000;white-space:nowrap;}
+/* Duration beside the name — added 2026-09-15 at the user's request ("include number of hours
+   beside name in print board"). Same base color as .pt-job-name (not .pt-seg's gray) since it reads
+   as part of the name/headline, not a detail bit — but a little smaller and not bold, so it doesn't
+   compete with the name itself for attention. No leading "| " (unlike .pt-seg below), since it sits
+   directly against the name rather than in the pipe-separated detail run. */
+.pt-job-hours{font-size:calc(14px * var(--pt-scale, 1));font-weight:700;color:#000;white-space:nowrap;margin-left:calc(4px * var(--pt-scale, 1));}
+.pt-seg{font-size:calc(14px * var(--pt-scale, 1));font-weight:700;color:#222;white-space:nowrap;}
+.pt-seg::before{content:'| ';color:#7a8296;margin-right:calc(2px * var(--pt-scale, 1));}
+/* In-transit placeholder (only printed when "Include in-transit" is checked, BoardTab.jsx — now
+   checked by default, see App.jsx). Used to be a hatched pattern deliberately kept OUT of the
+   job-color variants above, so it read as "this truck is tied up" rather than "here's a job
+   happening here" — recolored 2026-09-15 to the same yellow as every other long-distance job, at the
+   user's explicit request ("remove the old color scheme for transit...instead use...yellow for long
+   distance" — an in-transit leg IS a long-distance job, just not one with local work today), keeping
+   only the dashed border as a lighter reminder that this row is a placeholder, not real local work.
+   Always full-width (DayPrintTimeline.jsx never widens it) and has no driver badge of its own — a
+   truck passing through on a long-distance leg has no local driver assignment worth printing here. */
+.pt-transit-bar{position:absolute;top:2px;bottom:2px;display:flex;align-items:center;gap:calc(8px * var(--pt-scale, 1));overflow:visible;border-radius:3px;background:#f0d878;border:1px dashed #9a7f1f;padding:0 calc(9px * var(--pt-scale, 1));color:#000;white-space:nowrap;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+.pt-transit-bar .pt-job-name{color:#000;}
+.pt-transit-bar .pt-seg{color:#333;font-weight:600;}
 
-/* Side panel — Conflicts + Unassigned Jobs printed in their own column BESIDE the truck grid,
-   rather than stacked as extra rows/blocks below it (the old .pt-conflict-row-per-truck + a
-   separate Unassigned table after the whole grid). Replaced 2026-09-02 at the user's request ("i
-   don't want the print board printing in two pages... print conflicts and unassigned jobs in a
-   different block on the side of the calendar") — a column only ever adds WIDTH (which the grid
-   gives up via `.pt-page-body`'s flex layout below), never HEIGHT, so it can no longer be the
-   reason a normally one-page printout spills onto a second sheet. See DayPrintTimeline.jsx's own
-   restructure comment and BoardTab.jsx's sidePanelPrintScale for the full reasoning, including why
-   this column gets its OWN --pt-side-scale instead of sharing the truck grid's --pt-scale. */
-.pt-page-body{display:flex;align-items:flex-start;gap:14px;}
-.pt-table-wrap{flex:1 1 auto;min-width:0;}
-.pt-side-panel{flex:0 0 200px;width:200px;border-left:2px solid #000;padding-left:10px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
-.pt-side-section{margin-bottom:calc(12px * var(--pt-side-scale, 1));}
-.pt-side-section-title{font-weight:800;font-size:calc(13px * var(--pt-side-scale, 1));color:#000;border-bottom:2px solid #000;padding-bottom:2px;margin-bottom:calc(5px * var(--pt-side-scale, 1));}
-.pt-side-conflicts .pt-side-section-title{color:#8a1f18;border-bottom-color:#8a1f18;}
-.pt-side-unassigned .pt-side-section-title{color:#c0392b;border-bottom-color:#c0392b;}
-.pt-side-truck-block{margin-bottom:calc(7px * var(--pt-side-scale, 1));}
-.pt-side-truck-name{font-weight:800;font-size:calc(11px * var(--pt-side-scale, 1));color:#000;margin-bottom:calc(2px * var(--pt-side-scale, 1));}
-.pt-side-cluster{margin-bottom:calc(4px * var(--pt-side-scale, 1));}
-.pt-side-cluster:last-child{margin-bottom:0;}
-/* Full detail (customer, time, full origin -> destination) always spelled out, same "never
-   truncated" rule as the on-page .pt-block details — see DayPrintTimeline.jsx's comment on why:
-   paper has no hover/click-through to recover anything hidden. */
-.pt-side-entry{font-size:calc(10px * var(--pt-side-scale, 1));line-height:1.35;color:#111;margin-bottom:calc(4px * var(--pt-side-scale, 1));padding:calc(3px * var(--pt-side-scale, 1)) calc(5px * var(--pt-side-scale, 1));border-radius:3px;}
-.pt-side-entry:last-child{margin-bottom:0;}
-.pt-side-entry b{color:#000;}
-.pt-side-conflict-entry{background:#fdecea;border:1px solid #f2b6b0;}
-.pt-side-unassigned-entry{background:#fdf1e6;border:1px solid #f0c896;}
-.pt-side-entry-addr{font-size:calc(9px * var(--pt-side-scale, 1));color:#333;margin-top:1px;}
-.pt-side-entry-meta{font-size:calc(9px * var(--pt-side-scale, 1));color:#555;}
-.pt-side-empty{font-size:11px;color:#777;font-style:italic;}
+/* Unassigned Jobs — printed as a full-width block BELOW the truck grid, matching the old scheduler
+   printout's visual density. Was a narrow side column beside the grid (.pt-page-body/.pt-side-panel,
+   2026-09-02 - 2026-09-14) specifically because a column only ever adds WIDTH, never HEIGHT, so it
+   could never be the reason a one-page printout spilled onto a second sheet. Moved back to the
+   bottom 2026-09-15 at the user's request ("move the unassigned jobs and conflicts in board to the
+   bottom and make the details to look more clearly as in the pdf") — see DayPrintTimeline.jsx's own
+   restructure comment for the full reasoning, including how BoardTab.jsx's measureAndPrintBoard now
+   re-solves the height-budget problem this reintroduces by measuring this section's real rendered
+   height (same real-DOM-measurement approach it already used for the truck grid) instead of the old
+   side-column's dedicated --pt-side-scale. This section now shares the grid's --pt-scale instead —
+   one consistent font-size language top to bottom, same one-line/pipe-separated/big-font job style
+   used everywhere else on the printout (.pt-jobline/.pt-job-bar/.pt-job-name/.pt-seg, reused here via
+   the .pt-jobline.static modifier below since these entries aren't lane-positioned).
+   There's no separate "Conflicts" list here (or anywhere on the print board) — an unassigned job can
+   never be part of a truck-overlap conflict, and assigned conflicts already show inline via the ⚠
+   flag / red box-shadow directly on the truck grid (.pt-jobline.conflict above), so a second list
+   would just be duplication (same reasoning that already removed "Conflicts Today" from the old side
+   panel on 2026-09-11 — see git history). */
+.pt-unassigned-section{margin-top:calc(14px * var(--pt-scale, 1));padding-top:calc(8px * var(--pt-scale, 1));border-top:2px solid #000;}
+.pt-unassigned-title{font-weight:800;font-size:calc(16px * var(--pt-scale, 1));color:#c0392b;border-bottom:2px solid #c0392b;padding-bottom:calc(3px * var(--pt-scale, 1));margin-bottom:calc(7px * var(--pt-scale, 1));}
+.pt-unassigned-list{display:flex;flex-direction:column;gap:calc(4px * var(--pt-scale, 1));}
+/* Overrides .pt-jobline's base position:absolute (needed for lane-packing on the truck grid, but
+   meaningless here — these rows just stack top to bottom in normal document flow) so these rows just
+   stack top to bottom in normal flow instead. Fixed height mirrors DayPrintTimeline.jsx's
+   BASE_ROW_HEIGHT_PX (46px) minus the 2px+2px top/bottom inset .pt-jobline normally gets from its
+   absolute positioning (top:2px;bottom:2px) — same effective row height as every job on the truck
+   grid, and, just as importantly, a fixed, known height the real-DOM-measurement pass in
+   BoardTab.jsx's measureAndPrintBoard can read reliably (via scrollHeight on .pt-unassigned-list) to
+   fold into its page-fit total, the same way it already measures each truck row's [data-lane]. */
+.pt-jobline.static{position:static;height:calc(42px * var(--pt-scale, 1));flex:0 0 auto;}
+.pt-unassigned-empty{font-size:calc(13px * var(--pt-scale, 1));color:#777;font-style:italic;}
 
 @media print{
   /* Force a plain white page no matter which day/night theme was active on screen — body's own
@@ -837,17 +1072,40 @@ col.pt-col-truck{width:calc(150px * var(--pt-scale, 1));}
      area, which sits outside any element's box — so leaving it "dark" here is exactly what was
      printing the margins black even after the content area itself went white. */
   :root,html,body{background:#fff !important;color-scheme:light !important;}
-  body *{visibility:hidden;}
+  /* Hides the ENTIRE interactive app in one shot — replaced 2026-09-11 (see .app-shell's own
+     comment above, and App.jsx's, for the full story). The old approach here was `body
+     *{visibility:hidden}` plus a matching `.print-sheet.print-active *{visibility:visible}`
+     override, needed back when the print sheets rendered nested deep inside the interactive board
+     (visibility is the only thing that can be selectively re-enabled for one descendant when its
+     ancestors are hidden — display can't). The problem: visibility:hidden does NOT remove an
+     element from the page's normal layout flow, only paints it invisible — so the full board
+     (often taller than one printed page) kept contributing real, if invisible, height, which the
+     browser dutifully paginated into an entirely blank 2nd page after the actual printout. Now
+     that the print sheets are true top-level siblings of .app-shell instead of its descendants,
+     display:none actually works: it removes .app-shell from layout entirely, leaving nothing
+     behind to paginate. */
+  .app-shell{display:none;}
   /* Only the sheet a "Print …" button just marked active is shown — both DayPrintSheet and
-     DayPrintTimeline sit in the DOM at once, so without this every print would show both. */
-  .print-sheet.print-active,.print-sheet.print-active *{visibility:visible;}
+     DayPrintTimeline sit in the DOM at once, so without this every print would show both.
+     .print-sheet's own base rule (screen section, above) is display:none; this is the only
+     override needed now — no visibility trick required since these are no longer .app-shell's
+     descendants. */
   .print-sheet.print-active{display:block;position:absolute;top:0;left:0;width:100%;padding:20px;background:#fff;}
-  .print-sheet-timeline.print-active{page:pt-landscape;}
+  /* "Print List" (DayPrintSheet) stays portrait, unnamed @page below. "Print Board"
+     (DayPrintTimeline) went landscape -> portrait -> landscape again, all on 2026-09-15 — started
+     landscape, switched to match "Print List" at the user's request ("make the print board portrait
+     so that it will fit like the old scheduler fit"), then switched back once a later request that
+     same day made clear portrait's narrower page was squeezing some jobs' detail text ("make sure
+     every detail of the job is getting printed...if needed convert the print board page to
+     landscape") — see BoardTab.jsx's PAGE_HEIGHT_IN/MARGIN_IN comment for the full back-and-forth.
+     The two sheets wanting different orientations again is exactly why this named .pt-landscape
+     @page (and the page:pt-landscape override below, scoped to just .print-sheet-timeline) exists —
+     a single unnamed @page can't serve two different orientations. BoardTab.jsx's
+     setPrintOrientation() still injects its own `@page{size:letter <orientation>;...}` rule right
+     before window.print() (the one that reliably takes effect across browsers, picking the right
+     orientation per sheet from JS); these @page rules below are the fallback for anything that
+     ignores that injected style. */
   @page{size:letter;margin:14mm;}
-  /* Best-effort — named @page + orientation isn't universally supported; if a browser ignores it,
-     the print dialog's own paper-size/orientation options still let you pick Letter landscape by
-     hand. Kept in sync with BoardTab.jsx's setPrintOrientation(), which injects the same rule with
-     the actual requested orientation right before window.print() — that's the one that reliably
-     takes effect across browsers; this @page block is the fallback for anything that ignores it. */
   @page pt-landscape{size:letter landscape;margin:10mm;}
+  .print-sheet-timeline.print-active{page:pt-landscape;}
 }

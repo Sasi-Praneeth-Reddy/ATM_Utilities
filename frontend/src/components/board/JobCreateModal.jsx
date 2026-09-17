@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { JOB_COLOR_OPTIONS } from '../../utils/jobs';
 
 /**
  * Quick-add a "placeholder" job from the day view — name, date, the day it runs until, a time, and
@@ -25,6 +26,16 @@ export default function JobCreateModal({ defaultDate, onCreate, onClose }) {
   const [destination, setDestination] = useState('');
   const [trucksNeeded, setTrucksNeeded] = useState(1);
   const [crewSize, setCrewSize] = useState('');
+  // Color override, picked at creation time (added 2026-09-16 at the user's request — "for
+  // placeholder give option for colors"). Unlike JobEditModal's ColorSwatchPicker (which applies
+  // each click immediately via onSetJobColor, since it's editing a job that already exists), this
+  // job doesn't have an id yet — there's nothing to PATCH — so this just holds the pick in local
+  // state and sends it along as `colorOverride` in the same POST that creates the job (see
+  // handleSave below and server.js's POST /api/jobs handler). Same 5-color set as the automatic
+  // green/yellow/purple/red/orange taxonomy (JOB_COLOR_OPTIONS, utils/jobs.js) — this is a manual
+  // override on top of it, not a 6th color, so the swatches double as a "leave it automatic" no-op
+  // when nothing is selected.
+  const [color, setColor] = useState(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const isLd = type === 'long_distance';
@@ -52,6 +63,7 @@ export default function JobCreateModal({ defaultDate, onCreate, onClose }) {
         customer: customer.trim(), type, date, endDate: resolvedEndDate, startTime: startTime || null,
         origin: origin.trim(), destination: destination.trim(),
         trucksNeeded: trucksNeeded || 1, crewSize: crewSize || null,
+        colorOverride: color || null,
       });
       onClose();
     } catch (err) {
@@ -128,6 +140,24 @@ export default function JobCreateModal({ defaultDate, onCreate, onClose }) {
           Crew size
           <input type="number" min="1" step="1" value={crewSize} placeholder="optional" onChange={(e) => setCrewSize(e.target.value)} />
         </label>
+        <div className="job-edit-field job-edit-colors">
+          Color
+          <div className="job-edit-color-swatches">
+            {JOB_COLOR_OPTIONS.map((c) => (
+              <button
+                key={c.key}
+                type="button"
+                className={`job-edit-color-swatch ${c.key} ${color === c.key ? 'active' : ''}`}
+                title={c.label}
+                aria-label={c.label}
+                onClick={() => setColor(color === c.key ? null : c.key)}
+              >
+                {color === c.key ? '✓' : ''}
+              </button>
+            ))}
+          </div>
+          <span className="job-edit-hint">Optional — leave blank to use the automatic color once the job type is known.</span>
+        </div>
 
         {error && <div className="job-edit-error">{error}</div>}
 

@@ -62,13 +62,52 @@
  *                                                              if omitted). customer/type/origin/destination/
  *                                                              trucksNeeded/crewSize are all optional.
  *   PATCH /api/jobs/:id                              [admin+dispatcher] body: any job field(s), incl. truckIds[]
- *                                                              (removing a truck also clears its truckDrivers entry)
+ *                                                              (removing a truck also clears its truckDrivers entry).
+ *                                                              Two independent locks, both added
+ *                                                              2026-09-08, split apart 2026-09-14 (see
+ *                                                              db.js's MANUAL_EDIT_LOCK_FIELDS comment
+ *                                                              for the full history): a PATCH that
+ *                                                              actually changes customer/type/date/
+ *                                                              endDate/startTime/endTime/duration/
+ *                                                              origin/destination/crewSize/notes
+ *                                                              (MANUAL_EDIT_LOCK_FIELDS) locks the
+ *                                                              job's DETAIL fields — every sync source
+ *                                                              (REST poll, calendar, Smart Insights)
+ *                                                              then skips the whole job entirely on
+ *                                                              their next run. A PATCH that changes
+ *                                                              truckIds/trucksNeeded (TRUCK_LOCK_FIELDS)
+ *                                                              separately locks just the TRUCK
+ *                                                              assignment — see db.js's
+ *                                                              syncTruckAssignmentUnlessLocked, used by
+ *                                                              the calendar sync. Either kind of
+ *                                                              correction can happen without the other
+ *                                                              also freezing. See POST
+ *                                                              /api/jobs/:id/resync to undo both.
+ *   POST  /api/jobs/:id/resync                       [admin+dispatcher] clears BOTH locks above (detail
+ *                                                              and truck-assignment) so this job resumes
+ *                                                              accepting automatic updates from its sync
+ *                                                              source(s) — doesn't force an immediate
+ *                                                              re-sync, just lifts the block for the
+ *                                                              next one.
  *   DELETE /api/jobs/:id                             [admin+dispatcher] permanently removes a job — UI only
  *                                                              offers this for placeholder jobs, see db.js
  *   POST  /api/jobs/:id/set-truck-driver             [admin+dispatcher] body: {truckId, driverId} — assigns
  *                                                              (driverId: null clears) the driver for one
  *                                                              truck on this job; truckId must already be
- *                                                              one of the job's assigned trucks
+ *                                                              one of the job's assigned trucks. A real
+ *                                                              change here locks the truck assignment
+ *                                                              (same lock PATCH /api/jobs/:id sets for
+ *                                                              truckIds/trucksNeeded above — see db.js's
+ *                                                              markTruckAssignmentManual) but not the
+ *                                                              job's detail fields.
+ *   POST  /api/jobs/:id/color                        [admin+dispatcher+crew] body: {color} — one of
+ *                                                              'green'/'yellow'/'purple'/'red'/'orange', or
+ *                                                              null to clear back to the automatic category
+ *                                                              color. The ONE job field crew can touch (added
+ *                                                              2026-09-15 at the user's request) — kept as
+ *                                                              its own endpoint rather than opening the
+ *                                                              generic PATCH above so nothing else about a
+ *                                                              job becomes crew-editable.
  *   POST  /api/reset-to-sample-data                  [admin]
  *   POST  /api/clear-jobs                            [admin]  empties jobs only — trucks/drivers untouched
  *   POST  /api/sync-now?from=YYYY-MM-DD&to=YYYY-MM-DD [admin]  triggers an immediate SmartMoving sync
@@ -77,7 +116,20 @@
  *                                                              mapJobs.js's BOOKED_STATUSES). The iCal
  *                                                              feed (icalClient.js/pollIcalFeed) is set
  *                                                              aside for now, not deleted — see
- *                                                              README's "Webhooks vs. polling".
+ *                                                              README's "Webhooks vs. polling". Split
+ *                                                              2026-09-08 from the Calendar sync below —
+ *                                                              this endpoint no longer runs
+ *                                                              pollGoogleCalendarFeed() at all, so a slow
+ *                                                              or timed-out poll sweep can no longer
+ *                                                              block or mask the calendar sync's own run.
+ *   POST  /api/calendar-sync-now                     [admin]  triggers an immediate Google Calendar sync
+ *                                                              (see pollGoogleCalendarFeed) — the same
+ *                                                              sweep calendarSweepScheduled /
+ *                                                              calendarSweepScheduled403pm already run on
+ *                                                              their own schedule (functions-index.js),
+ *                                                              now independently reachable on demand
+ *                                                              too. Added 2026-09-08 alongside the split
+ *                                                              above.
  *   GET   /api/schedulable-jobs?statuses=4           [admin]  SmartMoving-sourced jobs only (debugging)
  *   POST  /api/smart-insights/sync-now                [admin]  triggers an immediate Smart Insights
  *                                                              report sync (Gmail -> parse -> upsert,
@@ -135,6 +187,12 @@ const POLL_LOOKBACK_DAYS = Number(process.env.POLL_LOOKBACK_DAYS) || 7;
 const ICAL_BRANCH_FILTER = process.env.SMARTMOVING_ICAL_BRANCH || 'Around Town Movers';
 const POLL_LOOKAHEAD_DAYS = Number(process.env.POLL_LOOKAHEAD_DAYS) || 60;
 const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true';
+// Google's OAuth "Testing" publishing status auto-expires a refresh token exactly 7 days after
+// it's issued, no matter how often it's used — see smartInsightsGmail.js's file header. Used by
+// GET /api/gmail-auth-status to estimate when the next re-auth is due from when
+// gmail-oauth-setup.js last recorded one; not configurable via env because it's Google's rule, not
+// this app's, so there's nothing meaningful to override it with.
+const GMAIL_AUTH_EXPIRY_DAYS = 7;
 // Only used by the dev-login bypass below, which is a full-page browser navigation (like an old
 // OAuth redirect) rather than a fetch call, so it needs somewhere to send the browser back to.
 const FRONTEND_URL = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
@@ -446,10 +504,14 @@ const DRIVER_AUTO_ASSIGN_ENABLED = false;
  *
  * What "enrichment" still means for a job that DOES already exist:
  *
- *  1. Truck auto-assignment. Each event's "Trucks:" text (mapIcalEvent.js) is matched against every
- *     truck's `smartMovingLabels` (Admin > Trucks panel) via db.findTruckIdBySmartMovingLabel — only
- *     ever applied if that job doesn't already have a truck (see fillAssignmentIfEmpty in db.js), so
- *     a dispatcher's own assignment is never overwritten by a later sync.
+ *  1. Truck auto-assignment/sync. Each event's "Trucks:" text (mapIcalEvent.js) is matched against
+ *     every truck's `smartMovingLabels` (Admin > Trucks panel) via db.findTruckIdBySmartMovingLabel.
+ *     Until 2026-09-14 this only ever FILLED an empty assignment slot (fillAssignmentIfEmpty in
+ *     db.js) — now (see db.js's syncTruckAssignmentUnlessLocked) it actively keeps the job's truck in
+ *     step with this match, including clearing it if the calendar shows none, UNLESS a dispatcher has
+ *     manually fixed that job's truck assignment here (db.js's truckLockedAt — see
+ *     markTruckAssignmentManual). A dispatcher's locked assignment is still never overwritten by a
+ *     later sync; an unlocked one now genuinely tracks SmartMoving instead of only ever growing.
  *
  *  2. Driver auto-assignment (currently disabled — see DRIVER_AUTO_ASSIGN_ENABLED above). When on:
  *     each event's "Crew:" text is matched against every driver's `smartMovingLabels` (Admin >
@@ -488,6 +550,10 @@ async function pollGoogleCalendarFeed() {
   let skippedUnparseable = 0;
   let autoAssignedTruckCount = 0;
   let autoAssignedDriverCount = 0;
+  // Manual edit lock (added 2026-09-08 — see db.js's markJobManuallyEdited/mergeCalendarDataOntoExistingJob):
+  // counted separately from skippedNoMatch below — this is a job the calendar sync DID find, it's
+  // just deliberately leaving it alone because a dispatcher hand-corrected it.
+  let skippedManualEdit = 0;
   const errors = [];
 
   try {
@@ -522,6 +588,7 @@ async function pollGoogleCalendarFeed() {
         if (result.matched) {
           matchedCount += 1;
           if (result.merged) mergedCount += 1;
+          if (result.skippedManualEdit) skippedManualEdit += 1;
         } else {
           skippedNoMatch += 1;
         }
@@ -540,11 +607,11 @@ async function pollGoogleCalendarFeed() {
 
   recordEvent({
     type: 'calendar-sweep', matchedCount, mergedCount, skippedNoMatch, autoAssignedTruckCount,
-    autoAssignedDriverCount, skippedUnparseable, errorCount: errors.length,
+    autoAssignedDriverCount, skippedUnparseable, skippedManualEdit, errorCount: errors.length,
   });
   return {
     matchedCount, mergedCount, skippedNoMatch, autoAssignedTruckCount, autoAssignedDriverCount,
-    skippedUnparseable, errors,
+    skippedUnparseable, skippedManualEdit, errors,
   };
 }
 
@@ -1120,15 +1187,34 @@ async function handleRequest(req, res) {
       // explicit from/to, since pollSweep already defaults to POLL_LOOKBACK_DAYS/POLL_LOOKAHEAD_DAYS
       // when neither is given. The iCal feed is set aside for now; it's still reachable directly if
       // ever needed by calling pollIcalFeed() (not wired to this endpoint anymore).
+      //
+      // SPLIT 2026-09-08 (at the user's request): this used to also run pollGoogleCalendarFeed()
+      // sequentially right after pollSweep(), in the same request/response. The problem: the `api`
+      // Cloud Function has no timeoutSeconds override, so it runs on the platform's 60s default —
+      // and pollSweep's fully-sequential, unbatched per-crew-member/per-opportunity SmartMoving API
+      // calls can exceed that under real data volume (confirmed via a live 502 + Cloud Run
+      // "maximum request timeout" log entry). When that happened, the request was killed before
+      // pollGoogleCalendarFeed() ever got a chance to run — so a slow poll sweep silently prevented
+      // the calendar sync from running too, even though the calendar sync itself was healthy. Now
+      // each has its own endpoint (see POST /api/calendar-sync-now just below) and can succeed or
+      // time out independently — see SyncPanel.jsx for the two buttons this backs.
       const result = await pollSweep({ from, to });
-      // Also run the Google Calendar sync (added 2026-08-26) on every manual "Sync Now" — it's what
-      // actually carries truck/driver assignment data (pollSweep's REST source doesn't), and it's
-      // where the iCal/Smart-Insights record merge happens (see db.upsertSmartMovingJob). Wrapped
-      // separately so a not-yet-authorized calendar (e.g. before the one-time re-consent flow in
-      // smartInsightsGmail.js's 2026-08-26 comment has been run) never breaks the REST sync's own
-      // response — it just reports its own error alongside a normal result from the REST side.
-      const calendarSync = await pollGoogleCalendarFeed().catch((err) => ({ errors: [{ message: err.message }] }));
-      sendJson(req, res, 200, { ...result, calendarSync, state: await db.getState() });
+      sendJson(req, res, 200, { ...result, state: await db.getState() });
+      return;
+    }
+
+    if (p === '/api/calendar-sync-now' && req.method === 'POST') {
+      requireRole(currentUser, ['admin']);
+      // Split out of /api/sync-now 2026-09-08 — see that handler's comment for why. This is the
+      // Google Calendar sync (pollGoogleCalendarFeed) on its own, independent of the SmartMoving
+      // REST poll sweep — it's what actually carries truck/driver assignment data (pollSweep's REST
+      // source doesn't), and it's where the iCal/Smart-Insights record merge happens (see
+      // db.mergeCalendarDataOntoExistingJob). Same function calendarSweepScheduled /
+      // calendarSweepScheduled403pm already run on their own schedule (functions-index.js) — this
+      // just makes it reachable on demand too, without waiting for pollSweep to finish (or time out)
+      // first.
+      const result = await pollGoogleCalendarFeed();
+      sendJson(req, res, 200, { ...result, state: await db.getState() });
       return;
     }
 
@@ -1141,6 +1227,34 @@ async function handleRequest(req, res) {
       // error via syncSmartInsights -> getAuthenticatedClient if they aren't.
       const result = await syncSmartInsights();
       sendJson(req, res, 200, { ...result, state: await db.getState() });
+      return;
+    }
+
+    if (p === '/api/gmail-auth-status' && req.method === 'GET') {
+      requireRole(currentUser, ['admin']);
+      // Backs the "Gmail authorization" countdown in SyncPanel (added 2026-09-08 at the user's
+      // request) — Google's OAuth "Testing" publishing status auto-expires the refresh token
+      // server/smartInsightsGmail.js runs on (both the report-email sync and the Calendar sync
+      // share it) exactly GMAIL_AUTH_EXPIRY_DAYS after it's issued, regardless of activity. The
+      // board can't know the actual expiry moment Google enforces server-side, only estimate it
+      // from when server/gmail-oauth-setup.js last recorded a successful re-auth (db.js's
+      // getGmailAuthStatus) — see that script for why it has to be the one writing this, not the
+      // deployed backend itself.
+      const status = await db.getGmailAuthStatus();
+      if (!status || !status.refreshedAt) {
+        sendJson(req, res, 200, { tracked: false });
+        return;
+      }
+      const refreshedAt = new Date(status.refreshedAt);
+      const expiresAt = new Date(refreshedAt.getTime() + GMAIL_AUTH_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+      const daysRemaining = Math.ceil((expiresAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000));
+      sendJson(req, res, 200, {
+        tracked: true,
+        refreshedAt: status.refreshedAt,
+        expiresAt: expiresAt.toISOString(),
+        daysRemaining,
+        expired: daysRemaining <= 0,
+      });
       return;
     }
 
@@ -1222,6 +1336,19 @@ async function handleRequest(req, res) {
       requireRole(currentUser, ['admin', 'dispatcher']);
       const body = await readJsonBody(req);
       if (!body.date) { sendJson(req, res, 400, { error: 'date is required' }); return; }
+      // Color override, optionally picked in JobCreateModal at creation time (added 2026-09-16 —
+      // "for placeholder give option for colors"). Same allowed set and same validation as the
+      // dedicated POST /api/jobs/:id/color route below (ALLOWED_COLORS duplicated here on purpose,
+      // same "small constant, kept in sync by hand" tradeoff already used throughout this file/
+      // frontend for the color taxonomy — see that route's own comment) — this just lets a
+      // placeholder start out with a pick already applied instead of needing a second click right
+      // after creation.
+      const ALLOWED_JOB_CREATE_COLORS = ['green', 'yellow', 'purple', 'red', 'orange'];
+      const colorOverride = body.colorOverride || null;
+      if (colorOverride !== null && !ALLOWED_JOB_CREATE_COLORS.includes(colorOverride)) {
+        sendJson(req, res, 400, { error: `colorOverride must be one of ${ALLOWED_JOB_CREATE_COLORS.join(', ')}, or null` });
+        return;
+      }
       const { jobs } = await db.getState();
       const id = nextId(jobs, 'J-');
       const endDate = body.endDate || body.date;
@@ -1246,6 +1373,7 @@ async function handleRequest(req, res) {
         status: 'scheduled',
         source: 'placeholder',
         truckIds: [],
+        colorOverride,
       });
       // Audit log (see db.js's logJobChange) — a create has no "before" to diff against, so the
       // whole new job is logged as-is rather than a field-by-field diff.
@@ -1260,7 +1388,7 @@ async function handleRequest(req, res) {
       const body = await readJsonBody(req);
       const job = await db.getJob(m[1]);
       if (!job) { sendJson(req, res, 404, { error: 'Job not found' }); return; }
-      const updatedJob = await db.updateJob(m[1], body);
+      let updatedJob = await db.updateJob(m[1], body);
       // Audit log — diffed against the actual before/after job docs (not just the request body),
       // so this also picks up side effects like a removed truck's driver assignment clearing along
       // with it (see db.js's updateJob), not just the fields the caller explicitly sent.
@@ -1268,12 +1396,65 @@ async function handleRequest(req, res) {
       if (Object.keys(changes).length) {
         await db.logJobChange({ jobId: m[1], action: 'update', actor: currentUser, changes });
       }
+      // Manual edit lock (added 2026-09-08 at the user's request): if this PATCH actually changed
+      // one of db.js's MANUAL_EDIT_LOCK_FIELDS (customer/date/time/addresses/crewSize/notes/type —
+      // the fields every sync source treats as its own, see db.js's jobData() comment on
+      // manuallyEditedAt), mark this job as manually edited so the next poll sweep / calendar sync /
+      // Smart Insights sync leaves it alone entirely instead of silently reverting the correction.
+      // Checked against `changes` (the real before/after diff), not the raw request body, so simply
+      // opening JobEditModal and clicking Save without changing anything doesn't lock a job that
+      // didn't need it — see db.js's markJobManuallyEdited for what "locked" actually does.
+      if (Object.keys(changes).some((field) => db.MANUAL_EDIT_LOCK_FIELDS.includes(field))) {
+        updatedJob = await db.markJobManuallyEdited(m[1], currentUser);
+      }
+      // Truck-assignment lock (added 2026-09-14, split out from the check above — see db.js's
+      // markTruckAssignmentManual comment for the full reasoning): a PATCH that actually changed
+      // truckIds/trucksNeeded locks JUST the truck assignment, independent of the detail lock above —
+      // a job can be truck-locked without being detail-locked and vice versa. This is what lets the
+      // calendar sync keep an unlocked job's truck in step with SmartMoving (including clearing it if
+      // SmartMoving now shows none) while a dispatcher's deliberate reassignment here still sticks.
+      if (Object.keys(changes).some((field) => db.TRUCK_LOCK_FIELDS.includes(field))) {
+        updatedJob = await db.markTruckAssignmentManual(m[1], currentUser);
+      }
+      sendJson(req, res, 200, updatedJob);
+      return;
+    }
+
+    // "Resync from source" — clears BOTH locks a prior PATCH/set-truck-driver above may have set
+    // (the detail lock and the truck-assignment lock — see db.js's clearJobManualEdit), so this job
+    // goes back to accepting automatic updates from whichever sync source(s) still recognize it.
+    // Doesn't force an immediate re-sync itself — see clearJobManualEdit's own doc comment for why
+    // that's a deliberate choice, not an oversight.
+    m = p.match(/^\/api\/jobs\/([^/]+)\/resync$/);
+    if (m && req.method === 'POST') {
+      requireRole(currentUser, ['admin', 'dispatcher']);
+      const job = await db.getJob(m[1]);
+      if (!job) { sendJson(req, res, 404, { error: 'Job not found' }); return; }
+      const updatedJob = await db.clearJobManualEdit(m[1]);
+      if (job.manuallyEditedAt || job.truckLockedAt) {
+        await db.logJobChange({
+          jobId: m[1], action: 'resync', actor: currentUser,
+          changes: {
+            ...(job.manuallyEditedAt ? { manuallyEditedAt: { from: job.manuallyEditedAt, to: null } } : {}),
+            ...(job.truckLockedAt ? { truckLockedAt: { from: job.truckLockedAt, to: null } } : {}),
+          },
+        });
+      }
       sendJson(req, res, 200, updatedJob);
       return;
     }
 
     // Same role gate as PATCH — the frontend only ever offers this for placeholder jobs (see
     // db.js's deleteJob doc comment for why), but that's a UI choice, not enforced here.
+    //
+    // Re-matches m against the plain /api/jobs/:id pattern (bug fix, 2026-09-16) — this block used
+    // to just reuse whatever `m` the /resync POST handler above had already set, which only ever
+    // matches a URL ending in /resync. A plain DELETE /api/jobs/:id never matches that regex, so `m`
+    // came in null here, this whole block was skipped, and the request fell through every remaining
+    // route with no match — the exact "Backend returned 404 — Not found" the user reported when
+    // trying to delete a placeholder job (confirmed still present in Firestore, since the delete
+    // never actually reached db.deleteJob at all).
+    m = p.match(/^\/api\/jobs\/([^/]+)$/);
     if (m && req.method === 'DELETE') {
       requireRole(currentUser, ['admin', 'dispatcher']);
       const job = await db.getJob(m[1]);
@@ -1309,7 +1490,52 @@ async function handleRequest(req, res) {
           changes: { [`truckDrivers.${body.truckId}`]: { from: priorDriverId, to: newDriverId } },
         });
       }
-      sendJson(req, res, 200, await db.setJobTruckDriver(m[1], body.truckId, newDriverId));
+      // Driver assignment briefly locked the WHOLE job too (2026-09-08 to 2026-09-14, at the user's
+      // follow-up request) — reverted (see db.js's MANUAL_EDIT_LOCK_FIELDS comment for why): a
+      // routine driver assignment shouldn't freeze the job's date/customer/etc against further
+      // syncing. It now trips only the narrower truck-assignment lock instead (added 2026-09-14 — see
+      // db.js's markTruckAssignmentManual), same real-change guard as before (priorDriverId !==
+      // newDriverId, already computed above for the audit log) — this is what lets a dispatcher's
+      // deliberate driver pick stick through the next calendar sync while everything else about the
+      // job keeps syncing normally.
+      let updatedJob = await db.setJobTruckDriver(m[1], body.truckId, newDriverId);
+      if (priorDriverId !== newDriverId) {
+        updatedJob = await db.markTruckAssignmentManual(m[1], currentUser);
+      }
+      sendJson(req, res, 200, updatedJob);
+      return;
+    }
+
+    // Sets (or, with color: null, clears) a job's manual color override — added 2026-09-15 at the
+    // user's explicit request that ALL roles, including crew (normally locked out of every other
+    // job edit — see DayBoard.jsx's canEdit), be able to change a job's color. Deliberately its own
+    // narrow endpoint rather than an opening in the generic PATCH /api/jobs/:id above (which stays
+    // [admin+dispatcher] only): this is the one field crew is allowed to touch, so it gets the one
+    // role gate that includes crew, and nothing else about a job becomes editable by widening this
+    // route. Body: {color: 'green'|'yellow'|'purple'|'red'|'orange'|null} — anything else is
+    // rejected; null clears the override so the job goes back to its automatic category color (see
+    // frontend's utils/jobs.js's jobColorOverride list, kept in sync with this one by hand).
+    m = p.match(/^\/api\/jobs\/([^/]+)\/color$/);
+    if (m && req.method === 'POST') {
+      requireRole(currentUser, ['admin', 'dispatcher', 'crew']);
+      const body = await readJsonBody(req);
+      const job = await db.getJob(m[1]);
+      if (!job) { sendJson(req, res, 404, { error: 'Job not found' }); return; }
+      const ALLOWED_COLORS = ['green', 'yellow', 'purple', 'red', 'orange'];
+      const color = body.color || null;
+      if (color !== null && !ALLOWED_COLORS.includes(color)) {
+        sendJson(req, res, 400, { error: `color must be one of ${ALLOWED_COLORS.join(', ')}, or null` });
+        return;
+      }
+      const priorColor = job.colorOverride || null;
+      if (priorColor !== color) {
+        await db.logJobChange({
+          jobId: m[1], action: 'set-color', actor: currentUser,
+          changes: { colorOverride: { from: priorColor, to: color } },
+        });
+      }
+      const updatedJob = await db.setJobColor(m[1], color);
+      sendJson(req, res, 200, updatedJob);
       return;
     }
 

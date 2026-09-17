@@ -1,9 +1,45 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiCall } from '../api';
 import { addDays, daysBetween } from '../utils/dates';
+import { fieldsTripManualEditLock, fieldsTripTruckLock } from '../utils/jobs';
 
 function sameJSON(a, b) {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** Two short, sharp descending beeps via the Web Audio API — no external audio file, consistent
+ * with this app's plain/minimal-dependency style elsewhere (see server.js's own "deliberately plain
+ * http + minimal deps" comment). Added 2026-09-10 at the user's request, for resetToSampleData's
+ * final warning below: a square-wave alert tone reads as "stop and think," not a pleasant
+ * notification chime, so its severity registers even for someone skimming past the dialog text
+ * without reading it. Always called synchronously from inside a button's click handler, so
+ * browsers' autoplay-restriction rules (which only block audio with no direct user gesture behind
+ * it) never block this. Best-effort: a browser that blocks or lacks Web Audio just means no sound —
+ * never a broken reset flow, since the window.confirm() dialogs are the real safeguard regardless. */
+function playWarningTone() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const now = ctx.currentTime;
+    [880, 660].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.15, now + i * 0.18);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.18 + 0.15);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + i * 0.18);
+      osc.stop(now + i * 0.18 + 0.16);
+    });
+    // AudioContexts don't auto-release their resources — close it once the short tone above has
+    // finished so repeatedly clicking through the warning doesn't leak a growing pile of live ones.
+    setTimeout(() => { ctx.close().catch(() => {}); }, 500);
+  } catch {
+    // Same best-effort reasoning as above — never let a sound failure block the actual safeguard.
+  }
 }
 
 /** Drops any `truckDrivers` entries for trucks no longer in `newTruckIds` — keeps local optimistic
@@ -23,6 +59,31 @@ function trimTruckDrivers(job, newTruckIds) {
   const next = {};
   kept.forEach((truckId) => { next[truckId] = existing[truckId]; });
   return next;
+}
+
+/** Manual edit lock, optimistic side (added 2026-09-08 — see utils/jobs.js's MANUAL_EDIT_LOCK_FIELDS
+ *  for the full background, including its brief 2026-09-08-to-2026-09-14 detour through also
+ *  covering truck/driver assignment, since reverted in favor of the separate, narrower
+ *  withTruckLockPrediction just below). `fields` is whatever's about to be spread onto `job` in
+ *  local state; returns `{ manuallyEditedAt: <now> }` when that would trip the lock, or `{}`
+ *  otherwise — spread the result into the same object literal that already spreads `fields`. Used by
+ *  updateJobFields and moveJobDate, so "does this actually change a locked field's VALUE, not just
+ *  touch its key" (utils/jobs.js's fieldsTripManualEditLock) is answered the same way everywhere
+ *  instead of each callback re-implementing its own comparison. Doesn't predict manuallyEditedBy (the
+ *  current user's email isn't threaded into this hook) — that part stays whatever it already was
+ *  until the next background poll fills in the real value from the server; only the
+ *  timestamp/badge-visibility is predicted here. */
+function withLockPrediction(job, fields) {
+  return fieldsTripManualEditLock(job, fields) ? { manuallyEditedAt: new Date().toISOString() } : {};
+}
+
+/** Truck-assignment sibling of withLockPrediction above (added 2026-09-14 — see utils/jobs.js's
+ *  TRUCK_LOCK_FIELDS for the full background). Same shape, same "predict what the backend's own
+ *  real-change check is about to decide" purpose, just for the separate, narrower truck-assignment
+ *  lock instead of the detail-field one — a job's truck assignment can now lock (and its badge show)
+ *  without that job's date/customer/etc. locking too, and vice versa. */
+function withTruckLockPrediction(job, fields) {
+  return fieldsTripTruckLock(job, fields) ? { truckLockedAt: new Date().toISOString() } : {};
 }
 
 /** Formats the yyyymmdd integer format the backend uses (e.g. 20260812) as a short human date
@@ -60,6 +121,16 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
   const [syncStatus, setSyncStatus] = useState({ loading: false, message: '', error: null });
   const [smartInsightsSyncStatus, setSmartInsightsSyncStatus] = useState({ loading: false, message: '', error: null });
+  // Split out of syncStatus 2026-09-08 — see syncCalendarNow's own comment below for why the
+  // calendar sync got its own status state instead of continuing to ride along inside syncNow's.
+  const [calendarSyncStatus, setCalendarSyncStatus] = useState({ loading: false, message: '', error: null });
+  // Backs SyncPanel's "Gmail authorization" countdown (added 2026-09-08 at the user's request) —
+  // null until the first successful fetch, or while GET /api/gmail-auth-status hasn't returned yet.
+  // { tracked: false } means gmail-oauth-setup.js has never recorded a re-auth (fresh setup, or run
+  // before this feature existed) — SyncPanel treats that as "unknown", not "expired". A fetch
+  // failure here is deliberately non-fatal (see loadGmailAuthStatus below) since this is a
+  // heads-up widget, not core board data — nothing else on the board depends on it.
+  const [gmailAuthStatus, setGmailAuthStatus] = useState(null);
 
   const call = useCallback((method, path, body) => apiCall(backendUrl, method, path, body), [backendUrl]);
 
@@ -103,6 +174,27 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
     if (!enabled) return;
     loadStateFromServer();
   }, [enabled, loadStateFromServer]);
+
+  /** Fetches the Gmail/Calendar OAuth re-auth countdown. Crew/dispatcher accounts get a 403 from
+      this endpoint (admin-only, same as the sync endpoints it sits next to) — that's expected, not
+      an error worth surfacing, so it's swallowed quietly rather than routed into backendErrorMsg
+      like a real data-load failure would be. A 7-day countdown doesn't need to be live, so this is
+      only ever called once on load/login, not on the 15s background poll below. */
+  const loadGmailAuthStatus = useCallback(async () => {
+    try {
+      const status = await call('GET', '/api/gmail-auth-status');
+      setGmailAuthStatus(status);
+    } catch (err) {
+      if (err.status === 401) { onAuthError?.(); return; }
+      // 403 (non-admin) or any other failure: leave it null, SyncPanel just won't render the
+      // widget rather than showing something alarming over what's ultimately a nice-to-have.
+    }
+  }, [call, onAuthError]);
+
+  useEffect(() => {
+    if (!enabled) return;
+    loadGmailAuthStatus();
+  }, [enabled, loadGmailAuthStatus]);
 
   // Background refresh every 15s so multiple tabs/devices converge on the same board. Only
   // swaps in new arrays when something actually changed, so unrelated components don't re-render
@@ -172,10 +264,24 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
     };
   }, [enabled, call, onAuthError]);
 
+  // Two separate confirmations, not one, at the user's explicit request 2026-09-10 — this action
+  // wipes EVERY truck, driver, and job (sample and real, including anything imported from
+  // SmartMoving) for every device using this backend, with no undo, so a single reflexive "OK"
+  // click on one dialog is exactly the failure mode worth designing against. The second, final
+  // warning also plays a short alert tone (playWarningTone above) right as it opens, so its
+  // severity registers even for someone clicking through without reading the dialog text.
   const resetToSampleData = useCallback(() => {
     if (
       !window.confirm(
         'Reset the board back to the original sample data? This clears everything in the database (assignments, imported SmartMoving jobs, admin edits) for every device using this backend, and cannot be undone.'
+      )
+    ) {
+      return;
+    }
+    playWarningTone();
+    if (
+      !window.confirm(
+        'FINAL WARNING — this cannot be undone. Every real truck, driver, and job will be permanently replaced with the original sample data, for every device using this backend. Are you absolutely sure?'
       )
     ) {
       return;
@@ -253,6 +359,44 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
     }
   }, [call]);
 
+  /** Manual trigger for the Google Calendar sync (pollGoogleCalendarFeed on the backend) — split out
+      of syncNow 2026-09-08 at the user's request. It used to ride along inside POST /api/sync-now,
+      run sequentially right after the SmartMoving REST poll sweep in the very same request — which
+      meant a slow/timed-out poll sweep (the `api` function's 60s default Cloud Run timeout, hit under
+      real data volume) silently killed the request before the calendar sync ever got a turn to run.
+      Now it's its own endpoint/button/status, so it succeeds or fails entirely on its own — see
+      SyncPanel.jsx for the second button this backs. */
+  const syncCalendarNow = useCallback(async () => {
+    setCalendarSyncStatus({ loading: true, message: '', error: null });
+    try {
+      const result = await call('POST', '/api/calendar-sync-now');
+      setTrucks(result.state.trucks);
+      setDrivers(result.state.drivers);
+      setJobs(result.state.jobs);
+      if (result.errors && result.errors.length) console.warn('Calendar sync errors:', result.errors);
+      const errNote = result.errors && result.errors.length
+        ? ` ${result.errors.length} event${result.errors.length > 1 ? 's' : ''} couldn't be read — see console.`
+        : '';
+      const matchedCount = result.matchedCount ?? 0;
+      const mergedCount = result.mergedCount ?? 0;
+      const skippedNoMatch = result.skippedNoMatch ?? 0;
+      // Manual edit lock (added 2026-09-08) — jobs the calendar sync found but deliberately left
+      // alone because a dispatcher hand-corrected them (see db.js's markJobManuallyEdited). Worth
+      // its own callout, not folded into "matched"/"updated", so it doesn't read as though nothing
+      // happened for that job.
+      const skippedManualEdit = result.skippedManualEdit ?? 0;
+      const lockNote = skippedManualEdit > 0
+        ? ` ${skippedManualEdit} job${skippedManualEdit === 1 ? '' : 's'} skipped (manually edited — see "Resync from source" on that job).`
+        : '';
+      const message = matchedCount === 0
+        ? `Synced with Google Calendar. No matching jobs found on the board.${skippedNoMatch > 0 ? ` (${skippedNoMatch} event(s) had no matching job.)` : ''}${lockNote}${errNote}`
+        : `Synced with Google Calendar. ${matchedCount} job${matchedCount === 1 ? '' : 's'} matched, ${mergedCount} updated.${skippedNoMatch > 0 ? ` ${skippedNoMatch} event(s) had no matching job.` : ''}${lockNote}${errNote}`;
+      setCalendarSyncStatus({ loading: false, message, error: null });
+    } catch (err) {
+      setCalendarSyncStatus({ loading: false, message: '', error: `Calendar sync failed: ${err.message}` });
+    }
+  }, [call]);
+
   /** Manual trigger for the Smart Insights report sync (same pipeline as the daily 6am ET
       smartInsightsSyncScheduled Cloud Function — see server/smartInsightsSync.js) — checks Gmail
       for any not-yet-processed report email right now instead of waiting for tomorrow's run.
@@ -274,11 +418,15 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
         ? ` ${result.filesSkipped} email${result.filesSkipped > 1 ? 's' : ''} had no recognizable report link/attachment.`
         : '';
       const rowSkipNote = result.rowsSkipped > 0 ? ` ${result.rowsSkipped} row(s) skipped (not Booked yet, or no matching opportunity).` : '';
+      // Manual edit lock (added 2026-09-08) — see syncCalendarNow's matching note above.
+      const lockNote = result.jobsSkippedManualEdit > 0
+        ? ` ${result.jobsSkippedManualEdit} job${result.jobsSkippedManualEdit === 1 ? '' : 's'} left as-is (manually edited — see "Resync from source" on that job).`
+        : '';
       const message = result.messagesFound === 0
         ? 'No new Smart Insights report emails found.'
         : `Processed ${result.filesProcessed} report${result.filesProcessed === 1 ? '' : 's'}: ` +
           `${result.jobsCreated} job${result.jobsCreated === 1 ? '' : 's'} added, ` +
-          `${result.jobsUpdated} updated.${rowSkipNote}${skipNote}${errNote}`;
+          `${result.jobsUpdated} updated.${rowSkipNote}${lockNote}${skipNote}${errNote}`;
       setSmartInsightsSyncStatus({ loading: false, message, error: null });
     } catch (err) {
       setSmartInsightsSyncStatus({ loading: false, message: '', error: `Smart Insights sync failed: ${err.message}` });
@@ -362,7 +510,9 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
 
   const setJobSingleTruck = useCallback((jobId, truckId) => {
     const truckIds = truckId ? [truckId] : [];
-    setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, truckIds, truckDrivers: trimTruckDrivers(j, truckIds) } : j)));
+    setJobs((prev) => prev.map((j) => (j.id === jobId
+      ? { ...j, truckIds, truckDrivers: trimTruckDrivers(j, truckIds), ...withTruckLockPrediction(j, { truckIds }) }
+      : j)));
     persist('PATCH', `/api/jobs/${jobId}`, { truckIds });
   }, [persist]);
 
@@ -373,7 +523,9 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
     const truckIds = checked
       ? (current.includes(truckId) ? current : [...current, truckId])
       : current.filter((id) => id !== truckId);
-    setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, truckIds, truckDrivers: trimTruckDrivers(j, truckIds) } : j)));
+    setJobs((prev) => prev.map((j) => (j.id === jobId
+      ? { ...j, truckIds, truckDrivers: trimTruckDrivers(j, truckIds), ...withTruckLockPrediction(j, { truckIds }) }
+      : j)));
     persist('PATCH', `/api/jobs/${jobId}`, { truckIds });
   }, [jobs, persist]);
 
@@ -384,11 +536,61 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
 
   /** Same as updateJobField but for several fields at once in a single PATCH — used by the "edit
       date/time" modal (JobEditModal) so saving date+endDate+startTime doesn't fire three separate
-      round trips (and three separate optimistic-update flickers) for one save action. */
+      round trips (and three separate optimistic-update flickers) for one save action.
+
+      Manual edit lock (added 2026-09-08): when `fields` touches any of MANUAL_EDIT_LOCK_FIELDS
+      (utils/jobs.js — the fields every sync source treats as its own) with a value that actually
+      DIFFERS from what this job already has, also optimistically sets manuallyEditedAt/
+      manuallyEditedBy locally, predicting what server.js's PATCH handler is about to decide
+      server-side (it diffs against the job's actual previous values the same way — see that
+      handler's comment).
+
+      Bug fixed 2026-09-08 (reported by the user: added trucks to a job, saw the lock badge appear,
+      then watched it disappear ~15s later even though the truck assignment itself was still there):
+      this used to check only whether a lock-field KEY was present in `fields` — Object.keys(fields).
+      some((f) => MANUAL_EDIT_LOCK_FIELDS.includes(f)) — not whether its VALUE actually changed. But
+      JobEditModal's handleSave always resends its full field set (customer/origin/destination/
+      trucksNeeded/crewSize/date/endDate/startTime/duration) on every Save click, including the live-
+      apply "+ Add truck" control's own Save — even one that touched nothing but which trucks are
+      assigned still carries customer/date/etc. as unchanged values in that payload. So this
+      optimistic guess showed the lock badge on essentially every Save, whether or not anything
+      sync-owned really changed — while the server's own check (a genuine before/after diff) correctly
+      found no real change and never set the lock. The mismatch resolved itself once the 15s
+      background poll (below) pulled the real, unlocked, state — which read as "the lock silently
+      disappeared," when actually it had never really been set; only the prediction was wrong. Now
+      compares each field's actual value against the job's current one (same `?? null` treatment
+      server.js's diffJobFields uses for these plain scalar fields) so a Save that only changed truck
+      assignment, or changed nothing at all, no longer predicts a lock it isn't going to get.
+
+      Truck-assignment lock (added 2026-09-14, split out of the above — see utils/jobs.js's
+      TRUCK_LOCK_FIELDS/MANUAL_EDIT_LOCK_FIELDS comments for the full history): also applies
+      withTruckLockPrediction alongside withLockPrediction here, since a Save from JobEditModal can
+      touch its "Trucks needed" field too — that's the one truck-related field this callback itself
+      ever carries (truck/driver ADD/REMOVE actions go through their own dedicated callbacks below,
+      each with their own withTruckLockPrediction call). The two predictions are independent: a Save
+      can trip one, both, or neither, matching the two separate locks server-side. */
   const updateJobFields = useCallback((jobId, fields) => {
-    setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, ...fields } : j)));
+    setJobs((prev) => prev.map((j) => (j.id === jobId
+      ? { ...j, ...fields, ...withLockPrediction(j, fields), ...withTruckLockPrediction(j, fields) }
+      : j)));
     persist('PATCH', `/api/jobs/${jobId}`, fields);
   }, [persist]);
+
+  /** "Resync from source" — clears the manual edit lock a JobEditModal save above may have set (see
+      db.js's clearJobManualEdit), so this job goes back to accepting automatic field updates from
+      whichever sync source(s) still recognize it. Doesn't force an immediate re-sync — see
+      clearJobManualEdit's own doc comment. Not run through `persist` like the fields above (which
+      fire-and-forget, discarding the response) — this one awaits and adopts the server's returned
+      job wholesale, since manuallyEditedAt/manuallyEditedBy are server-computed and there's nothing
+      useful to predict locally the way updateJobFields does above. */
+  const clearManualEdit = useCallback(async (jobId) => {
+    try {
+      const updatedJob = await call('POST', `/api/jobs/${jobId}/resync`);
+      setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, ...updatedJob } : j)));
+    } catch (err) {
+      window.alert(`Couldn't resync this job: ${err.message}`);
+    }
+  }, [call]);
 
   /** Permanently deletes a job — wired up in the UI only for placeholder jobs (source ===
       'placeholder'; see JobVisuals.jsx/JobEditModal.jsx), not SmartMoving-sourced ones, which
@@ -409,21 +611,57 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
   /** Unassigned-tray drop, and the × button on a multi-truck job block. Removing a truck from a
       job also drops whichever driver was assigned to THAT truck on this job — see
       trimTruckDrivers' comment — so a driver isn't left looking "still on" a job they've actually
-      been pulled off of. */
+      been pulled off of.
+
+      trucksNeeded roll-back (added 2026-09-08, user-reported, then corrected same day): addTruckToJob/
+      addExtraTruckToJob bump trucksNeeded UP to match truckIds.length whenever a truck gets added (so
+      the "needs N more"/"N/M trucks" badge stays honest — see utils/jobs.js's jobTrucksNeeded doc
+      comment). Removing a truck used to never bring it back DOWN, so undoing an accidental
+      extra-truck assignment (e.g. a SmartMoving job synced with trucksNeeded=1, a second truck added
+      by mistake, then removed) left trucksNeeded stuck at 2 forever.
+      First fix attempt just rolled trucksNeeded back to match truckIds.length whenever the two were
+      currently equal — but that's indistinguishable from a job that genuinely needs 2 trucks (say,
+      SmartMoving itself says 2), started with both assigned, and then had one pulled for a real
+      reason: trucksNeeded (2) === truckIds.length (2) there too, so that version would have wrongly
+      erased the real requirement right along with an actual mistake. Corrected version floors the
+      roll-back at db.js's trucksNeededOriginal — a snapshot of what trucksNeeded was at job creation
+      (from SmartMoving/Smart Insights/iCal, or whatever a dispatcher typed for a placeholder), never
+      touched by these assignment-driven bumps, only re-based by a genuinely deliberate edit through
+      JobEditModal's own "Trucks needed" field (see its handleSave). So a job created needing 1,
+      bumped to 2 by an accidental add, rolls back to 1 when that truck is removed — but a job created
+      needing 2 never rolls below 2, no matter how many of its trucks get pulled off later. */
   const removeTruckFromJob = useCallback((jobId, truckId) => {
     const job = jobs.find((j) => j.id === jobId);
     if (!job) return;
     const truckIds = (job.truckIds || []).filter((id) => id !== truckId);
-    setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, truckIds, truckDrivers: trimTruckDrivers(j, truckIds) } : j)));
-    persist('PATCH', `/api/jobs/${jobId}`, { truckIds });
+    const fields = { truckIds };
+    const floor = job.trucksNeededOriginal ?? job.trucksNeeded ?? 1;
+    const rolledBack = Math.max(floor, truckIds.length);
+    if (rolledBack !== (job.trucksNeeded || 1)) fields.trucksNeeded = rolledBack;
+    setJobs((prev) => prev.map((j) => (j.id === jobId
+      ? { ...j, ...fields, truckDrivers: trimTruckDrivers(j, truckIds), ...withTruckLockPrediction(j, fields) }
+      : j)));
+    persist('PATCH', `/api/jobs/${jobId}`, fields);
   }, [jobs, persist]);
 
   /** Drag-to-Unassigned — clears every truck off the job at once, so every driver assignment on it
-      goes with them (trimTruckDrivers against an empty truckIds list drops the whole map). */
+      goes with them (trimTruckDrivers against an empty truckIds list drops the whole map). Same
+      trucksNeededOriginal-floored roll-back as removeTruckFromJob above, and for the same reason —
+      clearing every truck off a job resets trucksNeeded to its real floor (1 for a job that was only
+      ever bumped by mistake, or higher if that's genuinely what it needs per trucksNeededOriginal),
+      never below what the job was actually created needing. */
   const unassignJob = useCallback((jobId) => {
-    setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, truckIds: [], truckDrivers: {} } : j)));
-    persist('PATCH', `/api/jobs/${jobId}`, { truckIds: [] });
-  }, [persist]);
+    const job = jobs.find((j) => j.id === jobId);
+    const fields = { truckIds: [] };
+    if (job) {
+      const floor = job.trucksNeededOriginal ?? job.trucksNeeded ?? 1;
+      if (floor !== (job.trucksNeeded || 1)) fields.trucksNeeded = floor;
+    }
+    setJobs((prev) => prev.map((j) => (j.id === jobId
+      ? { ...j, ...fields, truckDrivers: {}, ...withTruckLockPrediction(j, fields) }
+      : j)));
+    persist('PATCH', `/api/jobs/${jobId}`, fields);
+  }, [jobs, persist]);
 
   /** Day-view timeline drop. Long-distance jobs can need more than one truck, so dropping onto a
       new truck there ADDS to the job's assigned trucks (remove one via removeTruckFromJob or drag
@@ -441,12 +679,40 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
       ? (current.includes(truckId) ? current : [...current, truckId])
       : [truckId];
     const fields = { truckIds };
+    // Bug fixed 2026-09-08: dragging a second (third, ...) truck onto a long-distance job's
+    // timeline here used to grow truckIds without ever touching trucksNeeded — only the deliberate
+    // "+truck" button (addExtraTruckToJob below) did that bump. trucksNeeded on a synced job
+    // normally starts at 1 (see mapOpportunity.js/mapJobs.js/mapIcalEvent.js/mapSmartInsightsRow.js),
+    // so a job dragged up to 2 assigned trucks this way was silently left showing "Trucks needed: 1"
+    // in Job Assignments (JobAssignments.jsx) even with 2 trucks checked, and truckBadgeInfo
+    // (utils/jobs.js) renders NOTHING at all once trucksNeeded <= 1 — regardless of how many trucks
+    // are actually assigned — so the board's "needs N more"/"N/M trucks" badge didn't even show the
+    // mismatch. Mirrors addExtraTruckToJob's Math.max bump so the truck count this job reports
+    // always keeps up with reality, however a truck got added to it.
+    if (job.type === 'long_distance' && truckIds.length > current.length) {
+      fields.trucksNeeded = Math.max(job.trucksNeeded || 1, truckIds.length);
+      // trucksNeededOriginal floor (added 2026-09-08, second pass — see db.js's jobData() comment):
+      // db.js only ever snapshots this at job CREATION, so every job that already existed before
+      // that change shipped has it missing (null/undefined) in Firestore. Without capturing it here
+      // too, removeTruckFromJob/unassignJob's `job.trucksNeededOriginal ?? job.trucksNeeded ?? 1`
+      // fallback would read `job.trucksNeeded` AFTER this same bump already landed — i.e. the
+      // bumped value, not the true pre-bump one — making the floor equal the mistake it's supposed
+      // to undo, so a later removal could never roll back down. Only set once (skipped if the job
+      // already has a real trucksNeededOriginal, from creation or a prior bump), so a second/third
+      // bump doesn't keep sliding the floor upward — it always anchors to the FIRST bump's pre-bump
+      // value, however many trucks get added after that.
+      if (fields.trucksNeeded !== (job.trucksNeeded || 1) && job.trucksNeededOriginal == null) {
+        fields.trucksNeededOriginal = job.trucksNeeded || 1;
+      }
+    }
     if (newStartTime !== undefined && newStartTime !== null) {
       fields.startTime = newStartTime;
     }
     // For a local job, this can MOVE it off its previous truck (see the comment above) — that
     // truck's driver assignment shouldn't come along for the ride onto the new one.
-    setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, ...fields, truckDrivers: trimTruckDrivers(j, truckIds) } : j)));
+    setJobs((prev) => prev.map((j) => (j.id === jobId
+      ? { ...j, ...fields, truckDrivers: trimTruckDrivers(j, truckIds), ...withTruckLockPrediction(j, fields) }
+      : j)));
     persist('PATCH', `/api/jobs/${jobId}`, fields);
   }, [jobs, persist]);
 
@@ -465,7 +731,14 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
     const truckIds = [...current, truckId];
     const trucksNeeded = Math.max(job.trucksNeeded || 1, truckIds.length);
     const fields = { truckIds, trucksNeeded };
-    setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, ...fields } : j)));
+    // trucksNeededOriginal floor — same second-pass fix as addTruckToJob above, same reason: a
+    // pre-existing job has no trucksNeededOriginal snapshot from creation, so this bump has to
+    // capture the pre-bump value itself the first time, or removeTruckFromJob/unassignJob would
+    // never be able to tell this bump apart from a genuine multi-truck requirement.
+    if (trucksNeeded !== (job.trucksNeeded || 1) && job.trucksNeededOriginal == null) {
+      fields.trucksNeededOriginal = job.trucksNeeded || 1;
+    }
+    setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, ...fields, ...withTruckLockPrediction(j, fields) } : j)));
     persist('PATCH', `/api/jobs/${jobId}`, fields);
   }, [jobs, persist]);
 
@@ -473,27 +746,53 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
       specific truck on one specific job — see db.js's file header for why this replaced the old
       standing truck-to-driver link. Optimistic like everything else here: updates just that one
       entry in the job's local `truckDrivers` map, so sibling trucks on the same job (or this
-      truck's assignment on a different job) aren't touched. */
+      truck's assignment on a different job) aren't touched.
+
+      Driver assignment briefly predicted the (then-combined) manual-edit lock too (2026-09-08 to
+      2026-09-14) — that got reverted along with the server-side combined lock itself (see
+      utils/jobs.js's MANUAL_EDIT_LOCK_FIELDS comment), so this no longer touches manuallyEditedAt.
+      It now predicts the separate, narrower truck-assignment lock instead (added 2026-09-14 — see
+      utils/jobs.js's TRUCK_LOCK_FIELDS/withTruckLockPrediction), same real-change guard (only on an
+      actual driver change, not a same-value re-send) as server.js's own check for this endpoint. */
   const setJobTruckDriver = useCallback((jobId, truckId, driverId) => {
     setJobs((prev) => prev.map((j) => {
       if (j.id !== jobId) return j;
       const truckDrivers = { ...(j.truckDrivers || {}) };
-      if (driverId) truckDrivers[truckId] = driverId;
+      const priorDriverId = truckDrivers[truckId] || null;
+      const newDriverId = driverId || null;
+      if (newDriverId) truckDrivers[truckId] = newDriverId;
       else delete truckDrivers[truckId];
-      return { ...j, truckDrivers };
+      return { ...j, truckDrivers, ...(priorDriverId !== newDriverId ? { truckLockedAt: new Date().toISOString() } : {}) };
     }));
     persist('POST', `/api/jobs/${jobId}/set-truck-driver`, { truckId, driverId: driverId || null });
   }, [persist]);
 
+  /** Sets (color given) or clears (color falsy/null) a job's manual color override — added
+      2026-09-15 at the user's request that any user, including crew, be able to pick a job's color
+      directly. Optimistic like setJobTruckDriver above, and deliberately does NOT predict either
+      manual-edit lock (colorOverride is a pure display preference, not one of
+      MANUAL_EDIT_LOCK_FIELDS/TRUCK_LOCK_FIELDS — see db.js's setJobColor comment) — a color pick
+      never freezes a job against SmartMoving/calendar syncing. Hits its own narrow endpoint (see
+      server.js's POST /api/jobs/:id/color) rather than the generic PATCH, since that's the one this
+      app authorizes for the crew role too. */
+  const setJobColor = useCallback((jobId, color) => {
+    setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, colorOverride: color || null } : j)));
+    persist('POST', `/api/jobs/${jobId}/color`, { color: color || null });
+  }, [persist]);
+
   /** Month-view date-cell drop — shifts both date and endDate by the same delta so a multi-day
-      job's length is preserved. */
+      job's length is preserved. Predicts the manual edit lock too (added 2026-09-08) — date/endDate
+      are both in MANUAL_EDIT_LOCK_FIELDS and always genuinely change here (a drop onto the SAME date
+      wouldn't fire this at all — see MonthBoard.jsx's drop handler), so this always trips the lock;
+      unlike updateJobFields/withLockPrediction elsewhere, no no-op-save case to worry about here. */
   const moveJobDate = useCallback((jobId, newDate) => {
     const job = jobs.find((j) => j.id === jobId);
     if (!job) return;
     const delta = daysBetween(job.date, newDate);
     const endDate = job.endDate ? addDays(job.endDate, delta) : job.endDate;
-    setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, date: newDate, endDate } : j)));
-    persist('PATCH', `/api/jobs/${jobId}`, { date: newDate, endDate });
+    const fields = { date: newDate, endDate };
+    setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, ...fields, ...withLockPrediction(j, fields) } : j)));
+    persist('PATCH', `/api/jobs/${jobId}`, fields);
   }, [jobs, persist]);
 
   return {
@@ -501,13 +800,15 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
     backendConnected, backendErrorMsg,
     lastSyncedAt,
     syncStatus, syncNow,
+    calendarSyncStatus, syncCalendarNow,
     smartInsightsSyncStatus, syncSmartInsightsNow,
+    gmailAuthStatus,
     resetToSampleData, clearJobs,
     createTruck, createDriver,
     updateTruckField, updateDriverField, updateTruckStatus, reorderTrucks,
     deleteTruck, deleteDriver,
-    setJobSingleTruck, toggleJobTruck, updateJobField, updateJobFields, createJob, deleteJob,
+    setJobSingleTruck, toggleJobTruck, updateJobField, updateJobFields, clearManualEdit, createJob, deleteJob,
     removeTruckFromJob, unassignJob, addTruckToJob, addExtraTruckToJob, moveJobDate,
-    setJobTruckDriver,
+    setJobTruckDriver, setJobColor,
   };
 }

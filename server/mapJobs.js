@@ -93,7 +93,7 @@ function mapSmartMovingJob(lead, job) {
   const destination = pickStop(stops, s => s.isDestination) || {};
 
   const date = smartMovingIntDateToIso(job.jobDate) || smartMovingIntDateToIso(lead.serviceDate);
-  const { type, serviceCategory, miles } = classifyFromStops(origin, destination, lead);
+  const { type, serviceCategory, serviceCategoryLabel, miles } = classifyFromStops(origin, destination, lead);
   const duration = hoursBetween(job.startTimeUtc, job.endTimeUtc);
 
   return {
@@ -116,6 +116,7 @@ function mapSmartMovingJob(lead, job) {
     status: 'scheduled',
     miles,              // computed from address ZIPs — see jobTypeInference.js; null if unreadable
     serviceCategory,
+    serviceCategoryLabel,
     source: 'smartmoving',
     smartMovingStatus: OPPORTUNITY_STATUS[lead.status] || lead.status,
   };

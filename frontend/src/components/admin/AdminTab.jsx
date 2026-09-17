@@ -4,7 +4,6 @@ import DriverAdminList from './DriverAdminList';
 
 export default function AdminTab({
   trucks, drivers, jobs,
-  onResetToSampleData, onClearJobs,
   onCreateTruck, onCreateDriver,
   onUpdateTruckField, onUpdateTruckStatus, onUpdateDriverField,
   onDeleteTruck, onDeleteDriver, onReorderTrucks,
@@ -37,21 +36,20 @@ export default function AdminTab({
         <div style={{ display: 'flex', gap: 8 }}>
           <button className="btn" onClick={() => { setShowAddTruckForm((v) => !v); setShowAddDriverForm(false); }}>+ Add Truck</button>
           <button className="btn" onClick={() => { setShowAddDriverForm((v) => !v); setShowAddTruckForm(false); }}>+ Add Driver</button>
-          <button
-            className="btn secondary"
-            onClick={onResetToSampleData}
-            title="Clear all local changes and reload the original sample data"
-          >
-            Reset to sample data
-          </button>
-          <button
-            className="btn secondary"
-            style={{ color: 'var(--red)' }}
-            onClick={onClearJobs}
-            title="Remove all jobs — including the sample jobs — but leave trucks and drivers untouched"
-          >
-            Clear all jobs
-          </button>
+          {/* "Clear all jobs" removed 2026-09-10 at the user's request — it deleted every job on the
+              board (sample AND real, everything imported from SmartMoving included, for every
+              device using this backend) and, despite its own window.confirm() guard, sat right next
+              to the much lower-stakes "Reset to sample data" button, close enough for the wrong one
+              to get clicked. onClearJobs/data.clearJobs (useSchedulerData.js, still confirm()-
+              guarded) is left in place, just no longer wired to any button, in case a real bulk-clear
+              need comes up again later and deserves its own more deliberately isolated UI.
+
+              "Reset to sample data" itself MOVED to the Job Assignments tab the same day, at the
+              user's request — same reasoning SyncPanel's own move here-to-there comment already
+              gives (see JobAssignmentsTab.jsx): this page is the truck/driver roster, not where a
+              dispatcher should be reaching for the single most destructive action in the whole app.
+              It now also asks twice (with a warning tone on the second) before actually running —
+              see useSchedulerData.js's resetToSampleData. */}
         </div>
       </div>
 

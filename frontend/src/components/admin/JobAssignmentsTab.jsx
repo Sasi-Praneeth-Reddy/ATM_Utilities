@@ -28,10 +28,21 @@ export function matchesQuery(job, trucks, drivers, q) {
  * the list in place is all that's needed. Also hosts SyncPanel (moved here 2026-08-25 at the
  * user's request, from Trucks & Drivers — this page is where assignments actually get made, so
  * checking for/pulling in newly-synced jobs belongs here rather than on the truck/driver roster
- * page) — see SyncPanel.jsx for what it does. */
+ * page) — see SyncPanel.jsx for what it does.
+ *
+ * Also hosts "Reset to sample data" (moved here 2026-09-10 from Trucks & Drivers, at the user's
+ * request) — same "this page is where the consequential stuff happens" reasoning as SyncPanel's own
+ * move: a dispatcher managing job assignments and syncs is already in the right headspace to notice
+ * a big red warning button, more so than someone just adding a truck or fixing a driver's phone
+ * number on the roster page. The click handler itself (useSchedulerData.js's resetToSampleData) asks
+ * twice before doing anything, with a warning tone on the second ask — this button is just where it
+ * lives now, not a second confirmation layer of its own. */
 export default function JobAssignmentsTab({
   trucks, drivers, jobs, conflictIds, onSetJobSingleTruck, onToggleJobTruck, onUpdateJobField, onAddExtraTruck, onSetJobTruckDriver,
-  syncStatus, onSyncNow, lastSyncedAt, smartInsightsSyncStatus, onSyncSmartInsightsNow,
+  syncStatus, onSyncNow, lastSyncedAt,
+  calendarSyncStatus, onSyncCalendarNow,
+  smartInsightsSyncStatus, onSyncSmartInsightsNow, gmailAuthStatus,
+  onResetToSampleData,
 }) {
   const [query, setQuery] = useState('');
 
@@ -45,7 +56,9 @@ export default function JobAssignmentsTab({
     <section>
       <SyncPanel
         syncStatus={syncStatus} onSyncNow={onSyncNow} lastSyncedAt={lastSyncedAt}
+        calendarSyncStatus={calendarSyncStatus} onSyncCalendarNow={onSyncCalendarNow}
         smartInsightsSyncStatus={smartInsightsSyncStatus} onSyncSmartInsightsNow={onSyncSmartInsightsNow}
+        gmailAuthStatus={gmailAuthStatus}
       />
 
       <div className="toolbar">
@@ -59,6 +72,14 @@ export default function JobAssignmentsTab({
             onChange={(e) => setQuery(e.target.value)}
           />
         </div>
+        <button
+          className="btn secondary"
+          style={{ color: 'var(--red)' }}
+          onClick={onResetToSampleData}
+          title="Clear all local changes and reload the original sample data — asks twice before doing anything"
+        >
+          Reset to sample data
+        </button>
       </div>
       {query.trim() && !filteredJobs.length ? (
         <div className="empty">No jobs match "{query}".</div>

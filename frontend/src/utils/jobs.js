@@ -33,10 +33,71 @@ export const serviceCategoryLabels = {
 };
 /** CSS class suffix for job.serviceCategory, used as `cat-${serviceCategoryClass(job)}` — see
  * styles.css's `.job-block.cat-*`/`.pt-block.cat-*` rules. Returns null (no class) for categories
- * that intentionally keep the default look — see serviceCategoryLabels' comment above. */
+ * that intentionally keep the default look — see serviceCategoryLabels' comment above. Works the
+ * same for a long-distance job as a local one since 2026-09-08 (jobTypeInference.js's classifyJob
+ * no longer overwrites `serviceCategory` with a bare 'long_distance' string just because `type` is
+ * long_distance) — an LD job whose label says DEL/UPK now gets the same 'delivery_unpack' class a
+ * local one would, on top of its existing '.ld' treatment. */
 export function serviceCategoryClass(job) {
   const cat = job.serviceCategory;
   return cat && serviceCategoryLabels[cat] ? cat : null;
+}
+
+/** Display text for a job's service-category badge — 'DEL/UPK'/'LOAD' as before, but for 'other'
+ * (added 2026-09-08 at the user's request) the job's OWN serviceCategoryLabel — the actual raw
+ * label SmartMoving/the calendar gave it (e.g. "Storage Out Bound") — instead of a flat "OTHER"
+ * that told a dispatcher nothing beyond "not one of the known types". Falls back to "OTHER" only
+ * when a job predates serviceCategoryLabel being recorded (server/db.js added it 2026-09-08) or the
+ * source genuinely carried no label text. null wherever serviceCategoryClass is null (moving/
+ * long_distance-labeled/no category), same as before. */
+export function serviceCategoryText(job) {
+  const cat = serviceCategoryClass(job);
+  if (!cat) return null;
+  if (cat === 'other') return (job.serviceCategoryLabel || '').trim().toUpperCase() || 'OTHER';
+  return serviceCategoryLabels[cat];
+}
+
+// A distinct color per distinct 'other'-category label (a hash into a small fixed palette, so e.g.
+// every "Storage Out Bound" job always got the same color) used to live here, added 2026-08-28 so
+// two different 'other' job types wouldn't both just read as flat gray. Removed 2026-09-15 at the
+// user's request for a simpler, fixed board-wide color theme instead ("remove the old color scheme
+// for transit and others, instead use this color theme: red for identified military jobs, yellow for
+// long distance, purple for packing jobs, green for local jobs, orange for storage jobs") — isStorageJob
+// below now carves the one 'other' sub-type that scheme actually names (storage) out into its own
+// color; every other 'other' label falls back to one flat gray again (styles.css's --jobblock-other /
+// .pt-job-bar.cat-other), same as before the hash existed.
+
+/** True when an 'other'-category job's raw label mentions storage — "Storage In", "Storage Out
+ * Bound", "Self Storage", etc. Added 2026-09-15 at the user's request for a dedicated storage color
+ * (orange) instead of the old per-label hash-rainbow every 'other' job used to get (see above). Just
+ * a label-text check, same "display only, never drives scheduling" rule serviceCategoryClass itself
+ * already follows — a job whose real serviceCategory is 'load'/'delivery_unpack'/etc. is never also
+ * "storage" even if its label happens to mention the word, since those categories keep their own
+ * dedicated colors regardless of label text. */
+export function isStorageJob(job) {
+  return serviceCategoryClass(job) === 'other' && /storage/i.test(job.serviceCategoryLabel || '');
+}
+
+/** The fixed 5-color job palette (2026-09-15, "No other colors") a user can manually pin a job to
+ *  via JobEditModal's swatch picker (job.colorOverride — see server's POST /api/jobs/:id/color and
+ *  db.js's setJobColor), overriding whatever the automatic military/LD/packing/storage/local color
+ *  above would otherwise show. Same 5 keys/labels the automatic colors already mean, kept as one
+ *  shared list so the picker's swatches and their meaning can't drift from the colors themselves. */
+export const JOB_COLOR_OPTIONS = [
+  { key: 'green', label: 'Local' },
+  { key: 'yellow', label: 'Long Distance' },
+  { key: 'purple', label: 'Packing' },
+  { key: 'red', label: 'Military' },
+  { key: 'orange', label: 'Storage' },
+];
+
+/** CSS class for a job's manual color override, or '' when none is set — appended alongside the
+ *  block/bar's other classes (ld/cat-load/storage/military) in both JobVisuals.jsx (day board) and
+ *  DayPrintTimeline.jsx (print board). styles.css's `.job-block.override-*`/`.pt-job-bar.override-*`
+ *  rules use `!important` to win over those other classes' colors, and over JobBlock's own inline
+ *  military background style, whenever this is present. */
+export function jobColorOverrideClass(job) {
+  return job && job.colorOverride ? `override-${job.colorOverride}` : '';
 }
 
 export function statusClass(s) {
@@ -70,8 +131,158 @@ export function driverColor(drivers, driverId) {
 export function jobTruckIds(j) {
   return j.truckIds || [];
 }
+
+/** Truck NAMES (not ids) a job is currently assigned to, in assignment order — added 2026-09-18 for
+ * DuplicateAlertBanner.jsx, so a flagged placeholder/report-job pair can show which truck(s) each
+ * one actually landed on (the user's request: seeing a duplicate alert without that context made it
+ * unclear whether the two jobs were already correctly split onto different trucks or genuinely
+ * double-booked the same one). Drops any id that doesn't resolve to a known truck instead of
+ * crashing or showing "undefined" — same defensive `.filter(Boolean)` pattern JobEditModal.jsx's
+ * assignedTrucks already uses. */
+export function jobTruckNames(j, trucks) {
+  return jobTruckIds(j).map((id) => trucks.find((t) => t.id === id)?.name).filter(Boolean);
+}
+
+/** Just the city out of a full address string, for the print board's one-line job text (added
+ * 2026-09-15 at the user's request — "look at the address in the old scheduler, just the main city
+ * names are fine, which will reduce the length significantly"). Addresses in this system are always
+ * either "street, city, state[ zip]" (a local job's origin/destination — see e.g. server/db.js's
+ * sample data or mapJobs.js's addressFullAddress) or plain "city, state" (a long-distance job's, e.g.
+ * "Denver, CO"). Either way the city is always the SECOND-TO-LAST comma-separated segment — for a
+ * 2-segment "city, state" address that's segment 0, for a 3+ segment "street, city, state[ zip]"
+ * address (a zip is never its own segment; it rides along with the state, e.g. "CO 80202") that's
+ * always the one right before the state. Falls back to the whole trimmed string for a single-segment
+ * address (no comma at all) rather than guessing, and to '' for nothing. */
+export function mainCity(address) {
+  if (!address) return '';
+  const parts = address.split(',').map((p) => p.trim()).filter(Boolean);
+  if (parts.length < 2) return parts[0] || '';
+  return parts[parts.length - 2];
+}
+
+/** Military (PCS) moves carry a distinctive SmartMoving customer-name shape: "Last, First" followed
+ * by one or more semicolon-separated GBL/quote reference codes, optionally with a leading marker tag
+ * in asterisks — e.g. "*REWEIGH*Garcia, Michael; HAFC0748880; AAFD-D; T1",
+ * "**VIP**-Rivera, Antonio; BGAC0723738; DICF-4; DICE", or, with no marker at all,
+ * "Harvey, Jakoy; KKFA0964220; MORV-D; CTI" or "Hall, Joshua; BGAC0722747; DCEV-D; Dice" (added/
+ * widened 2026-09-15 at the user's request — the marker tag turned out to be optional, and the last
+ * segment isn't always all-caps either, e.g. "Dice" vs "DICE" — so detection can't require either).
+ *
+ * The marker is NOT required; what actually distinguishes this from an ordinary customer name that
+ * happens to carry trailing reference codes too (see customerIdentityKey above, which matches any
+ * "name; codes" shape for a different purpose) is the SHAPE of everything after the first ";":
+ * every one of those segments has to look like a real reference code — a single short token, no
+ * comma, no spaces (isReferenceCodeSegment below; case doesn't matter — "DICE" and "Dice" both
+ * count) — rather than, say, a second customer's name or a free-text note. A plain note or a
+ * co-customer's name after a semicolon won't match this (it'll have a comma and/or spaces) and
+ * correctly falls through as non-military. */
+function isReferenceCodeSegment(segment) {
+  return /^[A-Za-z0-9][A-Za-z0-9-]*$/.test(segment.trim());
+}
+export function isMilitaryJob(job) {
+  const parts = (job.customer || '').trim().split(';').map((p) => p.trim()).filter(Boolean);
+  return parts.length > 1 && parts.slice(1).every(isReferenceCodeSegment);
+}
+
+// Optional leading marker tag some (not all — see isMilitaryJob above) military customer names
+// carry, e.g. "*REWEIGH*" or "**VIP**-" ahead of the real "Last, First" name. Only used by
+// militaryCleanName below, to strip it when present — detection itself no longer depends on it.
+const MILITARY_MARKER_TAG = /^\*+[A-Za-z][A-Za-z0-9 ]*\*+-?/;
+
+/** The clean "Last, First" portion of a military job's customer name, for display somewhere the
+ * marker tag and reference codes would just be noise (added 2026-09-15 for the print board — "in
+ * print board only include their original names like Garcia, Michael"). Strips the leading marker
+ * tag when one is present (see MILITARY_MARKER_TAG above — most military names don't have one, e.g.
+ * "Harvey, Jakoy; KKFA0964220; MORV-D; CTI", and this is a no-op for those), then takes the portion
+ * before the first ";" — the same trick customerIdentityKey already uses for the same
+ * "Last, First; codes" shape. Falls back to the raw, trimmed customer name if somehow nothing is
+ * left after stripping (shouldn't happen in practice), so this never returns empty for a job that
+ * has a name at all. */
+export function militaryCleanName(job) {
+  const raw = (job.customer || '').trim();
+  const withoutMarker = raw.replace(MILITARY_MARKER_TAG, '').trim();
+  const semiIdx = withoutMarker.indexOf(';');
+  const clean = semiIdx === -1 ? withoutMarker : withoutMarker.slice(0, semiIdx).trim();
+  return clean || raw;
+}
+
+// Mirrors db.js's MANUAL_EDIT_LOCK_FIELDS exactly — the fields that, once a dispatcher changes
+// them, freeze the whole job from further automatic syncing (see db.js's markJobManuallyEdited).
+// truckIds/trucksNeeded/truckDrivers briefly lived here too (2026-09-08 to 2026-09-14) so assigning
+// a truck or driver locked the job as well — reverted (see db.js's MANUAL_EDIT_LOCK_FIELDS comment
+// for the full story: it let a routine truck assignment silently block a real SmartMoving date
+// correction on job 21973-2/-3 until someone noticed and ran "Resync from source" by hand). Used
+// client-side purely for the OPTIMISTIC update in useSchedulerData.js (updateJobFields — see
+// fieldsTripManualEditLock below), so the "🔒 Manually edited" notice/badge appears immediately
+// instead of waiting for the next full state reload — the backend's own check (server.js's PATCH
+// /api/jobs/:id handler, diffed against the job's actual previous values) is what actually decides
+// whether the lock applies; this just predicts that decision for a snappier UI, in the same spirit
+// as this file's other optimistic local-state updates. Keep in sync with db.js's list by hand — if
+// these two names ever drift apart, editing a field only in ONE of the two lists breaks the
+// prediction (badge shows the wrong thing for ~15s until the next background poll corrects it — see
+// useSchedulerData.js's pollOnce) but not the lock itself, since the backend's own list is what
+// actually decides.
+export const MANUAL_EDIT_LOCK_FIELDS = [
+  'customer', 'type', 'date', 'endDate', 'startTime', 'endTime', 'duration', 'origin', 'destination',
+  'crewSize', 'notes',
+];
+
+/** Did any key in `fields` — the payload about to be PATCHed onto `job` — actually change a value
+ *  listed in MANUAL_EDIT_LOCK_FIELDS? Array/object-aware (JSON.stringify) for truckIds/truckDrivers
+ *  specifically: a plain `!==` always reads two different-but-equal arrays/objects as "changed"
+ *  since they're never `===` unless the exact same reference, which would make every truck-assignment
+ *  action predict a lock even when nothing really moved. Mirrors server.js's diffJobFields'
+ *  isObj-aware comparison for the same reason. Bug this guards against (reported 2026-09-08): without
+ *  a real-change check, a Save/assignment that only re-sent the SAME values as already on the job
+ *  would still optimistically show the lock badge, which then vanished ~15s later once the
+ *  background poll corrected it — see updateJobFields' own doc comment in useSchedulerData.js for
+ *  the full story. */
+export function fieldsTripManualEditLock(job, fields) {
+  const isObj = (v) => v !== null && typeof v === 'object';
+  return Object.keys(fields).some((f) => {
+    if (!MANUAL_EDIT_LOCK_FIELDS.includes(f)) return false;
+    const before = job[f] ?? null;
+    const after = fields[f] ?? null;
+    return (isObj(before) || isObj(after)) ? JSON.stringify(before) !== JSON.stringify(after) : before !== after;
+  });
+}
+
+// Sibling of MANUAL_EDIT_LOCK_FIELDS above, for the separate truck-assignment lock (added
+// 2026-09-14 — see db.js's markTruckAssignmentManual and syncTruckAssignmentUnlessLocked). Once a
+// dispatcher assigns/reassigns/removes a truck (or types a real "Trucks needed" override), that
+// job's truck assignment stops tracking the calendar sync's own "Trucks:" match — everything ELSE
+// about the job (date/customer/etc.) keeps syncing normally, governed by the separate
+// MANUAL_EDIT_LOCK_FIELDS lock above. Mirrors db.js's TRUCK_LOCK_FIELDS exactly; keep in sync by
+// hand for the same reason noted above.
+export const TRUCK_LOCK_FIELDS = ['truckIds', 'trucksNeeded'];
+
+/** Truck-assignment sibling of fieldsTripManualEditLock above — did any key in `fields` actually
+ *  change a value listed in TRUCK_LOCK_FIELDS? Same array-aware real-change comparison, same reason
+ *  (a Save/assignment resending the same value already on the job shouldn't optimistically predict a
+ *  lock that the backend isn't actually going to set). */
+export function fieldsTripTruckLock(job, fields) {
+  const isObj = (v) => v !== null && typeof v === 'object';
+  return Object.keys(fields).some((f) => {
+    if (!TRUCK_LOCK_FIELDS.includes(f)) return false;
+    const before = job[f] ?? null;
+    const after = fields[f] ?? null;
+    return (isObj(before) || isObj(after)) ? JSON.stringify(before) !== JSON.stringify(after) : before !== after;
+  });
+}
+// Self-heals 2026-09-08: floors at how many trucks are ACTUALLY assigned, not just the stored
+// trucksNeeded value. Fixes a bug where dragging a 2nd+ truck onto a long-distance job's day-board
+// timeline (useSchedulerData.js's addTruckToJob) could grow truckIds without trucksNeeded ever
+// following along, since trucksNeeded is otherwise dispatcher-owned and never auto-updated by a
+// sync (see db.js's upsert functions) — a job could end up with 2 trucks assigned but "Trucks
+// needed" still reading 1 in Job Assignments (JobAssignments.jsx), and truckBadgeInfo below used to
+// render NOTHING at all in that state (it bails out whenever needed <= 1, before ever comparing
+// against how many trucks are actually on the job) — no visible warning that anything was off.
+// Taking Math.max here fixes every existing job showing this mismatch immediately, on every read,
+// with no migration needed — addTruckToJob's own trucksNeeded bump (added alongside this) keeps the
+// STORED value in sync too, so a fresh GET /api/... response already reflects the truth without
+// relying on this floor.
 export function jobTrucksNeeded(j) {
-  return j.trucksNeeded || 1;
+  return Math.max(j.trucksNeeded || 1, jobTruckIds(j).length);
 }
 export function jobTrucks(trucks, j) {
   return jobTruckIds(j).map((id) => trucks.find((t) => t.id === id)).filter(Boolean);
@@ -374,24 +585,50 @@ function customerIdentityKey(name) {
 
 /**
  * Flags manually-created "placeholder" jobs (source: 'placeholder', see server.js's POST /api/jobs)
- * whose customer name matches a job that later arrived from a Smart Insights report sync (source:
- * 'smartmoving-insights', see server/smartInsightsSync.js) — almost always the same real move,
- * entered by hand before the report caught up with it. Name match only (case/whitespace-insensitive,
- * and ignoring any trailing "; reference codes" — see customerIdentityKey above) — deliberately not
- * scoped to matching dates too, since a dispatcher may have placeholder'd a job under a rough
- * guessed date that the real report data corrects, and that's exactly the case this should still
- * catch.
+ * whose customer name matches another, real synced job — almost always the same move, entered by
+ * hand before the sync caught up with it. Name match (case/whitespace-insensitive, and ignoring any
+ * trailing "; reference codes" — see customerIdentityKey above) AND a matching date — requiring the
+ * date too was added 2026-09-18 at the user's explicit request ("only show if there is a duplicate
+ * on that particular day"), after a real report showed a single placeholder ("Cortney Holder", Sept
+ * 20) flagged against THREE separate report jobs a month-plus apart (Aug 7, Aug 31, Sept 20) —
+ * almost certainly separate real bookings by the same repeat customer, not the same move, and
+ * name-only matching had no way to tell them apart.
+ *
+ * This deliberately trades away one thing the OLD name-only version could catch: a placeholder
+ * entered under a rough/wrong guessed date that the real report later corrects. The user chose this
+ * tradeoff explicitly, given the noise it was causing — a placeholder like that just won't surface
+ * here anymore; it still shows up as its own separate job once the real one syncs in, same as any
+ * other unmatched pair.
+ *
+ * "Matching date" means their date RANGES overlap (via jobEnd, same as jobActiveOn/getConflicts use
+ * elsewhere) rather than requiring their start dates to be identical — a placeholder's date doesn't
+ * have to land on exactly the first day of a multi-day long-distance report job for this to still
+ * catch it as the same move.
+ *
+ * The "real" side of the match is anything that ISN'T a placeholder (source !== 'placeholder'),
+ * not just source === 'smartmoving-insights' specifically — fixed 2026-09-18 (same day as the date
+ * fix above) after the user reported a duplicate alert vanishing the moment a calendar sync ran:
+ * mergeCalendarDataOntoExistingJob (server/db.js) deliberately RE-LABELS a job's source from
+ * 'smartmoving-insights' to 'smartmoving' once the calendar/REST sync enriches it with real
+ * dispatch detail (a matched truck, in this case) — "an upgrade, not a demotion" per that
+ * function's own comment. That relabel is intentional and correct for what it's tracking (where
+ * this job's most authoritative data now comes from), but this function was reading it as "no
+ * longer a real synced job at all" and dropping it from matching the instant that happened — which
+ * is backwards, since an enriched job (now WITH a truck assigned) is exactly the case a dispatcher
+ * most needs to be nudged to delete the leftover placeholder for.
  * @returns {Array<{placeholder: object, reportJob: object}>} one entry per matching pair — a
  *   placeholder matching more than one report job (or vice versa) produces multiple entries.
  */
 export function getPlaceholderDuplicates(jobs) {
   const duplicates = [];
   const placeholders = jobs.filter((j) => j.source === 'placeholder' && customerIdentityKey(j.customer));
-  const reportJobs = jobs.filter((j) => j.source === 'smartmoving-insights' && customerIdentityKey(j.customer));
+  const reportJobs = jobs.filter((j) => j.source !== 'placeholder' && customerIdentityKey(j.customer));
   placeholders.forEach((p) => {
     const pKey = customerIdentityKey(p.customer);
     reportJobs.forEach((r) => {
-      if (customerIdentityKey(r.customer) === pKey) duplicates.push({ placeholder: p, reportJob: r });
+      const sameCustomer = customerIdentityKey(r.customer) === pKey;
+      const sameDate = p.date <= jobEnd(r) && jobEnd(p) >= r.date;
+      if (sameCustomer && sameDate) duplicates.push({ placeholder: p, reportJob: r });
     });
   });
   return duplicates;

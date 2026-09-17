@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { fmtRange, hourToLabel, timeToHour } from '../../utils/dates';
+import { fmtRange, hourToLabel, timeToHour, fmtDateTime } from '../../utils/dates';
 import { jobTrucks, jobTruckIds, jobTrucksNeeded, driversBusyForJob } from '../../utils/jobs';
-import { SmBadge, TruckBadge } from '../board/JobVisuals';
+import { SmBadge, ManualEditBadge, TruckLockBadge, TruckBadge } from '../board/JobVisuals';
 
 /** Collapsed-by-default multi-select for a long-distance job's assigned trucks — with the real
  * fleet size (20+ trucks), always showing every truck as an inline checkbox row (the old
@@ -102,12 +102,30 @@ export default function JobAssignments({ trucks, drivers, jobs, conflictIds, onS
               <div className="aj-title">
                 {j.customer} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>· {j.id}</span>
                 {conflict && <span className="aj-conflict-tag">⚠ CONFLICT</span>}
-                <SmBadge job={j} />
+                <SmBadge job={j} /><ManualEditBadge job={j} /><TruckLockBadge job={j} />
               </div>
               <div className="aj-meta">
                 {fmtRange(j)}{j.startTime ? ' · ' + hourToLabel(timeToHour(j.startTime)) : ''} · {j.type === 'long_distance' ? 'Long Distance' : 'Local'} · {(j.origin || '(no address)').split(',')[0]} → {(j.destination || '(no address)').split(',')[0]}
                 {driverNames.length ? ' · Driver: ' + driverNames.join(', ') : ''}
               </div>
+              {/* Always-on WHO + WHEN for a locked job, not just the badge's hover tooltip — added
+                  at the user's follow-up request ("reduce the confusion"). This list is scanned row
+                  by row, not hovered one badge at a time, so anything only reachable via a tooltip is
+                  easy to miss here specifically. Two independent notes (split 2026-09-14 — see
+                  db.js's MANUAL_EDIT_LOCK_FIELDS/TRUCK_LOCK_FIELDS) since a job can be locked on
+                  either front, both, or neither. */}
+              {j.manuallyEditedAt && (
+                <div className="aj-meta aj-lock-note">
+                  🔒 Locked{j.manuallyEditedBy ? ` by ${j.manuallyEditedBy}` : ''}
+                  {fmtDateTime(j.manuallyEditedAt) ? ` on ${fmtDateTime(j.manuallyEditedAt)}` : ''} — syncs won't overwrite this job's details.
+                </div>
+              )}
+              {j.truckLockedAt && (
+                <div className="aj-meta aj-lock-note">
+                  🔒🚚 Truck set{j.truckLockedBy ? ` by ${j.truckLockedBy}` : ''}
+                  {fmtDateTime(j.truckLockedAt) ? ` on ${fmtDateTime(j.truckLockedAt)}` : ''} — the calendar sync won't change it.
+                </div>
+              )}
             </div>
             <div>
               <span className="field-label">{multiCapable ? 'Trucks' : 'Truck'}</span>

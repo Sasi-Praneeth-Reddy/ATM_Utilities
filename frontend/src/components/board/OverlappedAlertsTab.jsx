@@ -3,7 +3,8 @@ import { jobTruckDriver } from '../../utils/jobs';
 
 /** One clickable reference to a job within a conflict row — jumps the board to day view on that
  *  job's date and briefly highlights it, via the same onJumpToJob mechanism JobSearch's results
- *  use (see BoardTab's handleJumpToJob). Rendered as a reset-styled inline <button> so it reads as
+ *  use (see App.jsx's handleJumpToJob — moved up from BoardTab 2026-09-10 so the title-bar search
+ *  can reach it from every tab, not just Board). Rendered as a reset-styled inline <button> so it reads as
  *  part of the sentence rather than a separate control, while still being a real clickable element
  *  (keyboard-focusable, no href needed since this never leaves the app). */
 function JobLink({ job, driver, onJumpToJob }) {
@@ -28,17 +29,23 @@ function JobLink({ job, driver, onJumpToJob }) {
  * Each job mentioned is a clickable link (via onJumpToJob) so a dispatcher can go straight from an
  * alert to the day view showing it, instead of hunting for the date manually — same pattern
  * JobSearch's dropdown results already use.
+ *
+ * `conflicts` arrives pre-scoped by BoardTab.jsx to whichever view this tab was opened from — the
+ * selected day's conflicts from day view, the selected month's from month view (see
+ * BoardTab.jsx's conflictsInView comment for why) — rather than every conflict in the whole
+ * dataset like it used to. `scopeLabel` (e.g. "on September 8, 2026" / "this month (September
+ * 2026)") names that scope in the header/empty state so it's clear this list isn't everything.
  */
-export default function OverlappedAlertsTab({ conflicts, trucks, drivers, onJumpToJob }) {
+export default function OverlappedAlertsTab({ conflicts, scopeLabel, trucks, drivers, onJumpToJob }) {
   return (
     <section>
       <h2 className="section-title">
         {conflicts.length
-          ? `⚠ ${conflicts.length} scheduling conflict${conflicts.length > 1 ? 's' : ''} detected`
-          : 'No scheduling conflicts'}
+          ? `⚠ ${conflicts.length} scheduling conflict${conflicts.length > 1 ? 's' : ''} detected ${scopeLabel}`
+          : `No scheduling conflicts ${scopeLabel}`}
       </h2>
       {conflicts.length === 0 ? (
-        <div className="oa-empty">Every truck's jobs are clear of double-bookings right now.</div>
+        <div className="oa-empty">Every truck's jobs are clear of double-bookings {scopeLabel}.</div>
       ) : (
         <ul className="oa-list">
           {conflicts.map((c, i) => {
