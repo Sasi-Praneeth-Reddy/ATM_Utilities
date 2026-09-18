@@ -420,6 +420,7 @@ export function JobBlock({ job, date, truckIdCtx, trucks, drivers, jobs, conflic
       departsLabel,
       arrivesLabel,
       assignedDriver ? `🧑 ${assignedDriver.name}` : null,
+      job.smartInsightsSalesPerson ? `💼 ${job.smartInsightsSalesPerson}` : null,
       multiTruck ? `trucks: ${jobTruckLabel(trucks, job)}` : null,
       job.id,
     ].filter(Boolean).join(' · ');
@@ -482,6 +483,7 @@ export function JobBlock({ job, date, truckIdCtx, trucks, drivers, jobs, conflic
     `${job.origin || '(no origin)'} → ${job.destination || '(no destination)'}`,
     `${jobTrucksNeeded(job)}T/${job.crewSize ?? '?'}M`,
     assignedDriver ? `🧑 ${assignedDriver.name}` : null,
+    job.smartInsightsSalesPerson ? `💼 ${job.smartInsightsSalesPerson}` : null,
     multiTruck ? `trucks: ${jobTruckLabel(trucks, job)}` : null,
     job.id,
   ].filter(Boolean).join(' · ');
