@@ -81,7 +81,27 @@ export default function DayBoard({
     // .timeline itself that the tray's own rect can't see (it's outside the tray/timeline entirely,
     // on <main>'s own box).
     const MAIN_BOTTOM_PADDING_PX = 16;
+    // Mirrors styles.css's own @media (max-width:720px) breakpoint — below it, this whole
+    // pin-everything-above-and-only-scroll-.timeline scheme is turned OFF instead of just being
+    // resized (2026-09-24, at the user's request: "make the day month date and other button not
+    // get pinned hide them when scrolling down by making the day board to be the one filling the
+    // screen"). A phone screen doesn't have room to spare for both the toolbar stack AND a
+    // permanently-visible truck grid the way a desktop window does — capping .timeline to
+    // `calc(100vh - everything above it)` on a narrow screen just squeezes the grid down to
+    // whatever sliver is left over. Setting timelineMaxHeight back to 'none' lets .timeline grow to
+    // its natural full content height again, so the PAGE itself becomes the scroller (same as
+    // before the 2026-09-17 fix this file's own comment above describes) — the toolbar/banner/tray
+    // scroll away with everything else instead of eating a fixed slice of the screen forever, and
+    // the truck grid gets to use the full width once you've scrolled past them. trayTop is left
+    // at its measured value here but has no visible effect once .unassigned-tray's own CSS switches
+    // to position:static under this same breakpoint (see styles.css) — kept rather than hardcoded
+    // to avoid a flash of a stale value if the window is resized across the breakpoint.
+    const MOBILE_BREAKPOINT_PX = 720;
     function measure() {
+      if (window.innerWidth <= MOBILE_BREAKPOINT_PX) {
+        setPinOffsets((prev) => (prev.timelineMaxHeight === 'none' ? prev : { ...prev, timelineMaxHeight: 'none' }));
+        return;
+      }
       const nav = document.querySelector('nav');
       const navBottom = nav ? nav.getBoundingClientRect().bottom : 58;
       // timelineMaxHeight now reads the tray's own real bottom edge (getBoundingClientRect().bottom)

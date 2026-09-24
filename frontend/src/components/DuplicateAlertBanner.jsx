@@ -17,12 +17,42 @@ function truckNote(job, trucks) {
 
 // Mirrors ConflictBanner.jsx's shape — see utils/jobs.js's getPlaceholderDuplicates() for why this
 // is computed client-side from `jobs` rather than a stored/dismissable alert.
-export default function DuplicateAlertBanner({ duplicates, trucks }) {
+//
+// hidden/onToggleHidden (added 2026-09-22 at the user's request: "give me a button to the
+// placeholder alert to hide and display when needed") — collapse/expand state itself lives in
+// BoardTab.jsx (a plain useState, not persisted, same "personal viewing preference" treatment as
+// hideInTransit right below it there) so it survives switching between Day/Month view without
+// resetting, but resets on a normal page reload same as every other view toggle in this app. Both
+// props are optional so this component still renders exactly as before if a future caller doesn't
+// wire them up. Deliberately never auto-hides itself or forgets a duplicate exists while hidden — a
+// dispatcher who hides this because they've already reviewed today's list still sees a small
+// collapsed reminder (below) rather than the alert silently vanishing, same reasoning DayBoard.jsx's
+// hideInTransit toggle already uses for its own count badge.
+export default function DuplicateAlertBanner({ duplicates, trucks, hidden, onToggleHidden }) {
   if (!duplicates.length) return null;
+
+  if (hidden) {
+    return (
+      <button
+        type="button"
+        className="duplicate-banner-collapsed"
+        onClick={onToggleHidden}
+        title="Show the placeholder duplicate alert"
+      >
+        ⚠ {duplicates.length} placeholder duplicate{duplicates.length > 1 ? 's' : ''} hidden — tap to show
+      </button>
+    );
+  }
+
   return (
     <div className="conflict-banner duplicate-banner">
       <div className="cb-title">
-        ⚠ {duplicates.length} placeholder duplicate{duplicates.length > 1 ? 's' : ''} detected
+        <span>⚠ {duplicates.length} placeholder duplicate{duplicates.length > 1 ? 's' : ''} detected</span>
+        {onToggleHidden && (
+          <button type="button" className="cb-hide-btn" onClick={onToggleHidden} title="Hide this alert until you show it again">
+            Hide
+          </button>
+        )}
       </div>
       <ul>
         {duplicates.map((d, i) => (

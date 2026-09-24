@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import DuplicateAlertBanner from '../DuplicateAlertBanner';
 import DriverLegend from '../DriverLegend';
 import DayBoard from './DayBoard';
+import DayGridView from './DayGridView';
 import MonthBoard from './MonthBoard';
 import OverlappedAlertsTab from './OverlappedAlertsTab';
 import { useDragAutoScroll } from '../../hooks/useDragAutoScroll';
@@ -326,10 +327,6 @@ export default function BoardTab({
   // props instead of local state now.
   includeTransitPrint, setIncludeTransitPrint,
 }) {
-  const title = role === 'crew'
-    ? 'Company truck board — view only'
-    : "Drag a job onto a truck's row (day view) or a date (month view) to assign it";
-
   // Lets the page auto-scroll while dragging a job near the top or bottom of the screen — see
   // useDragAutoScroll's doc comment for why this can't just rely on the browser's native
   // drag-auto-scroll (it silently fails at the top edge here because of the sticky header/nav).
@@ -365,6 +362,25 @@ export default function BoardTab({
   // since it's a personal viewing preference, not shared board state.
   const [hideInTransit, setHideInTransit] = useState(false);
   const transitHiddenCount = boardMode === 'day' ? transitOnlyJobCount(jobs, boardDate) : 0;
+
+  // Placeholder-duplicate alert collapse/expand (added 2026-09-22 at the user's request: "give me a
+  // button to the placeholder alert to hide and display when needed") — same "personal viewing
+  // preference, not shared board state" treatment as hideInTransit right above, so it's a plain
+  // useState too (not written to Firestore/localStorage). Deliberately NOT scoped per-date or reset
+  // when boardMode changes — the banner itself spans every date (see DuplicateAlertBanner.jsx's own
+  // doc comment for why it's computed from the full `jobs` array, not just today's), so a dispatcher
+  // who's already reviewed the current list of duplicates and hides it shouldn't have it pop back
+  // open just from switching dates or tabs. It only resets on an actual page reload.
+  const [hidePlaceholderAlert, setHidePlaceholderAlert] = useState(false);
+
+  // "Grid View" (added 2026-09-24 at the user's request: "make the day view look similar to the
+  // print all trucks button" -> clarified as a compact grid layout switched in ON SCREEN, not a
+  // print variant) — swaps DayBoard for DayGridView below, day mode only. Same "personal viewing
+  // preference, not shared board state" treatment as hideInTransit/hidePlaceholderAlert above:
+  // plain useState, not persisted, not scoped per-date — a dispatcher who turns it on stays in
+  // grid view while flipping through dates until they turn it off again. Not available in month
+  // mode (DayGridView is a day-only layout, same as DayBoard's own timeline).
+  const [showGridView, setShowGridView] = useState(false);
 
   // includeTransitPrint/setIncludeTransitPrint ("Print Board" only — separate from hideInTransit
   // above, which controls the interactive on-screen board) arrive as props from App.jsx now — see
@@ -417,7 +433,12 @@ export default function BoardTab({
   return (
     <section>
       <div className="toolbar">
-        <h2 className="section-title">{title}</h2>
+        {/* The "Drag a job onto a truck's row..." / "Company truck board — view only" heading that
+            used to sit here was removed 2026-09-24 at the user's request ("remove this heading...
+            which is next to the ribbon") — the toolbar below now opens straight with its Day/Month/
+            Overlapped Alerts buttons. `role` is still read elsewhere in this component (DayBoard's
+            own read-only behavior for the crew role, etc.), so nothing else here depended on this
+            heading's role-based text. */}
         <div className="board-controls">
           <div className="view-toggle">
             <button className={`btn secondary ${boardMode === 'day' ? 'active' : ''}`} onClick={() => setBoardMode('day')}>Day</button>
@@ -520,6 +541,13 @@ export default function BoardTab({
               >
                 🖨 Print All Trucks
               </button>
+              <button
+                className={`btn secondary ${showGridView ? 'active' : ''}`}
+                onClick={() => setShowGridView((v) => !v)}
+                title="Switch the board below to a compact grid view, styled after the old scheduler — one dense row per truck, read-only (switch back to move jobs)."
+              >
+                ▦ Grid View
+              </button>
             </div>
           )}
           {boardMode === 'month' && (
@@ -545,7 +573,12 @@ export default function BoardTab({
 
       {boardMode !== 'conflicts' && (
         <>
-          <DuplicateAlertBanner duplicates={placeholderDuplicates || []} trucks={trucks} />
+          <DuplicateAlertBanner
+            duplicates={placeholderDuplicates || []}
+            trucks={trucks}
+            hidden={hidePlaceholderAlert}
+            onToggleHidden={() => setHidePlaceholderAlert((v) => !v)}
+          />
           {/* Day view (2026-09-08, at the user's request): job blocks no longer color-code by
               driver (see JobVisuals.jsx's JobBlock — border-left is now a conflict indicator, and
               the driver's name already prints directly on the block), so this legend's color key
@@ -563,28 +596,39 @@ export default function BoardTab({
               Hiding {transitHiddenCount} long-distance job{transitHiddenCount === 1 ? '' : 's'} in transit today (not the pickup or delivery day).
             </div>
           )}
-          <DayBoard
-            date={boardDate}
-            trucks={trucks}
-            drivers={drivers}
-            jobs={jobs}
-            role={role}
-            conflictIds={conflictIds}
-            conflicts={conflicts}
-            hideInTransit={hideInTransit}
-            onUnassignJob={onUnassignJob}
-            onAddTruckToJob={onAddTruckToJob}
-            onRemoveTruck={onRemoveTruck}
-            onAddExtraTruck={onAddExtraTruck}
-            onSetJobTruckDriver={onSetJobTruckDriver}
-            onSetJobColor={onSetJobColor}
-            onUpdateJobFields={onUpdateJobFields}
-            onClearManualEdit={onClearManualEdit}
-            onCreateJob={onCreateJob}
-            onDeleteJob={onDeleteJob}
-            highlightedJobId={highlightedJobId}
-            timelineRef={timelineRef}
-          />
+          {showGridView ? (
+            <DayGridView
+              date={boardDate}
+              trucks={trucks}
+              drivers={drivers}
+              jobs={jobs}
+              conflicts={conflicts}
+              hideInTransit={hideInTransit}
+            />
+          ) : (
+            <DayBoard
+              date={boardDate}
+              trucks={trucks}
+              drivers={drivers}
+              jobs={jobs}
+              role={role}
+              conflictIds={conflictIds}
+              conflicts={conflicts}
+              hideInTransit={hideInTransit}
+              onUnassignJob={onUnassignJob}
+              onAddTruckToJob={onAddTruckToJob}
+              onRemoveTruck={onRemoveTruck}
+              onAddExtraTruck={onAddExtraTruck}
+              onSetJobTruckDriver={onSetJobTruckDriver}
+              onSetJobColor={onSetJobColor}
+              onUpdateJobFields={onUpdateJobFields}
+              onClearManualEdit={onClearManualEdit}
+              onCreateJob={onCreateJob}
+              onDeleteJob={onDeleteJob}
+              highlightedJobId={highlightedJobId}
+              timelineRef={timelineRef}
+            />
+          )}
           {/* DayPrintSheet/DayPrintTimeline used to render here — moved up to App.jsx 2026-09-11 as
               true top-level siblings of the rest of the app, fixing a persistent blank-2nd-page
               print bug (see App.jsx's .app-shell comment for the full reasoning). printSheet()

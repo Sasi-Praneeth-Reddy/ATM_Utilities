@@ -33,8 +33,12 @@
  *    5 minutes (weekdays, 8 AM-5 PM ET) 2026-08-27, reverted 2026-09-04 to three fixed daily check
  *    times (8:00 AM, 1:00 PM, 4:03 PM ET, every day) — split across two functions since cron can't
  *    express three arbitrary same-cadence times where the minute differs by hour; see the comment
- *    above these two exports below. Reads SmartMoving's dispatch calendar (truck/crew text,
- *    dates/times) via the Google Calendar API.
+ *    above these two exports below. A 12:00 PM ET check was added 2026-09-23 at the user's request
+ *    ("is calendar not syncing at 12:00AM along with the smartmoving insights" — clarified to mean
+ *    noon, matching one of smartInsightsSyncScheduled's two times above, not actual midnight) so the
+ *    calendar sweep runs at the same moment as one of the two Smart Insights checks; the existing
+ *    8:00 AM/1:00 PM/4:03 PM checks are unchanged, this is a fourth addition, not a replacement.
+ *    Reads SmartMoving's dispatch calendar (truck/crew text, dates/times) via the Google Calendar API.
  *
  * Requiring ./server below runs its top-level code exactly once per cold start — including its
  * `if (!process.env.K_SERVICE)` guard, which Cloud Functions gen2 always sets, so it correctly
@@ -253,20 +257,26 @@ async function runCalendarSweep(label) {
 // Reverted 2026-09-04 at the user's explicit request, from 5-minute weekday/business-hours polling
 // back to three fixed daily check times: 8:00 AM, 1:00 PM, and 4:03 PM ET, every day (no weekday
 // restriction this time — the old `1-5` cron is gone). Split into TWO exported functions rather than
-// one, because a single cron expression can't express three arbitrary (hour, minute) pairs where the
-// minute differs by hour — cron's minute and hour fields are independent, so e.g. `0,3 8,13,16 * * *`
-// would actually fire at 8:00, 8:03, 13:00, 13:03, 16:00, AND 16:03 (every minute-value crossed with
-// every hour-value), not just the three times wanted. `0 8,13 * * *` covers the two on-the-hour times
-// (8:00 AM and 1:00 PM); the odd 4:03 PM time needs its own `3 16 * * *` schedule.
+// one, because a single cron expression can't express three (now four) arbitrary (hour, minute)
+// pairs where the minute differs by hour — cron's minute and hour fields are independent, so e.g.
+// `0,3 8,12,13,16 * * *` would actually fire at every minute-value crossed with every hour-value
+// (8:00, 8:03, 12:00, 12:03, 13:00, 13:03, 16:00, AND 16:03), not just the four times wanted.
+// `0 8,12,13 * * *` covers the three on-the-hour times (8:00 AM, 12:00 PM, 1:00 PM); the odd 4:03 PM
+// time needs its own `3 16 * * *` schedule.
+// 12:00 PM ET added 2026-09-23 at the user's request, so the calendar sweep runs alongside one of
+// smartInsightsSyncScheduled's two daily checks (12:00 PM and 4:00 PM ET — see this file's header
+// comment) instead of missing it. 4:00 PM/4:03 PM stays a 3-minute stagger, not aligned — the odd
+// :03 offset exists purely for the cron-expressiveness reason above, not to deliberately avoid
+// overlapping Smart Insights; revisit if the two ever need to line up exactly at 4pm too.
 exports.calendarSweepScheduled = onSchedule(
   {
-    schedule: '0 8,13 * * *', // 8:00 AM and 1:00 PM ET, daily
+    schedule: '0 8,12,13 * * *', // 8:00 AM, 12:00 PM, and 1:00 PM ET, daily
     timeZone: 'America/New_York',
     secrets: ALL_SECRETS,
     region: 'us-central1',
     memory: '512MiB',
   },
-  async () => { await runCalendarSweep('8:00 AM / 1:00 PM'); }
+  async () => { await runCalendarSweep('8:00 AM / 12:00 PM / 1:00 PM'); }
 );
 
 exports.calendarSweepScheduled403pm = onSchedule(
