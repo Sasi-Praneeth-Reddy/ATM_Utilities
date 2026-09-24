@@ -507,13 +507,22 @@ h2.section-title{font-size:15px;margin:0 0 12px;color:var(--heading);}
    .job-edit-overlay/.job-edit-modal shell, widened like .jc-modal above (a job/deleted-by/when
    table needs more than the 340px single-column default). Reached only via Header.jsx's hidden
    5-click logo trigger, admin-only. */
-.deleted-jobs-modal{max-width:640px;}
-.deleted-jobs-table-wrap{overflow-x:auto;}
+.deleted-jobs-modal{max-width:680px;}
+.deleted-jobs-table-wrap{overflow-x:auto;max-height:60vh;overflow-y:auto;}
 .deleted-jobs-table{width:100%;border-collapse:collapse;font-size:12px;}
 .deleted-jobs-table th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);padding:0 8px 6px;border-bottom:1px solid var(--border);}
 .deleted-jobs-table td{padding:7px 8px;border-bottom:1px solid var(--border);color:var(--text);vertical-align:middle;}
 .deleted-jobs-table tr:last-child td{border-bottom:none;}
 .deleted-jobs-table .btn{font-size:11px;padding:4px 9px;}
+.deleted-jobs-table th:first-child,.deleted-jobs-table td:first-child{width:28px;padding-right:0;}
+.deleted-jobs-row-selected{background:var(--tint-orange-bg);}
+/* Search + bulk-delete toolbar (added 2026-09-24, alongside multi-select — see
+   DeletedJobsPanel.jsx's file header for why: a 131-row archive dump makes both a search box and a
+   bulk permanent-delete action necessary rather than nice-to-have). */
+.deleted-jobs-toolbar{display:flex;align-items:center;gap:8px;margin-bottom:10px;}
+.deleted-jobs-search{flex:1;padding:7px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;background:var(--card);color:var(--text);}
+.deleted-jobs-search:focus{outline:none;border-color:var(--orange);}
+.deleted-jobs-toolbar .btn{white-space:nowrap;}
 
 /* Secret click-trigger on Header.jsx's .logo (added 2026-09-24) — purely a hint that it's
    interactive now, without looking like a normal button; cursor is the only visual change so the

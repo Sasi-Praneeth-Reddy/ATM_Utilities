@@ -642,6 +642,16 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
     return state;
   }, [call]);
 
+  /** Permanently removes one archived job (added 2026-09-24, alongside the panel's search/bulk-select
+      UI, right after a 131-job cleanup filled the archive with entries nobody would ever restore).
+      No local jobs-array state to reconcile here — the archive list itself lives in
+      DeletedJobsPanel.jsx's own component state (see fetchDeletedJobs' doc comment for why it isn't
+      hoisted into this hook), so this is just a thin call() wrapper; the panel removes the row
+      itself on success. True hard delete server-side — see db.js's permanentlyDeleteArchivedJob. */
+  const permanentlyDeleteArchivedJob = useCallback(async (jobId) => {
+    await call('DELETE', `/api/deleted-jobs/${jobId}`);
+  }, [call]);
+
   /** Unassigned-tray drop, and the × button on a multi-truck job block. Removing a truck from a
       job also drops whichever driver was assigned to THAT truck on this job — see
       trimTruckDrivers' comment — so a driver isn't left looking "still on" a job they've actually
@@ -842,7 +852,7 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
     updateTruckField, updateDriverField, updateTruckStatus, reorderTrucks,
     deleteTruck, deleteDriver,
     setJobSingleTruck, toggleJobTruck, updateJobField, updateJobFields, clearManualEdit, createJob, deleteJob,
-    fetchDeletedJobs, restoreJob,
+    fetchDeletedJobs, restoreJob, permanentlyDeleteArchivedJob,
     removeTruckFromJob, unassignJob, addTruckToJob, addExtraTruckToJob, moveJobDate,
     setJobTruckDriver, setJobColor,
   };

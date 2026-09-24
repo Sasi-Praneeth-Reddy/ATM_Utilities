@@ -1313,6 +1313,23 @@ async function restoreJob(id) {
   return getState();
 }
 
+/** Permanently removes one archived job from deletedJobsCol — added 2026-09-24 at the user's
+ * request, after a bulk cleanup (131 empty SmartMoving-Insights phantom jobs, see
+ * smartInsightsSync.js's TERMINAL_JOB_STATUSES doc comment for that story) filled the Deleted Jobs
+ * panel with entries nobody will ever want to restore. Unlike restoreJob just above, this is a true
+ * hard delete with no further recovery — no "un-permanently-delete" path exists, by design (a
+ * second archive of an archive would just be the same problem one level down). Only ever touches
+ * deletedJobsCol, never jobsCol — a job has to already be in the archive (i.e. already removed from
+ * the live board via deleteJob) before this can do anything to it. Returns whether a doc actually
+ * existed to delete, same true/false shape as removeLostSmartInsightsJob, so the route can 404 a
+ * stale id (e.g. a double-click, or two admins racing) instead of reporting success for nothing. */
+async function permanentlyDeleteArchivedJob(id) {
+  const doc = await deletedJobsCol.doc(id).get();
+  if (!doc.exists) return false;
+  await deletedJobsCol.doc(id).delete();
+  return true;
+}
+
 /**
  * Records one human-made change to a job into that job's own `history` subcollection (see
  * jobHistoryCol above) — added 2026-09-02 at the user's request ("can we make a log if the job is
@@ -1393,7 +1410,7 @@ module.exports = {
   createTruck, updateTruck, deleteTruck, reorderTrucks,
   findTruckIdBySmartMovingLabel, findDriverIdBySmartMovingLabel,
   createDriver, updateDriver, deleteDriver,
-  createJob, updateJob, deleteJob, listDeletedJobs, restoreJob, setJobTrucks, setJobTruckDriver, setJobColor, upsertSmartMovingJob,
+  createJob, updateJob, deleteJob, listDeletedJobs, restoreJob, permanentlyDeleteArchivedJob, setJobTrucks, setJobTruckDriver, setJobColor, upsertSmartMovingJob,
   upsertSmartInsightsJob, removeLostSmartInsightsJob, findCounterpartJobId, fillAssignmentIfEmpty, mergeCalendarDataOntoExistingJob,
   logJobChange, markJobManuallyEdited, markTruckAssignmentManual, clearJobManualEdit,
   MANUAL_EDIT_LOCK_FIELDS, TRUCK_LOCK_FIELDS,

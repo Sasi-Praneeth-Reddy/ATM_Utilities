@@ -272,6 +272,7 @@ export default function App() {
         onClose={() => setShowDeletedJobs(false)}
         fetchDeletedJobs={data.fetchDeletedJobs}
         onRestore={data.restoreJob}
+        onPermanentlyDelete={data.permanentlyDeleteArchivedJob}
       />
       </div>
       {/* True top-level siblings of .app-shell (not nested inside it, and not nested inside

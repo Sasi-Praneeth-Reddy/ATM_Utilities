@@ -61,7 +61,32 @@ const { parseAllJobsBuffer, opportunityIdFromJobNumber } = require('./smartInsig
 const { mapAllJobsRowToJob } = require('./mapSmartInsightsRow');
 const db = require('./db');
 
-/** Bug fixed 2026-08-31 (reported: job 23996, confirmed real/booked by the user on both SmartMoving
+/** REVERTED 2026-09-24 (reported same day: a search of the board turned up 100+ unassigned
+ * "Quote NNNNN-N" cards — no customer name, no address — scattered from early September all the
+ * way out to April 2027; the user confirmed these are NOT all lost opportunities, they're simply
+ * NOT BOOKED — thin/early SmartMoving records this report happens to include a row for, same as the
+ * lost ones, just for a different underlying reason). The 2026-08-31 change below (kept here for
+ * history) loosened Pass 2 to only exclude a row whose OWN Custom Lead Status explicitly says
+ * dead/cancelled/lost — every other status, including blank, was allowed through to the join. That
+ * let FAR more through than intended: this account's Custom Lead Status column is apparently blank
+ * or non-"Booked" for a large fraction of ALL rows, booked or not, so nearly anything with a
+ * matching opportunity id was becoming a board job regardless of whether it was actually booked.
+ *
+ * Back to the original, stricter rule per the user's explicit request ("I only need jobs that are
+ * booked, which is the old logic"): an All Jobs row must have its OWN Custom Lead Status read
+ * exactly "Booked" before Pass 2 even attempts the opportunity join (see the loop below). Known,
+ * accepted tradeoff — same one the 2026-08-31 change was originally written to avoid — a genuinely
+ * booked job whose Custom Lead Status happens to be blank (see job 23996's story just below) won't
+ * get created until/unless that column is populated. The user was made aware of this tradeoff and
+ * confirmed they'd rather have that than the current flood of not-really-booked cards.
+ *
+ * TERMINAL_JOB_STATUSES itself is still used, narrowly, for its own original purpose: an explicit
+ * dead/cancelled/lost status (on the row OR its matched opportunity — see the loop below) still
+ * actively removes an already-on-the-board job rather than just leaving it stale, since that's an
+ * affirmative "this fell through" signal, not just "not confirmed booked yet."
+ *
+ * --- 2026-08-31 history, kept for context, no longer Pass 2's primary gate ---
+ * Bug fixed 2026-08-31 (reported: job 23996, confirmed real/booked by the user on both SmartMoving
  * reports directly, never appeared on the board): Pass 2 used to require an All Jobs row's OWN
  * Custom Lead Status to read exactly "Booked" before even attempting the opportunity join below —
  * but live data showed that column is frequently blank on real, currently-booked jobs (23996's two
@@ -69,16 +94,7 @@ const db = require('./db');
  * the Booked Opportunities report) — and in this account's real data, blank was in fact the SINGLE
  * LARGEST Custom Lead Status value across the whole report, larger even than "Booked" itself. That
  * exact-match requirement was silently dropping a large fraction of genuinely booked jobs before
- * they ever reached the join step.
- *
- * The Booked Opportunities report is already scoped to booked-only opportunities (that's what makes
- * it useful here at all), so it's the more trustworthy signal — this now only excludes a row whose
- * OWN status explicitly says the row itself isn't going forward (covers the one legitimate case
- * this used to also guard against: one leg of a multi-job move getting individually cancelled while
- * its siblings under the same opportunity stay active). Every other status — including blank —
- * still has to pass the real gate below: mapAllJobsRowToJob returns null without a matching Booked
- * opportunity, so a row with no real booking behind it is excluded exactly as before, just via the
- * join instead of this column. */
+ * they ever reached the join step. */
 const TERMINAL_JOB_STATUSES = new Set(['dead', 'cancelled', 'canceled', 'lost', 'bad lead']);
 
 /**
@@ -192,6 +208,11 @@ async function syncSmartInsights() {
           }
           continue;
         }
+        // The reinstated gate (see TERMINAL_JOB_STATUSES's doc comment above for the 2026-09-24
+        // revert story): not explicitly terminal isn't enough on its own, the row's OWN Custom Lead
+        // Status has to affirmatively read "Booked" — blank, "Quote", or anything else non-terminal
+        // just gets skipped here, same as before 2026-08-31, and never reaches the join at all.
+        if ((row.customLeadStatus || '').trim().toLowerCase() !== 'booked') { skipped++; continue; }
         const job = mapAllJobsRowToJob(row, opportunity);
         if (!job) { skipped++; continue; }
         const { created: wasCreated, skippedManualEdit: wasLocked } = await db.upsertSmartInsightsJob(job);

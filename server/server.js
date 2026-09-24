@@ -97,6 +97,9 @@
  *   GET   /api/deleted-jobs                          [admin]  lists every archived (soft-deleted) job, for the
  *                                                              hidden "Deleted Jobs" panel — see db.js
  *   POST  /api/deleted-jobs/:id/restore               [admin]  restores an archived job back into jobs
+ *   DELETE /api/deleted-jobs/:id                      [admin]  permanently removes one archived job — true hard
+ *                                                              delete, no further recovery, see db.js's
+ *                                                              permanentlyDeleteArchivedJob doc comment
  *   POST  /api/jobs/:id/set-truck-driver             [admin+dispatcher] body: {truckId, driverId} — assigns
  *                                                              (driverId: null clears) the driver for one
  *                                                              truck on this job; truckId must already be
@@ -1497,6 +1500,23 @@ async function handleRequest(req, res) {
       const restoredState = await db.restoreJob(m[1]);
       await db.logJobChange({ jobId: m[1], action: 'restore', actor: currentUser, changes: null });
       sendJson(req, res, 200, restoredState);
+      return;
+    }
+    // Permanently removes one archived job — added 2026-09-24 (right after the 131-job Smart
+    // Insights cleanup filled this panel with entries nobody would ever restore), no route above
+    // this offered a way to actually clear them back out. Same admin-only gate as the rest of this
+    // block. True hard delete, no audit-log entry (unlike DELETE /api/jobs/:id's soft-delete, which
+    // logs to the job's own history subcollection before removing it from jobsCol) — the job's
+    // 'delete' history entry already recorded who/when it was first soft-deleted; permanently
+    // clearing the archive copy afterward isn't a new fact about the job worth a second entry, and
+    // by this point the job doc itself (and its history subcollection) is long gone from jobsCol
+    // anyway, so there'd be nowhere for that entry to live even if it were wanted.
+    m = p.match(/^\/api\/deleted-jobs\/([^/]+)$/);
+    if (m && req.method === 'DELETE') {
+      requireRole(currentUser, ['admin']);
+      const existed = await db.permanentlyDeleteArchivedJob(m[1]);
+      if (!existed) { sendJson(req, res, 404, { error: 'Deleted job not found' }); return; }
+      sendJson(req, res, 200, { ok: true });
       return;
     }
 
