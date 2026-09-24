@@ -53,18 +53,27 @@ function classifyFromRow(row, opportunity) {
  *   booked" gate now, not the row's own status column — the Booked Opportunities report only ever
  *   lists booked opportunities in the first place.
  * @returns {object|null} a job object ready for db.upsertSmartInsightsJob(), or null if the row
- *   can't be mapped: no job number/date to schedule against, or — just as importantly — no
- *   matching opportunity. A job with no matching opportunity is skipped rather than added with a
- *   placeholder customer name, by design: this report has no customer data of its own, and a job
- *   the dispatcher can't identify by customer isn't useful on the board. It'll pick up on a later
- *   sync once/if its opportunity shows up in a Booked Opportunities report — which re-lists every
- *   still-open booked opportunity daily WITHIN THAT REPORT'S OWN SERVICE-DATE WINDOW (confirmed
- *   2026-08-31 to be a rolling window, not literally every booked opportunity regardless of age —
- *   see smartInsightsSync.js's file header).
+ *   can't be mapped: no job number/date to schedule against, no matching opportunity, or — bug
+ *   fixed 2026-09-24, reported same day: a wave of empty "Quote 24231-1"-style unassigned cards
+ *   (no customer name, no address) flooded the board right after that afternoon's automatic sync —
+ *   a matching opportunity whose own Customer Name/Moving From/Moving To are ALL blank in the
+ *   Booked Opportunities report. Before the 2026-08-31 status-filter loosening (see
+ *   smartInsightsSync.js's TERMINAL_JOB_STATUSES comment), most such thin opportunity rows never
+ *   got this far because their All Jobs row's status had to read exactly "Booked" first; loosening
+ *   that filter let them through, and this function's original gate only checked that an opportunity
+ *   was FOUND, never that it actually carried anything to identify the job by. A job with no
+ *   matching (or no usably-identified) opportunity is skipped rather than added with a placeholder
+ *   "Quote <number>" customer name, by design: this report has no customer data of its own, and a
+ *   job the dispatcher can't identify by customer or address isn't useful on the board. It'll pick
+ *   up on a later sync once/if SmartMoving's own opportunity record gets filled in — the Booked
+ *   Opportunities report re-lists every still-open booked opportunity daily WITHIN THAT REPORT'S
+ *   OWN SERVICE-DATE WINDOW (confirmed 2026-08-31 to be a rolling window, not literally every
+ *   booked opportunity regardless of age — see smartInsightsSync.js's file header).
  */
 function mapAllJobsRowToJob(row, opportunity) {
   if (!row.jobNumber || !row.jobDate) return null;
   if (!opportunity) return null;
+  if (!opportunity.customerName && !opportunity.movingFrom && !opportunity.movingTo) return null;
 
   const { type, serviceCategory, serviceCategoryLabel, miles } = classifyFromRow(row, opportunity);
 

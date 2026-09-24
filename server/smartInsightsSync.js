@@ -161,20 +161,37 @@ async function syncSmartInsights() {
       const rows = parseAllJobsBuffer(file.buffer);
       let created = 0, updated = 0, skipped = 0, skippedManualEdit = 0, removedLost = 0;
       for (const row of rows) {
-        if (TERMINAL_JOB_STATUSES.has((row.customLeadStatus || '').trim().toLowerCase())) {
+        const opportunity = opportunitiesById.get(opportunityIdFromJobNumber(row.jobNumber));
+        // Bug fixed 2026-09-24 (reported same day: a wave of empty "Quote 24231-1"-style unassigned
+        // cards flooded the board right after the 4PM sync, most of them confirmed by the user to be
+        // opportunities SmartMoving itself already has marked Lost). This used to only check the All
+        // Jobs row's OWN Custom Lead Status — but that's a per-job-row field, separate from the
+        // Booked Opportunities report's own Status column (opportunity.status, e.g. "Lost"), and a
+        // lost OPPORTUNITY's individual job rows don't necessarily carry a matching Custom Lead
+        // Status themselves (often blank, same root cause as the 2026-08-31 fix above). So a lost
+        // opportunity's job rows were sailing past this check entirely, then past
+        // mapAllJobsRowToJob's opportunity-must-exist gate too (a lost opportunity can still appear,
+        // thinly, in this run's Booked Opportunities data), landing on the board as a job. Now checks
+        // BOTH reports' status columns before deciding a row is terminal.
+        const opportunityTerminal = opportunity
+          && TERMINAL_JOB_STATUSES.has((opportunity.status || '').trim().toLowerCase());
+        if (TERMINAL_JOB_STATUSES.has((row.customLeadStatus || '').trim().toLowerCase()) || opportunityTerminal) {
           skipped++;
-          // The row itself says this job is dead/cancelled/lost — if an earlier, non-terminal sync
-          // already created a board job for it (id is always `SI-<jobNumber>`, same scheme
-          // mapSmartInsightsRow.js builds it under), take it off the board instead of just leaving
-          // it stale forever. See db.js's removeLostSmartInsightsJob for exactly what this does and
-          // doesn't touch (never a job merged onto a different, SmartMoving/calendar-sourced doc).
+          // The row (or its opportunity) says this job is dead/cancelled/lost — if an earlier,
+          // non-terminal sync already created a board job for it (id is always `SI-<jobNumber>`,
+          // same scheme mapSmartInsightsRow.js builds it under), take it off the board instead of
+          // just leaving it stale forever. See db.js's removeLostSmartInsightsJob for exactly what
+          // this does and doesn't touch (never a job merged onto a different, SmartMoving/calendar-
+          // sourced doc).
           if (await db.removeLostSmartInsightsJob(`SI-${row.jobNumber}`)) {
             removedLost++;
-            console.log(`[smartInsightsSync] removed SI-${row.jobNumber} — Custom Lead Status "${row.customLeadStatus}" in the All Jobs report`);
+            const why = opportunityTerminal
+              ? `opportunity Status "${opportunity.status}" in the Booked Opportunities report`
+              : `Custom Lead Status "${row.customLeadStatus}" in the All Jobs report`;
+            console.log(`[smartInsightsSync] removed SI-${row.jobNumber} — ${why}`);
           }
           continue;
         }
-        const opportunity = opportunitiesById.get(opportunityIdFromJobNumber(row.jobNumber));
         const job = mapAllJobsRowToJob(row, opportunity);
         if (!job) { skipped++; continue; }
         const { created: wasCreated, skippedManualEdit: wasLocked } = await db.upsertSmartInsightsJob(job);
