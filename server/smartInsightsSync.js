@@ -83,7 +83,8 @@ const TERMINAL_JOB_STATUSES = new Set(['dead', 'cancelled', 'canceled', 'lost', 
 
 /**
  * @returns {Promise<{opportunitiesFound: number, filesProcessed: number, filesSkipped: number,
- *   jobsCreated: number, jobsUpdated: number, rowsSkipped: number, errors: string[]}>}
+ *   jobsCreated: number, jobsUpdated: number, rowsSkipped: number, jobsRemovedLost: number,
+ *   errors: string[]}>}
  *   `messagesFound` is kept as an alias of (booked opportunity emails + all jobs emails) found,
  *   for the frontend's "no new report emails" check — see useSchedulerData.js's syncSmartInsightsNow.
  */
@@ -106,6 +107,11 @@ async function syncSmartInsights() {
     // jobsUpdated so that count stays accurate (an upsert this sync intentionally left untouched
     // isn't really an "update") — see the `wasCreated`/`wasSkipped` destructure below.
     jobsSkippedManualEdit: 0,
+    // A terminal-status row (see TERMINAL_JOB_STATUSES below) whose job was already on the board
+    // from an earlier, non-terminal sync — removed outright rather than just left stale. Tracked
+    // separately from rowsSkipped so "skipped, nothing to do" and "skipped, AND something was
+    // actively deleted" stay distinguishable in the sync summary.
+    jobsRemovedLost: 0,
     errors: [],
   };
 
@@ -153,9 +159,21 @@ async function syncSmartInsights() {
     }
     try {
       const rows = parseAllJobsBuffer(file.buffer);
-      let created = 0, updated = 0, skipped = 0, skippedManualEdit = 0;
+      let created = 0, updated = 0, skipped = 0, skippedManualEdit = 0, removedLost = 0;
       for (const row of rows) {
-        if (TERMINAL_JOB_STATUSES.has((row.customLeadStatus || '').trim().toLowerCase())) { skipped++; continue; }
+        if (TERMINAL_JOB_STATUSES.has((row.customLeadStatus || '').trim().toLowerCase())) {
+          skipped++;
+          // The row itself says this job is dead/cancelled/lost — if an earlier, non-terminal sync
+          // already created a board job for it (id is always `SI-<jobNumber>`, same scheme
+          // mapSmartInsightsRow.js builds it under), take it off the board instead of just leaving
+          // it stale forever. See db.js's removeLostSmartInsightsJob for exactly what this does and
+          // doesn't touch (never a job merged onto a different, SmartMoving/calendar-sourced doc).
+          if (await db.removeLostSmartInsightsJob(`SI-${row.jobNumber}`)) {
+            removedLost++;
+            console.log(`[smartInsightsSync] removed SI-${row.jobNumber} — Custom Lead Status "${row.customLeadStatus}" in the All Jobs report`);
+          }
+          continue;
+        }
         const opportunity = opportunitiesById.get(opportunityIdFromJobNumber(row.jobNumber));
         const job = mapAllJobsRowToJob(row, opportunity);
         if (!job) { skipped++; continue; }
@@ -172,6 +190,7 @@ async function syncSmartInsights() {
       summary.jobsUpdated += updated;
       summary.rowsSkipped += skipped;
       summary.jobsSkippedManualEdit += skippedManualEdit;
+      summary.jobsRemovedLost += removedLost;
       await markMessageProcessed(file.messageId);
       summary.filesProcessed++;
     } catch (err) {
