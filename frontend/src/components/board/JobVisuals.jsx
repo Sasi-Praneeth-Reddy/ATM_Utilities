@@ -163,13 +163,13 @@ function AddressLine({ job, className }) {
   return <div className={className}>{job.origin || '—'} → {job.destination || '—'}</div>;
 }
 
-/** Chip in the unassigned tray (day view). Clicking the chip (not the delete button, which stops
- * propagation) opens JobEditModal via onEditJob, same click-to-edit affordance JobBlock already has
- * for assigned jobs — this chip is both draggable AND clickable, same combination JobBlock already
- * handles fine. */
-export function JobChip({ job, trucks, conflict, draggable, onDragStart, highlighted, onDeleteJob, onEditJob }) {
+/** Chip in the unassigned tray (day view). Clicking the chip opens JobEditModal via onEditJob, same
+ * click-to-edit affordance JobBlock already has for assigned jobs — this chip is both draggable AND
+ * clickable, same combination JobBlock already handles fine. No delete affordance here anymore —
+ * removed 2026-09-24 at the user's request ("don't show the delete button bars"). Delete now lives
+ * only as the corner button on JobEditModal, so deleting a job means opening it first. */
+export function JobChip({ job, trucks, conflict, draggable, onDragStart, highlighted, onEditJob }) {
   const when = job.type === 'long_distance' ? `Long Distance (${fmtRange(job)})` : (job.startTime ? hourToLabel(timeToHour(job.startTime)) : '');
-  const canDelete = job.source === 'placeholder' && onDeleteJob;
   return (
     <div
       className={`chip ${job.type === 'long_distance' ? 'ld' : ''} ${conflict ? 'conflict' : ''} ${highlighted ? 'highlighted' : ''}`}
@@ -177,13 +177,6 @@ export function JobChip({ job, trucks, conflict, draggable, onDragStart, highlig
       onDragStart={(e) => onDragStart(e, job.id)}
       onClick={onEditJob ? () => onEditJob(job.id) : undefined}
     >
-      {canDelete && (
-        <span
-          className="jb-remove chip-delete"
-          title="Delete this placeholder job"
-          onClick={(e) => { e.stopPropagation(); onDeleteJob(job.id, job.customer); }}
-        >×</span>
-      )}
       <b>{job.customer}{conflict && <span className="conflict-flag">⚠</span>}<SmBadge job={job} /><SiBadge job={job} /><PlaceholderBadge job={job} /><ManualEditBadge job={job} /></b>
       <AddressLine job={job} className="chip-addr" />
       {job.id} · {when} <TruckBadge job={job} />
@@ -240,7 +233,7 @@ export function GroupedJobChip({ jobsInGroup, trucks, conflictIds, draggable, on
  * show a "which job?" chooser instead of opening JobEditModal directly — see JobConflictChooser.jsx.
  * Local jobs can also be resized by dragging the small handle on their right edge, adjusting
  * duration live as you drag (see handleResizeMouseDown). */
-export function JobBlock({ job, date, truckIdCtx, trucks, drivers, jobs, conflict, conflicts, role, draggable, onDragStart, onRemoveTruck, onAddExtraTruck, onSetJobTruckDriver, onEditJob, onResizeJob, onDeleteJob, TIMELINE_START, TIMELINE_END, highlighted, laneIndex = 0, laneCount = 1 }) {
+export function JobBlock({ job, date, truckIdCtx, trucks, drivers, jobs, conflict, conflicts, role, draggable, onDragStart, onRemoveTruck, onAddExtraTruck, onSetJobTruckDriver, onEditJob, onResizeJob, TIMELINE_START, TIMELINE_END, highlighted, laneIndex = 0, laneCount = 1 }) {
   const z = stackZIndex(job);
   // Lane-based vertical position (added 2026-09-15 at the user's request — "instead of placing
   // conflicted jobs on top of each other... make the jobs look like in print board, one below
@@ -304,7 +297,6 @@ export function JobBlock({ job, date, truckIdCtx, trucks, drivers, jobs, conflic
   // addTruckToJob for where that double-assignment is now prevented at the source.
   const showRemove = jobTruckIds(job).length > 1 && truckIdCtx && role !== 'crew';
   const canEdit = role !== 'crew';
-  const canDelete = job.source === 'placeholder' && canEdit && onDeleteJob;
   // Driver assigned to THIS truck on THIS job (see db.js's file header — it's per job/truck now,
   // not a standing field), shown directly on the block instead of only being visible by hovering
   // the +driver picker.
@@ -437,7 +429,7 @@ export function JobBlock({ job, date, truckIdCtx, trucks, drivers, jobs, conflic
     ].filter(Boolean).join('\n');
     return (
       <div
-        className={`job-block ld ${catClass ? `cat-${catClass}` : ''} ${storage ? 'storage' : ''} ${military ? 'military' : ''} ${colorOverrideClass} ${conflict ? 'conflict' : ''} ${highlighted ? 'highlighted' : ''} ${showRemove || canDelete ? 'jb-inset' : ''}`}
+        className={`job-block ld ${catClass ? `cat-${catClass}` : ''} ${storage ? 'storage' : ''} ${military ? 'military' : ''} ${colorOverrideClass} ${conflict ? 'conflict' : ''} ${highlighted ? 'highlighted' : ''} ${showRemove ? 'jb-inset' : ''}`}
         title={tip}
         style={{ ...barStyle, zIndex: z, ...catStyle, ...laneVerticalStyle }}
         draggable={draggable}
@@ -446,9 +438,6 @@ export function JobBlock({ job, date, truckIdCtx, trucks, drivers, jobs, conflic
       >
         {showRemove && (
           <span className="jb-remove" title="Remove from this truck" onClick={(e) => { e.stopPropagation(); onRemoveTruck(job.id, truckIdCtx); }}>×</span>
-        )}
-        {canDelete && (
-          <span className={`jb-delete ${showRemove ? 'jb-delete-offset' : ''}`} title="Delete this placeholder job" onClick={(e) => { e.stopPropagation(); onDeleteJob(job.id, job.customer); }}>🗑</span>
         )}
         <span className="jb-line-wrap">
           <span className="jb-name">{job.customer}{conflict ? ' ⚠' : ''}</span>
@@ -494,7 +483,7 @@ export function JobBlock({ job, date, truckIdCtx, trucks, drivers, jobs, conflic
   ].filter(Boolean).join('\n');
   return (
     <div
-      className={`job-block ${catClass ? `cat-${catClass}` : ''} ${storage ? 'storage' : ''} ${military ? 'military' : ''} ${colorOverrideClass} ${conflict ? 'conflict' : ''} ${resizing ? 'resizing' : ''} ${highlighted ? 'highlighted' : ''} ${showRemove || canDelete ? 'jb-inset' : ''}`}
+      className={`job-block ${catClass ? `cat-${catClass}` : ''} ${storage ? 'storage' : ''} ${military ? 'military' : ''} ${colorOverrideClass} ${conflict ? 'conflict' : ''} ${resizing ? 'resizing' : ''} ${highlighted ? 'highlighted' : ''} ${showRemove ? 'jb-inset' : ''}`}
       title={tip}
       style={{ left: `${left}%`, width: `${width}%`, zIndex: z, ...catStyle, ...laneVerticalStyle }}
       draggable={draggable}
@@ -503,9 +492,6 @@ export function JobBlock({ job, date, truckIdCtx, trucks, drivers, jobs, conflic
     >
       {showRemove && (
         <span className="jb-remove" title="Remove from this truck" onClick={(e) => { e.stopPropagation(); onRemoveTruck(job.id, truckIdCtx); }}>×</span>
-      )}
-      {canDelete && (
-        <span className={`jb-delete ${showRemove ? 'jb-delete-offset' : ''}`} title="Delete this placeholder job" onClick={(e) => { e.stopPropagation(); onDeleteJob(job.id, job.customer); }}>🗑</span>
       )}
       <span className="jb-line-wrap">
         <span className="jb-name">{job.customer}{conflict ? ' ⚠' : ''}</span>

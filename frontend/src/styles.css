@@ -190,19 +190,14 @@ h2.section-title{font-size:15px;margin:0 0 12px;color:var(--heading);}
 .needs-badge.ok{background:var(--tint-green-bg);color:var(--tint-green-text);}
 .needs-badge.over{background:var(--card-alt-2);color:var(--muted);}
 .jb-remove{position:absolute;top:2px;right:2px;width:14px;height:14px;line-height:12px;text-align:center;border-radius:50%;background:rgba(255,255,255,.85);color:var(--red);font-size:11px;font-weight:800;cursor:pointer;border:1px solid var(--red);padding:0;}
-/* Delete affordance for manually-created placeholder jobs only (see PlaceholderBadge). Was sitting
-   at top-LEFT (the opposite corner from .jb-remove) — but that put it directly on top of the
-   customer name's own top-left starting position with no space reserved, visually covering the
-   first character(s) of the name. Moved to the same top-right corner as .jb-remove instead
-   (.job-block.jb-inset — see styles further down — reserves room across the whole block so text
-   never renders under either icon); .jb-delete-offset shifts it further left, beside .jb-remove
-   instead of under it, for the one case both can show at once — a placeholder already assigned to
-   more than one truck. */
-.jb-delete{position:absolute;top:2px;right:2px;width:14px;height:14px;line-height:13px;text-align:center;border-radius:50%;background:rgba(255,255,255,.85);color:var(--red);font-size:9px;cursor:pointer;border:1px solid var(--red);padding:0;}
-.jb-delete-offset{right:18px;}
 .chip{position:relative;}
-.chip-delete{position:absolute;top:4px;right:6px;width:14px;height:14px;line-height:12px;text-align:center;border-radius:50%;background:var(--card);color:var(--red);font-size:11px;font-weight:800;cursor:pointer;border:1px solid var(--red);padding:0;}
-.chip-delete + b{padding-right:16px;}
+/* Per-job delete icons (.jb-delete on a board block, .chip-delete on a tray chip) were removed
+   2026-09-24 at the user's request ("don't show the delete button bars") — delete now lives only
+   as the corner button on JobEditModal (see .job-edit-delete-corner below), reached by opening the
+   job first, rather than as a trash icon sitting on every bar/chip on the board. .jb-delete-offset
+   (used to shift the delete icon beside .jb-remove when both showed on the same block) is gone
+   with it. .chip stays position:relative — .month-chip's own .chip-job-select (further down) still
+   depends on a relative ancestor for its absolute positioning. */
 /* "+ truck" picker — hidden until you hover the job (these blocks are too small to show it at
    rest without covering the text), then pops out above everything so it isn't clipped by the
    month-view chips' overflow:hidden. */
@@ -364,7 +359,7 @@ h2.section-title{font-size:15px;margin:0 0 12px;color:var(--heading);}
    packed onto one row instead of stacked as separate lines) so a job block reads at a glance
    without a tall box. A real flex row now (was block+absolute children only) — everything below
    (badge, name, detail run, conflict tag) lays out left-to-right and only the corner controls
-   (.jb-remove/.jb-delete/.jb-add-truck/.jb-add-driver/.jb-resize-handle) stay position:absolute,
+   (.jb-remove/.jb-add-truck/.jb-add-driver/.jb-resize-handle) stay position:absolute,
    same as before, since a flex row doesn't otherwise give them a natural corner to sit in.
    Flat background color instead of the old light tint + colored border — default is local-job
    blue, long-distance overrides to orange, and conflict overrides either to red (see .ld/.conflict
@@ -475,8 +470,55 @@ h2.section-title{font-size:15px;margin:0 0 12px;color:var(--heading);}
    card up past y:0, i.e. off-screen above/behind the sticky header, with no way to scroll back up
    to it. 32px matches .job-edit-overlay's 16px top+bottom padding, so the card never quite touches
    the viewport edge. */
-.job-edit-modal{background:var(--card);border-radius:var(--radius-md);box-shadow:var(--shadow-md);padding:20px 22px;width:100%;max-width:340px;display:flex;flex-direction:column;gap:12px;max-height:calc(100vh - 32px);overflow-y:auto;}
+.job-edit-modal{position:relative;background:var(--card);border-radius:var(--radius-md);box-shadow:var(--shadow-md);padding:20px 22px;width:100%;max-width:340px;display:flex;flex-direction:column;gap:12px;max-height:calc(100vh - 32px);overflow-y:auto;}
 .job-edit-modal h3{margin:0 0 2px;font-size:14px;color:var(--heading);}
+/* Room for .job-edit-delete-corner (below) so a long title never runs under the icon — only
+   applied when onDelete is actually wired up (JobEditModal.jsx adds this class conditionally). */
+.job-edit-modal h3.job-edit-title-has-delete{padding-right:32px;}
+
+/* Delete button, moved to the card's top-right corner 2026-09-24 (see JobEditModal.jsx's own
+   comment) — position:absolute against .job-edit-modal (now position:relative, above) so it's
+   always in the same spot regardless of title length or the onBack link. Small red circle, same
+   shape the old per-block .jb-delete icon used before it was removed (see the .jb-remove comment
+   above) — just bigger since this one isn't squeezed onto a ~120px-wide job block. This corner
+   button is now the ONLY way to delete a job — see this component's own comment for why. */
+.job-edit-delete-corner{position:absolute;top:14px;right:16px;width:26px;height:26px;line-height:24px;text-align:center;border-radius:50%;background:var(--card);color:var(--red);font-size:13px;cursor:pointer;border:1px solid var(--red);padding:0;}
+.job-edit-delete-corner:hover{background:var(--tint-red-bg);}
+
+/* Two-step delete confirmation (DeleteConfirmModal.jsx, added 2026-09-24) — reuses the shared
+   .job-edit-overlay/.job-edit-modal shell (same pattern JobConflictChooser's .jc-modal already
+   uses) rather than inventing its own backdrop. Step 1 gets a plain amber left-border accent;
+   step 2 (after "Continue") swaps to a red border plus a one-shot shake, matching the confirmed
+   preview mockup's step-2 treatment — visually distinct from every other modal in the app on
+   purpose, since this is the one where a misclick actually removes a job from the board. */
+.delete-confirm-modal{border-left:4px solid #d9a441;}
+.delete-confirm-modal.delete-confirm-step2{border-left-color:#d0453c;animation:delete-confirm-shake .4s ease-in-out;}
+.delete-confirm-modal .delete-confirm-body{margin:0;font-size:13px;color:var(--text);line-height:1.5;}
+.delete-confirm-modal.delete-confirm-step2 h3{color:#d0453c;}
+@keyframes delete-confirm-shake{
+  0%,100%{transform:translateX(0);}
+  20%{transform:translateX(-6px);}
+  40%{transform:translateX(5px);}
+  60%{transform:translateX(-4px);}
+  80%{transform:translateX(3px);}
+}
+
+/* Deleted Jobs archive panel (DeletedJobsPanel.jsx, added 2026-09-24) — reuses the shared
+   .job-edit-overlay/.job-edit-modal shell, widened like .jc-modal above (a job/deleted-by/when
+   table needs more than the 340px single-column default). Reached only via Header.jsx's hidden
+   5-click logo trigger, admin-only. */
+.deleted-jobs-modal{max-width:640px;}
+.deleted-jobs-table-wrap{overflow-x:auto;}
+.deleted-jobs-table{width:100%;border-collapse:collapse;font-size:12px;}
+.deleted-jobs-table th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);padding:0 8px 6px;border-bottom:1px solid var(--border);}
+.deleted-jobs-table td{padding:7px 8px;border-bottom:1px solid var(--border);color:var(--text);vertical-align:middle;}
+.deleted-jobs-table tr:last-child td{border-bottom:none;}
+.deleted-jobs-table .btn{font-size:11px;padding:4px 9px;}
+
+/* Secret click-trigger on Header.jsx's .logo (added 2026-09-24) — purely a hint that it's
+   interactive now, without looking like a normal button; cursor is the only visual change so the
+   trigger stays inconspicuous the way "a very secret place only i should know" asked for. */
+.brand .logo{cursor:pointer;user-select:none;}
 .job-edit-sm-link{font-size:11px;color:var(--blue);font-weight:600;text-decoration:none;align-self:flex-start;margin-top:-6px;}
 .job-edit-sm-link:hover{text-decoration:underline;}
 .job-edit-field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text);font-weight:600;}
@@ -521,9 +563,12 @@ h2.section-title{font-size:15px;margin:0 0 12px;color:var(--heading);}
 /* Manual edit lock notice (added 2026-09-08) — orange like .placeholder-badge/.duplicate-banner's
    amber cousin but distinct from both (SM/SI/placeholder badges and the duplicate banner already
    claim blue/green/amber), signaling "syncs are paused here" without reading as an error the way
-   .job-edit-error's red does. */
-.job-edit-lock-note{font-size:11px;color:var(--tint-orange-text);background:var(--tint-orange-bg);border:1px solid var(--tint-orange-border);border-radius:6px;padding:7px 9px;display:flex;flex-direction:column;gap:6px;align-items:flex-start;}
-.job-edit-resync-btn{font-size:11px;padding:4px 9px;}
+   .job-edit-error's red does. Made compact 2026-09-24 at the user's request — row layout instead of
+   a stacked column (message and Resync button share a line, wrapping only if the card is too
+   narrow), smaller font/line-height/padding, and JobEditModal.jsx now feeds it a shorter sentence
+   plus a trimmed date/time (fmtCompact) instead of the old full "on 9/24/2026, 7:36:56 AM" text. */
+.job-edit-lock-note{font-size:10.5px;line-height:1.4;color:var(--tint-orange-text);background:var(--tint-orange-bg);border:1px solid var(--tint-orange-border);border-radius:6px;padding:5px 8px;display:flex;flex-direction:row;flex-wrap:wrap;gap:4px 8px;align-items:center;}
+.job-edit-resync-btn{font-size:10px;padding:2px 7px;flex:0 0 auto;}
 .job-edit-actions{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:4px;}
 .job-edit-actions-spacer{flex:1;}
 .btn.danger{background:var(--card);color:var(--red);border:1px solid var(--red);}
@@ -898,9 +943,24 @@ select, input[type=text]{padding:6px 8px;border:1px solid var(--border);border-r
      gesture mobile doesn't have; still just a tap-to-open select, not drag-and-drop. */
   .jb-add-truck,.jb-add-driver{display:inline-block;font-size:10px;max-width:64px;padding:2px 3px;}
 
-  /* Delete/remove affordances (14x14px) are hard to hit precisely with a finger — bumped toward the
-     ~40px+ touch-target guideline without them taking over the whole corner of a small job block. */
-  .jb-remove,.jb-delete,.chip-delete{width:20px;height:20px;line-height:18px;font-size:12px;}
+  /* Remove-from-truck (14x14px) is hard to hit precisely with a finger — bumped toward the ~40px+
+     touch-target guideline without it taking over the whole corner of a small job block. Delete is
+     no longer in this list (see the hide rule right below) — only .jb-remove ("Remove from this
+     truck", a different action) still needs a bigger mobile tap target. */
+  .jb-remove{width:20px;height:20px;line-height:18px;font-size:12px;}
+
+  /* Delete is desktop-only (added 2026-09-24 at the user's follow-up request, "don't show this
+     delete functions in mobile view") — hides the one remaining delete entry point below the 720px
+     breakpoint: JobEditModal's corner button (job-edit-delete-corner, tagged job-edit-delete-btn —
+     see that component's own comment). The per-block/chip trash icons this rule used to also target
+     (.jb-delete/.chip-delete) were removed outright shortly after (see JobVisuals.jsx and the
+     .jb-remove comment in styles.css above), so there's nothing left on the board itself to hide —
+     delete now only exists inside the edit modal. DeleteConfirmModal.jsx needs no separate mobile
+     rule since nothing left on a phone can open it. This is about the DELETE action specifically —
+     the hidden Deleted Jobs archive panel (Header.jsx's secret logo trigger, admin-only) stays
+     reachable on mobile, since viewing/restoring an already-deleted job isn't the "delete function"
+     being hidden here. */
+  .job-edit-delete-btn{display:none;}
 
   .chip{min-width:132px;font-size:12px;padding:8px 10px;}
   .chip b{font-size:13px;}

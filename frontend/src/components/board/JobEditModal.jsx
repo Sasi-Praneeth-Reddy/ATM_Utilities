@@ -1,6 +1,18 @@
 import { useEffect, useState } from 'react';
 import { jobTruckIds, driversBusyOnDate, JOB_COLOR_OPTIONS } from '../../utils/jobs';
-import { fmtDateTime } from '../../utils/dates';
+
+/** Compact date+time for the lock notes below (added 2026-09-24, at the user's request to make
+ *  those messages more compact) — drops seconds and uses a 2-digit year ("9/24/26, 7:36 AM")
+ *  instead of utils/dates.js's fmtDateTime, which does a full `toLocaleString()`
+ *  ("9/24/2026, 7:36:56 AM"). Kept local to this file rather than changed in that shared helper,
+ *  which JobVisuals.jsx's ManualEditBadge/TruckLockBadge tooltips and JobAssignmentsTab's row also
+ *  rely on — those weren't part of this request and a hover tooltip has room to be less compact
+ *  than a note printed directly on the card. */
+function fmtCompact(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+}
 
 /** The 5-swatch color picker (added 2026-09-15, "All users to change these colors when clicking on
  *  the job") — shared between the full modal below and its colorOnly (crew) mode, so the two never
@@ -194,10 +206,26 @@ export default function JobEditModal({
   return (
     <div className="job-edit-overlay" onClick={onClose}>
       <form className="job-edit-modal" onClick={(e) => e.stopPropagation()} onSubmit={handleSave}>
+        {/* Moved to the card's top corner 2026-09-24 at the user's request ("make the delete button
+            on the edit job card... in the top corner of it") — was previously a full-width "Delete
+            job" button at the bottom of job-edit-actions, alongside Cancel/Save. Absolutely
+            positioned against .job-edit-modal (now position:relative — see styles.css) so it always
+            sits in the same corner regardless of title length or whether onBack's back-link is
+            showing above it. Still gated on onDelete exactly like before (DayBoard.jsx only passes
+            it when canEdit), and still carries job-edit-delete-btn so styles.css's mobile breakpoint
+            hides it the same way it always has. */}
+        {onDelete && (
+          <button
+            type="button"
+            className="job-edit-delete-corner job-edit-delete-btn"
+            title="Delete job"
+            onClick={onDelete}
+          >🗑</button>
+        )}
         {onBack && (
           <button type="button" className="jc-back-link" onClick={onBack}>‹ Back to which-job list</button>
         )}
-        <h3>Edit {isLd ? 'long-distance move' : 'job'} — {job.customer}</h3>
+        <h3 className={onDelete ? 'job-edit-title-has-delete' : ''}>Edit {isLd ? 'long-distance move' : 'job'} — {job.customer}</h3>
 
         {/* "Open in SmartMoving" — added 2026-08-27 at the user's request. Only the opportunity id
             (a real SmartMoving GUID, confirmed live against the URL SmartMoving's own dashboard
@@ -241,13 +269,16 @@ export default function JobEditModal({
             {/* WHO + WHEN, not just "manually edited" (added at the user's follow-up request, "reduce
                 the confusion") — a dispatcher opening this months later, or a different dispatcher
                 than whoever locked it, needs both to know whether the correction is still current or
-                worth double-checking, not just that a lock exists at all. */}
-            🔒 Manually edited{job.manuallyEditedBy ? ` by ${job.manuallyEditedBy}` : ''}
-            {fmtDateTime(job.manuallyEditedAt) ? ` on ${fmtDateTime(job.manuallyEditedAt)}` : ''} — SmartMoving,
-            calendar, and Smart Insights syncs won't overwrite this job's details until you resync it.
+                worth double-checking, not just that a lock exists at all. Made compact 2026-09-24
+                (shorter sentence, fmtCompact's trimmed date/time, row layout instead of stacked —
+                see this file's header and styles.css's .job-edit-lock-note). */}
+            <span>
+              🔒 Manually edited{job.manuallyEditedBy ? ` by ${job.manuallyEditedBy}` : ''}
+              {fmtCompact(job.manuallyEditedAt) ? ` · ${fmtCompact(job.manuallyEditedAt)}` : ''} — syncs won't overwrite this until resynced.
+            </span>
             {onClearManualEdit && (
-              <button type="button" className="btn secondary job-edit-resync-btn" onClick={onClearManualEdit}>
-                Resync from source
+              <button type="button" className="btn secondary job-edit-resync-btn" title="Resync from source — lets SmartMoving, calendar, and Smart Insights syncs update this job again" onClick={onClearManualEdit}>
+                Resync
               </button>
             )}
           </div>
@@ -264,12 +295,15 @@ export default function JobEditModal({
             needs one click to resume syncing everything. */}
         {job.truckLockedAt && (
           <div className="job-edit-lock-note">
-            🔒 Truck assignment set{job.truckLockedBy ? ` by ${job.truckLockedBy}` : ''}
-            {fmtDateTime(job.truckLockedAt) ? ` on ${fmtDateTime(job.truckLockedAt)}` : ''} — the calendar
-            sync won't change or clear this job's truck/driver until you resync it.
+            {/* Made compact 2026-09-24 alongside the note above — same shorter-sentence/fmtCompact/
+                row-layout treatment. */}
+            <span>
+              🔒🚚 Truck set{job.truckLockedBy ? ` by ${job.truckLockedBy}` : ''}
+              {fmtCompact(job.truckLockedAt) ? ` · ${fmtCompact(job.truckLockedAt)}` : ''} — calendar sync won't change it until resynced.
+            </span>
             {onClearManualEdit && (
-              <button type="button" className="btn secondary job-edit-resync-btn" onClick={onClearManualEdit}>
-                Resync from source
+              <button type="button" className="btn secondary job-edit-resync-btn" title="Resync from source — lets the calendar sync update this job's truck/driver again" onClick={onClearManualEdit}>
+                Resync
               </button>
             )}
           </div>
@@ -397,9 +431,6 @@ export default function JobEditModal({
         {error && <div className="job-edit-error">{error}</div>}
 
         <div className="job-edit-actions">
-          {job.source === 'placeholder' && onDelete && (
-            <button type="button" className="btn danger" onClick={onDelete}>Delete placeholder</button>
-          )}
           <span className="job-edit-actions-spacer" />
           <button type="button" className="btn secondary" onClick={onClose}>Cancel</button>
           <button type="submit" className="btn">Save</button>

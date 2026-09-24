@@ -42,6 +42,18 @@ one-way sync from the SmartMoving CRM.
   browser — every device pointed at the same backend sees the same board, and it stays refreshed
   automatically (polls every 15s). Admin → Trucks & Drivers → **Reset to sample data** clears the
   database back to the original demo state for everyone using it.
+- Job deletion (Admin/Dispatcher, from the job's edit card — the 🗑 icon in its top-right corner):
+  soft-deletes the job rather than removing it permanently. It's archived to its own `deletedJobs`
+  collection with who deleted it and when, and comes off the board immediately, guarded by a
+  two-step confirmation (the second step has a warning tone). There's no delete affordance
+  anywhere else on the board itself — only inside the edit card.
+  Archived jobs aren't shown anywhere in the normal UI — the recovery panel is admin-only and
+  deliberately hidden: click the "ATM" logo in the header **5 times within 2 seconds** to open it,
+  where each entry lists who deleted it and when, with a **Restore** button. (Documenting the
+  trigger here since this repo is private.)
+  One caveat: deleting a real SmartMoving-sourced job doesn't stop a future sync from re-creating
+  it under a new id — no sync path currently checks for a "tombstone." See `server/db.js`'s
+  `deleteJob`/`listDeletedJobs`/`restoreJob` and `server/server.js`'s `/api/deleted-jobs` routes.
 
 ## Getting started
 
@@ -100,6 +112,8 @@ actual dispatch.
       (a personal Gmail account by default — self-service, no tenant admin needed) rather than a
       third-party email service — see `server/README.md` "Login & accounts" for setup. First admin
       account bootstraps from `.env`.
+- [x] Job deletion: soft-delete/archive with a two-step confirm, an audit trail (who/when), and a
+      hidden admin-only recovery panel to restore an archived job
 - [ ] Live test of the sync against a real SmartMoving account
 - [x] Real hosting for the backend and frontend: Firestore (data) + AWS App Runner (backend API
       and the built frontend, served from one container) — see [`server/README.md`](server/README.md)

@@ -422,11 +422,18 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
       const lockNote = result.jobsSkippedManualEdit > 0
         ? ` ${result.jobsSkippedManualEdit} job${result.jobsSkippedManualEdit === 1 ? '' : 's'} left as-is (manually edited — see "Resync from source" on that job).`
         : '';
+      // Added alongside db.js's removeLostSmartInsightsJob — a job that was previously on the board
+      // but whose row is now marked lost/dead/cancelled in the All Jobs report gets removed outright
+      // rather than just left stale, so this surfaces that removal the same way every other sync
+      // outcome here already does, instead of jobs silently disappearing with no note anywhere.
+      const removedNote = result.jobsRemovedLost > 0
+        ? ` ${result.jobsRemovedLost} job${result.jobsRemovedLost === 1 ? '' : 's'} removed (marked lost/cancelled).`
+        : '';
       const message = result.messagesFound === 0
         ? 'No new Smart Insights report emails found.'
         : `Processed ${result.filesProcessed} report${result.filesProcessed === 1 ? '' : 's'}: ` +
           `${result.jobsCreated} job${result.jobsCreated === 1 ? '' : 's'} added, ` +
-          `${result.jobsUpdated} updated.${rowSkipNote}${lockNote}${skipNote}${errNote}`;
+          `${result.jobsUpdated} updated.${removedNote}${rowSkipNote}${lockNote}${skipNote}${errNote}`;
       setSmartInsightsSyncStatus({ loading: false, message, error: null });
     } catch (err) {
       setSmartInsightsSyncStatus({ loading: false, message: '', error: `Smart Insights sync failed: ${err.message}` });
@@ -592,9 +599,13 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
     }
   }, [call]);
 
-  /** Permanently deletes a job — wired up in the UI only for placeholder jobs (source ===
-      'placeholder'; see JobVisuals.jsx/JobEditModal.jsx), not SmartMoving-sourced ones, which
-      would just come back on the next poll sweep anyway. Optimistic like everything else here:
+  /** Deletes a job — offered in the UI for every job since 2026-09-24 (previously wired up only
+      for placeholders, source === 'placeholder'; see JobVisuals.jsx/JobEditModal.jsx for the
+      widened gating). The server now soft-deletes: the job is archived to the deletedJobs
+      collection (who/when) rather than hard-removed, and is restorable from the hidden Deleted
+      Jobs panel — see server/db.js's deleteJob doc comment for the still-standing caveat that a
+      deleted SmartMoving-sourced job can still come back on a future sync, since no
+      tombstone-checking was added to the sync upsert paths. Optimistic like everything else here:
       removes it from local state immediately, and if the DELETE call fails, restores it and
       surfaces an alert rather than leaving the UI showing a job that's still on the server. */
   const deleteJob = useCallback(async (jobId) => {
@@ -607,6 +618,29 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
       throw err;
     }
   }, [jobs, call]);
+
+  /** Deleted-jobs archive (added 2026-09-24), backing the hidden "Deleted Jobs" panel — see
+      Header.jsx's secret click-trigger. Deliberately NOT loaded as part of the normal
+      trucks/drivers/jobs poll: it's fetched on demand only when the panel is actually opened, both
+      because it's admin-only server-side (a non-admin's call would just 403) and because there's no
+      reason to pay for this extra read on every single poll tick when almost nobody ever opens the
+      panel. Returns the array directly (not stored in hook state) — the panel component owns its
+      own loading state, this is just a thin fetch wrapper matching the rest of this file's call()
+      pattern. */
+  const fetchDeletedJobs = useCallback(async () => {
+    return call('GET', '/api/deleted-jobs');
+  }, [call]);
+
+  /** Restores an archived job back into the live jobs list. Not optimistic like deleteJob above —
+      the restored job's full shape comes back from the server (POST .../restore returns the same
+      {trucks, drivers, jobs} state shape as everything else in this file), so it's simplest to just
+      await it and adopt the returned jobs wholesale rather than guess at what the restored doc looks
+      like locally. */
+  const restoreJob = useCallback(async (jobId) => {
+    const state = await call('POST', `/api/deleted-jobs/${jobId}/restore`);
+    if (state && state.jobs) setJobs(state.jobs);
+    return state;
+  }, [call]);
 
   /** Unassigned-tray drop, and the × button on a multi-truck job block. Removing a truck from a
       job also drops whichever driver was assigned to THAT truck on this job — see
@@ -808,6 +842,7 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
     updateTruckField, updateDriverField, updateTruckStatus, reorderTrucks,
     deleteTruck, deleteDriver,
     setJobSingleTruck, toggleJobTruck, updateJobField, updateJobFields, clearManualEdit, createJob, deleteJob,
+    fetchDeletedJobs, restoreJob,
     removeTruckFromJob, unassignJob, addTruckToJob, addExtraTruckToJob, moveJobDate,
     setJobTruckDriver, setJobColor,
   };

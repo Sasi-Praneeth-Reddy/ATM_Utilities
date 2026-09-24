@@ -89,8 +89,14 @@
  *                                                              source(s) — doesn't force an immediate
  *                                                              re-sync, just lifts the block for the
  *                                                              next one.
- *   DELETE /api/jobs/:id                             [admin+dispatcher] permanently removes a job — UI only
- *                                                              offers this for placeholder jobs, see db.js
+ *   DELETE /api/jobs/:id                             [admin+dispatcher] soft-deletes a job — archives it to
+ *                                                              the deletedJobs collection (with who/when) instead
+ *                                                              of a hard delete, offered in the UI for every job
+ *                                                              since 2026-09-24 (was placeholder-only before), see
+ *                                                              db.js's deleteJob doc comment
+ *   GET   /api/deleted-jobs                          [admin]  lists every archived (soft-deleted) job, for the
+ *                                                              hidden "Deleted Jobs" panel — see db.js
+ *   POST  /api/deleted-jobs/:id/restore               [admin]  restores an archived job back into jobs
  *   POST  /api/jobs/:id/set-truck-driver             [admin+dispatcher] body: {truckId, driverId} — assigns
  *                                                              (driverId: null clears) the driver for one
  *                                                              truck on this job; truckId must already be
@@ -1444,8 +1450,11 @@ async function handleRequest(req, res) {
       return;
     }
 
-    // Same role gate as PATCH — the frontend only ever offers this for placeholder jobs (see
-    // db.js's deleteJob doc comment for why), but that's a UI choice, not enforced here.
+    // Same role gate as PATCH. Now offered in the UI for every job, not just placeholders (widened
+    // 2026-09-24 alongside the delete-archive/restore feature — see db.js's deleteJob doc comment
+    // for the full story and its still-standing caveat about real synced jobs). The route itself
+    // never enforced the old placeholder-only restriction anyway — that was always a UI-level
+    // choice, not a data-layer one.
     //
     // Re-matches m against the plain /api/jobs/:id pattern (bug fix, 2026-09-16) — this block used
     // to just reuse whatever `m` the /resync POST handler above had already set, which only ever
@@ -1460,9 +1469,34 @@ async function handleRequest(req, res) {
       const job = await db.getJob(m[1]);
       if (!job) { sendJson(req, res, 404, { error: 'Job not found' }); return; }
       // Audit log BEFORE the delete — there's no "after" doc to read back once it's gone, so the
-      // full job as it existed right before deletion is what gets recorded.
+      // full job as it existed right before deletion is what gets recorded. This is separate from
+      // (and in addition to) the deletedJobs archive doc db.deleteJob itself now writes below —
+      // this one lives at jobs/{id}/history (Firebase-console-only, see logJobChange's own doc
+      // comment), that one powers the actual Deleted Jobs UI/restore.
       await db.logJobChange({ jobId: m[1], action: 'delete', actor: currentUser, changes: { job } });
-      sendJson(req, res, 200, await db.deleteJob(m[1]));
+      sendJson(req, res, 200, await db.deleteJob(m[1], job, currentUser));
+      return;
+    }
+
+    // Deleted-jobs archive (added 2026-09-24) — GET lists every soft-deleted job for the "secret"
+    // Deleted Jobs panel, POST .../restore brings one back. Deliberately admin-only, one notch
+    // tighter than the ['admin','dispatcher'] gate DELETE /api/jobs/:id itself uses — this is the
+    // hidden view of everything anyone with delete access has ever removed, not the delete action
+    // itself, and the user asked for it to be somewhere "only I should know" (see Header.jsx's
+    // hidden logo-click trigger, admin-role-gated the same way on the frontend — this is the
+    // server-side backstop so that restriction holds even if someone guessed the click pattern).
+    m = p.match(/^\/api\/deleted-jobs$/);
+    if (m && req.method === 'GET') {
+      requireRole(currentUser, ['admin']);
+      sendJson(req, res, 200, await db.listDeletedJobs());
+      return;
+    }
+    m = p.match(/^\/api\/deleted-jobs\/([^/]+)\/restore$/);
+    if (m && req.method === 'POST') {
+      requireRole(currentUser, ['admin']);
+      const restoredState = await db.restoreJob(m[1]);
+      await db.logJobChange({ jobId: m[1], action: 'restore', actor: currentUser, changes: null });
+      sendJson(req, res, 200, restoredState);
       return;
     }
 

@@ -5,6 +5,7 @@ import { JobChip, GroupedJobChip, JobBlock } from './JobVisuals';
 import JobEditModal from './JobEditModal';
 import JobConflictChooser from './JobConflictChooser';
 import JobCreateModal from './JobCreateModal';
+import DeleteConfirmModal from './DeleteConfirmModal';
 
 // Full 24-hour day, scrollable — a move (local or long-distance) can still legitimately be dropped
 // or edited to start at any hour, not just a business-hours window. Reverted 2026-08-27 back to
@@ -49,6 +50,10 @@ export default function DayBoard({
   // below) so JobEditModal's "back" link can restore the same chooser instead of losing the cluster.
   const [chooserState, setChooserState] = useState(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  // Holds {jobId, customerName} while DeleteConfirmModal's two-step confirm is open (added
+  // 2026-09-24 — see handleDeleteJob below and DeleteConfirmModal.jsx's own doc comment). null
+  // when no delete is in progress, which is also what hides the modal.
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
   // Owned by BoardTab (see its comment) so it can also be handed to useDragAutoScroll for
   // horizontal auto-scroll during drag — but falls back to a local ref so DayBoard still works
   // standalone (e.g. if ever rendered without a parent that provides one) for its own
@@ -137,13 +142,27 @@ export default function DayBoard({
     return () => { window.removeEventListener('resize', measure); ro.disconnect(); };
   }, []);
 
-  /** Confirm-then-delete, shared by every entry point (tray chip, board block, edit modal) so
-      there's exactly one confirmation prompt and one error-handling path instead of three. Only
-      ever wired up for placeholder jobs — see JobVisuals.jsx/JobEditModal.jsx for where that's
-      gated. */
-  async function handleDeleteJob(jobId, customerName) {
+  /** Opens the two-step DeleteConfirmModal. Widened 2026-09-24 to every job, not just placeholders
+      — see JobVisuals.jsx/JobEditModal.jsx for where the old placeholder-only gating was dropped.
+      Replaced the old single window.confirm() with the two-step modal+sound flow at the same
+      request ("add two allerts while deleting one normal another with sound") — the actual delete
+      now happens in confirmDeleteJob below, only once both of DeleteConfirmModal's steps are
+      cleared. Only ever called from one place now — JobEditModal's corner delete button (see the
+      modal render below) — since the per-block/chip trash icons this used to also serve were
+      removed shortly after (JobVisuals.jsx, "don't show the delete button bars"); kept as its own
+      function anyway rather than inlined, so DayBoard.jsx has one obvious place to look for "what
+      happens when a job gets deleted" regardless of how many entry points call it. */
+  function handleDeleteJob(jobId, customerName) {
     if (!onDeleteJob) return;
-    if (!window.confirm(`Delete "${customerName}"? This can't be undone.`)) return;
+    setDeleteConfirm({ jobId, customerName });
+  }
+
+  /** Wired as DeleteConfirmModal's onConfirm — runs only after both confirm steps. Same
+      try/catch/alert error handling the old inline window.confirm flow had, just moved here. */
+  async function confirmDeleteJob() {
+    if (!deleteConfirm) return;
+    const { jobId } = deleteConfirm;
+    setDeleteConfirm(null);
     try {
       await onDeleteJob(jobId);
       if (editingJobId === jobId) { setEditingJobId(null); setChooserState(null); }
@@ -338,11 +357,13 @@ export default function DayBoard({
           <>
             {/* onEditJob is unconditional here (not gated on canEdit) as of 2026-09-15 — even the
                 crew role, which can't drag/resize/delete a job, can still click it open to set its
-                color (see JobEditModal's colorOnly mode below, wired via colorOnly={!canEdit}); the
-                delete affordance right next to it stays canEdit-gated since crew still can't delete
-                anything. */}
+                color (see JobEditModal's colorOnly mode below, wired via colorOnly={!canEdit}).
+                JobChip no longer takes an onDeleteJob prop at all (removed 2026-09-24, "don't show
+                the delete button bars") — delete now only exists as JobEditModal's corner button,
+                which is itself gated on canEdit via colorOnly (crew never gets onDelete — see the
+                modal render below). */}
             {unassignedSingles.map((j) => (
-              <JobChip key={j.id} job={j} trucks={trucks} conflict={conflictIds.has(j.id)} draggable={draggable} onDragStart={onChipDragStart} highlighted={j.id === highlightedJobId} onDeleteJob={canEdit ? handleDeleteJob : undefined} onEditJob={(jobId) => setEditingJobId(jobId)} />
+              <JobChip key={j.id} job={j} trucks={trucks} conflict={conflictIds.has(j.id)} draggable={draggable} onDragStart={onChipDragStart} highlighted={j.id === highlightedJobId} onEditJob={(jobId) => setEditingJobId(jobId)} />
             ))}
             {unassignedGroups.map((g) => (
               // Never contains placeholder jobs — grouping only happens for jobs that share a
@@ -479,7 +500,6 @@ export default function DayBoard({
                       onSetJobTruckDriver={onSetJobTruckDriver}
                       onEditJob={openJobOrChooser}
                       onResizeJob={canEdit ? (jobId, newDuration) => onUpdateJobFields(jobId, { duration: newDuration }) : undefined}
-                      onDeleteJob={canEdit ? handleDeleteJob : undefined}
                       TIMELINE_START={TIMELINE_START}
                       TIMELINE_END={TIMELINE_END}
                       highlighted={j.id === highlightedJobId}
@@ -536,6 +556,14 @@ export default function DayBoard({
         defaultDate={date}
         onCreate={onCreateJob}
         onClose={() => setShowCreateModal(false)}
+      />
+    )}
+
+    {deleteConfirm && (
+      <DeleteConfirmModal
+        customerName={deleteConfirm.customerName}
+        onCancel={() => setDeleteConfirm(null)}
+        onConfirm={confirmDeleteJob}
       />
     )}
     </>

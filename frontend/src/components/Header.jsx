@@ -1,10 +1,36 @@
+import { useRef } from 'react';
 import JobSearch from './board/JobSearch';
 
-export default function Header({ user, onLogout, role, trucks, jobs, onJumpToJob, crewTruck, onCrewTruckChange, theme, onToggleTheme }) {
+// Click 5 within this window to trip the secret trigger; a slower click just resets the counter
+// with no visible feedback either way — see the logo's onClick below.
+const SECRET_CLICK_COUNT = 5;
+const SECRET_CLICK_WINDOW_MS = 2000;
+
+export default function Header({ user, onLogout, role, trucks, jobs, onJumpToJob, crewTruck, onCrewTruckChange, theme, onToggleTheme, onOpenDeletedJobs }) {
+  // Hidden trigger for the Deleted Jobs archive (added 2026-09-24, at the user's request: "place
+  // this deleted jobs button in a very secret place only i should know it"): clicking the "ATM"
+  // logo 5 times within 2 seconds opens DeletedJobsPanel, admin-only. Deliberately no visible
+  // affordance beyond the cursor change in styles.css (.brand .logo) — a counter/tooltip/badge
+  // would defeat the point of it being secret. Kept as a plain ref (not state) since the click
+  // count itself never needs to trigger a re-render — only the resulting onOpenDeletedJobs() call
+  // does anything visible.
+  const clickTimestampsRef = useRef([]);
+  function handleLogoClick() {
+    if (role !== 'admin' || !onOpenDeletedJobs) return;
+    const now = Date.now();
+    const recent = clickTimestampsRef.current.filter((t) => now - t < SECRET_CLICK_WINDOW_MS);
+    recent.push(now);
+    clickTimestampsRef.current = recent;
+    if (recent.length >= SECRET_CLICK_COUNT) {
+      clickTimestampsRef.current = [];
+      onOpenDeletedJobs();
+    }
+  }
+
   return (
     <header>
       <div className="brand">
-        <div className="logo">ATM</div>
+        <div className="logo" onClick={handleLogoClick}>ATM</div>
         <div>
           <h1>Around Town Movers</h1>
           <span>Scheduler</span>

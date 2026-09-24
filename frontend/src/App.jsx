@@ -10,6 +10,7 @@ import Nav from './components/Nav';
 import BackendBanner from './components/BackendBanner';
 import GmailAuthBanner from './components/GmailAuthBanner';
 import LoginScreen from './components/LoginScreen';
+import DeletedJobsPanel from './components/DeletedJobsPanel';
 import BoardTab from './components/board/BoardTab';
 import DayPrintSheet from './components/board/DayPrintSheet';
 import DayPrintTimeline from './components/board/DayPrintTimeline';
@@ -109,6 +110,13 @@ export default function App() {
   // first appears, not while still on the loading spinner or login screen. Doesn't re-trigger on
   // tab switches (isAuthenticated stays true the whole session) — only a fresh login shows it again.
   const [showRoleHint, setShowRoleHint] = useState(true);
+
+  // Deleted Jobs archive panel (added 2026-09-24) — opened only via Header.jsx's hidden 5-click
+  // logo trigger (admin-only, see that component). Lives up here rather than inside Header itself
+  // so it can sit as a true top-level overlay sibling of everything else, same reasoning as every
+  // other modal in this app (JobEditModal, JobConflictChooser, etc. all render from their nearest
+  // sensible ancestor, not buried inside the element that merely triggers them).
+  const [showDeletedJobs, setShowDeletedJobs] = useState(false);
   useEffect(() => {
     if (!isAuthenticated) return;
     const t = setTimeout(() => setShowRoleHint(false), 3000);
@@ -165,6 +173,7 @@ export default function App() {
         onCrewTruckChange={setCurrentCrewTruck}
         theme={theme}
         onToggleTheme={toggleTheme}
+        onOpenDeletedJobs={role === 'admin' ? () => setShowDeletedJobs(true) : undefined}
       />
       <Nav role={role} activeTab={activeTab} onTabChange={setActiveTab} />
       {/* Board tab (the truck timeline, now a full 24-hour day) needs real width — capping it at
@@ -258,6 +267,12 @@ export default function App() {
           <CrewTab trucks={trucks} drivers={drivers} jobs={jobs} currentCrewTruck={currentCrewTruck} conflictIds={conflictIds} />
         )}
       </main>
+      <DeletedJobsPanel
+        open={showDeletedJobs}
+        onClose={() => setShowDeletedJobs(false)}
+        fetchDeletedJobs={data.fetchDeletedJobs}
+        onRestore={data.restoreJob}
+      />
       </div>
       {/* True top-level siblings of .app-shell (not nested inside it, and not nested inside
           BoardTab.jsx anymore either, as of 2026-09-11 — see .app-shell's own comment above for

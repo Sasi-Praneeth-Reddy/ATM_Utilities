@@ -51,6 +51,11 @@ const { FieldValue } = require('firebase-admin/firestore');
 const trucksCol = fs.collection('trucks');
 const driversCol = fs.collection('drivers');
 const jobsCol = fs.collection('jobs');
+// Soft-delete archive for jobs (added 2026-09-24) — see deleteJob/listDeletedJobs/restoreJob below.
+// A separate top-level collection rather than a `deleted: true` flag left on the jobs doc itself,
+// so every existing query against jobsCol (getState, sync upserts, etc.) never has to remember to
+// filter deleted ones back out.
+const deletedJobsCol = fs.collection('deletedJobs');
 const usersCol = fs.collection('users');
 const allowedExternalEmailsCol = fs.collection('allowedExternalEmails');
 // One-doc-per-key "app settings" collection — currently only holds gmailAuth (below), but kept as
@@ -1055,6 +1060,45 @@ async function upsertSmartInsightsJob(job) {
   return { job: await getJob(job.id), created: true };
 }
 
+/** Removes a Smart Insights-sourced job from Firestore because SmartMoving's own "All Jobs" report
+ * now marks its row as lost/dead/cancelled (see smartInsightsSync.js's TERMINAL_JOB_STATUSES) —
+ * added at the user's request so a move that fell through actually disappears from the board
+ * instead of sitting there stale forever (upsertSmartInsightsJob's normal sync just stops touching
+ * a terminal row, it never used to remove what it had already created).
+ *
+ * `id` is always `SI-<jobNumber>` (mapSmartInsightsRow.js), the SAME id scheme upsertSmartInsightsJob
+ * writes new jobs under — so this only ever looks up a doc at that exact id. It deliberately does
+ * NOT go looking for a "counterpart" the way upsertSmartInsightsJob's findCounterpartJobId does: if
+ * this job's Smart Insights data was instead merged onto an existing SmartMoving/calendar-sourced
+ * job (a different doc, its OWN `SM-...` id), that doc is a real dispatched job from a different,
+ * still-trustworthy source — deleting it just because this one report's row went stale would be far
+ * more destructive than leaving a few now-unused smartInsights* fields on it. The `source` check
+ * below is a second layer of the same guard: even if something else ever re-used an `SI-` id for a
+ * non-Smart-Insights job, this still refuses to touch it.
+ *
+ * Deletes unconditionally, including a job a dispatcher has already manually edited or assigned a
+ * truck to (manuallyEditedAt/truckLockedAt) — unlike every other Smart Insights write path, which
+ * treats those as sacred. That's deliberate here: "manually edited" protects a job's DETAILS from
+ * being silently overwritten by a routine resync, it was never meant to keep a job that isn't
+ * happening anymore parked on the board. Logs loudly (console.log) whenever it overrides a lock, so
+ * that override is at least visible in the Cloud Function logs even though — same as every other
+ * automated sync write — it doesn't go through logJobChange's per-job audit history (see that
+ * function's own doc comment on why automated syncs never call it).
+ *
+ * @returns {Promise<boolean>} true if a job was actually deleted.
+ */
+async function removeLostSmartInsightsJob(id) {
+  const snap = await jobsCol.doc(id).get();
+  if (!snap.exists) return false;
+  const existing = docToJob(snap);
+  if (existing.source !== 'smartmoving-insights') return false; // never touch a merged/other-sourced job
+  if (existing.manuallyEditedAt || existing.truckLockedAt) {
+    console.log(`[smartInsightsSync] removing ${id} despite manual lock (manuallyEditedAt=${existing.manuallyEditedAt || 'no'}, truckLockedAt=${existing.truckLockedAt || 'no'}) — marked lost/cancelled in the All Jobs report`);
+  }
+  await snap.ref.delete();
+  return true;
+}
+
 /* ---------- Users (login accounts) ----------
    Email + password login (see auth.js) with an allowlist-and-invite model: an admin creates a row
    here in advance (via the Users panel or create-admin.js) with just an email and role — that
@@ -1214,8 +1258,58 @@ async function clearJobs() {
     reappear on the next poll sweep anyway since the backend has no way to tell SmartMoving "stop
     syncing this." The route itself doesn't enforce that restriction, so it's a UI-level choice, not
     a data-layer one — see server.js's DELETE /api/jobs/:id. */
-async function deleteJob(id) {
+// Soft-deletes a job: archives it to deletedJobsCol (with who/when) instead of a hard delete, then
+// removes it from jobsCol. Widened 2026-09-24, at the user's request ("add a feature to delete the
+// job... make the deleted store in the deleted jobs... also save who deleted it at what time"), to
+// every job — was hard-delete, placeholder-only before this. Takes the caller's already-read `job`
+// object (avoids a redundant Firestore read — server.js already fetches it to 404-check before
+// calling this) and `deletedBy` (the current user, for the audit trail).
+//
+// Standing caveat, unchanged by this rewrite: deleting a real SmartMoving-sourced job does NOT stop
+// a future sync from re-creating it under a new id — no sync path currently checks for a
+// "tombstone" here. Building that tombstone-awareness into the sync upsert paths was deliberately
+// NOT done in this pass, since it touches sync/job-lifecycle logic this project's own notes flag as
+// sensitive to change without a much closer look.
+async function deleteJob(id, job, deletedBy) {
+  if (job) {
+    const { id: _jobId, ...jobData } = job;
+    await deletedJobsCol.doc(id).set({
+      ...jobData,
+      deletedBy: deletedBy ? { id: deletedBy.id, email: deletedBy.email, role: deletedBy.role } : null,
+      deletedAt: FieldValue.serverTimestamp(),
+    });
+  }
   await jobsCol.doc(id).delete();
+  return getState();
+}
+
+/** Lists every archived (soft-deleted) job, newest first, for the hidden "Deleted Jobs" panel —
+    see Header.jsx's secret click-trigger and DeletedJobsPanel.jsx. deletedAt is normalized to an
+    ISO string here (same pattern docToJob-adjacent helpers elsewhere in this file use) since a raw
+    Firestore Timestamp doesn't serialize usefully straight through sendJson. */
+async function listDeletedJobs() {
+  const snap = await deletedJobsCol.orderBy('deletedAt', 'desc').get();
+  return snap.docs.map((d) => {
+    const data = d.data();
+    return {
+      id: d.id,
+      ...data,
+      deletedAt: data.deletedAt && data.deletedAt.toDate ? data.deletedAt.toDate().toISOString() : data.deletedAt || null,
+    };
+  });
+}
+
+/** Restores an archived job back into jobsCol under its original id, then removes it from the
+    archive. Doesn't try to re-validate the restored job against trucks/drivers that may have
+    changed while it sat deleted (e.g. a truck it references could since be gone) — same "trust the
+    stored shape" approach the rest of this file takes when reading jobs back, not a new gap
+    introduced here. */
+async function restoreJob(id) {
+  const doc = await deletedJobsCol.doc(id).get();
+  if (!doc.exists) { const err = new Error('Deleted job not found'); err.status = 404; throw err; }
+  const { deletedBy, deletedAt, ...jobData } = doc.data();
+  await jobsCol.doc(id).set(jobData);
+  await deletedJobsCol.doc(id).delete();
   return getState();
 }
 
@@ -1299,8 +1393,8 @@ module.exports = {
   createTruck, updateTruck, deleteTruck, reorderTrucks,
   findTruckIdBySmartMovingLabel, findDriverIdBySmartMovingLabel,
   createDriver, updateDriver, deleteDriver,
-  createJob, updateJob, deleteJob, setJobTrucks, setJobTruckDriver, setJobColor, upsertSmartMovingJob,
-  upsertSmartInsightsJob, findCounterpartJobId, fillAssignmentIfEmpty, mergeCalendarDataOntoExistingJob,
+  createJob, updateJob, deleteJob, listDeletedJobs, restoreJob, setJobTrucks, setJobTruckDriver, setJobColor, upsertSmartMovingJob,
+  upsertSmartInsightsJob, removeLostSmartInsightsJob, findCounterpartJobId, fillAssignmentIfEmpty, mergeCalendarDataOntoExistingJob,
   logJobChange, markJobManuallyEdited, markTruckAssignmentManual, clearJobManualEdit,
   MANUAL_EDIT_LOCK_FIELDS, TRUCK_LOCK_FIELDS,
   resetToSampleData, clearJobs,
