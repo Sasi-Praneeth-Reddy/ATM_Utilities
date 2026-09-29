@@ -180,7 +180,15 @@ const { mapIcalEventToJob, parseDescription } = require('./mapIcalEvent');
 const { syncSmartInsights } = require('./smartInsightsSync');
 
 const PORT = process.env.PORT || 8787;
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
+// .trim() guards against a real bug hit 2026-09-29: `firebase functions:secrets:set` reads its
+// value from stdin, and PowerShell appends a trailing newline whenever it pipes a string to a
+// native command (e.g. `Get-Content secret.txt | firebase functions:secrets:set ...`) — even when
+// the source file itself has none. That silently baked a trailing \n/\r\n into the stored secret,
+// so every webhook delivery 401'd (SmartMoving's clean secret could never equal the stored
+// clean-secret-plus-newline) regardless of whether the secret was sent via header or query param.
+// Trimming here makes the comparison tolerant of that either way, on top of setting the secret via
+// `--data-file` instead of stdin going forward (see server/README.md).
+const WEBHOOK_SECRET = (process.env.WEBHOOK_SECRET || '').trim();
 const DEFAULT_STATUSES = [4]; // Booked — jobs that are past quoting and need to be dispatched
 // Default bumped from 15 -> 120 on 2026-08-18 when REST polling went back to being the primary
 // sync path (iCal set aside — see pollIcalFeed's doc comment). 15 minutes is the exact interval
@@ -800,8 +808,11 @@ const RELEVANT_EVENTS = new Set(['job-created', 'opportunity-created', 'opportun
 
 async function handleWebhook(req, res, url) {
   if (WEBHOOK_SECRET) {
-    const headerSecret = req.headers['x-webhook-secret'];
-    const querySecret = url.searchParams.get('secret');
+    // Trimmed for the same reason WEBHOOK_SECRET itself is (see that const's comment) — belt and
+    // suspenders against either side (SmartMoving's own value, or a copy/paste into its webhook
+    // URL) picking up stray leading/trailing whitespace.
+    const headerSecret = (req.headers['x-webhook-secret'] || '').trim();
+    const querySecret = (url.searchParams.get('secret') || '').trim();
     if (headerSecret !== WEBHOOK_SECRET && querySecret !== WEBHOOK_SECRET) {
       recordEvent({ type: 'webhook-rejected', reason: 'bad or missing secret' });
       sendJson(req, res, 401, { error: 'Invalid or missing webhook secret' });
