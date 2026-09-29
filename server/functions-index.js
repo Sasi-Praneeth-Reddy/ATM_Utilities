@@ -299,3 +299,5 @@ exports.calendarSweepScheduled403pm = onSchedule(
   },
   async () => { await runCalendarSweep('4:03 PM'); }
 );
+
+// force-redeploy trigger: 2026-09-29T15:18:31.1195010-04:00
