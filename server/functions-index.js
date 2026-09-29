@@ -11,11 +11,23 @@
  * keep a timer alive" hack needed, unlike the AWS deployment's --min-instances requirement.
  *
  *  - `api` — the actual HTTP backend (all REST routes + the SmartMoving webhook receiver).
- *  - `pollSweepScheduled` — DISABLED (not exported) as of 2026-08-27 — the SmartMoving REST API
- *    account's call quota was exhausted again, so this is paused at the user's request until that's
- *    resolved. Was the PRIMARY SmartMoving sync path (see server.js's pollSweep/hydrateOpportunity
- *    doc comments and mapJobs.js's BOOKED_STATUSES) whenever it's on. See its own comment below for
- *    the full history and — importantly — what being off means for `smartMovingOpportunityId`.
+ *  - `pollSweepScheduled` — RE-ENABLED 2026-09-29, now as a once-daily BACKSTOP rather than the
+ *    primary sync path — see the 2026-09-29 SmartMoving webhook rollout below. Was disabled
+ *    2026-08-27 after exhausting the Basic tier's 20,000-calls/month quota running every 2 hours;
+ *    the account is now on Premium tier (125,000 calls/month, and Premium is also what makes real
+ *    webhooks possible at all), so a light once-a-day reconciliation run is no longer a quota risk.
+ *    See its own comment below for the full history.
+ *  - SmartMoving webhooks (2026-09-29): the `api` function below already has a webhook receiver at
+ *    POST /webhooks/smartmoving (see server.js's handleWebhook) — this was built earlier but never
+ *    reachable from SmartMoving's side until Premium unlocked webhook delivery. This is now the
+ *    PRIMARY SmartMoving sync trigger: `opportunity-status-changed` fires the instant a job is
+ *    Booked, hydrating just that one opportunity via the same hydrateOpportunity() pollSweep uses —
+ *    no polling needed for the common case. pollSweepScheduled above exists only to catch whatever a
+ *    webhook delivery might miss (endpoint briefly down, a `job-created` event with no opportunity id
+ *    to hydrate from — see handleWebhook's RELEVANT_EVENTS comment). Rolled out deliberately
+ *    side-by-side with smartInsightsSyncScheduled below, not as a replacement for it yet — the plan
+ *    is to compare the two for a trial period before retiring the Smart Insights Gmail pipeline (see
+ *    that function's own comment for why it still exists).
  *  - `icalSweepScheduled` — DISABLED (not exported) as of 2026-08-18. Briefly held the primary role
  *    (see server/icalClient.js's header for why it existed — the REST API's monthly quota got
  *    burned through by the old 15-minute pollSweepScheduled) but is set aside for now, not deleted,
@@ -110,28 +122,23 @@ exports.api = onRequest(
   }
 );
 
-// DISABLED 2026-08-27 at the user's explicit request — the SmartMoving REST API account's call
-// quota had been exhausted (Basic tier: 20,000 calls/month — see the "History" note kept below for
-// the full back-story of this same limit), so the REST poll is paused until that's sorted out
-// (quota reset, plan upgrade, or the account issue that caused it gets resolved). Not exported, so
-// Cloud Scheduler won't invoke it — same disabled-but-not-deleted pattern as icalSweepScheduled
-// below. IMPORTANT CONSEQUENCE: with this off, `smartMovingOpportunityId` (the real SmartMoving
-// GUID — see mapJobs.js's `lead.id`) is no longer being set or backfilled onto ANY job, since
-// neither the calendar sync nor the Smart Insights report sync ever has a real opportunity id to
-// give (see db.js's preserveSmartMovingIdentity and mapSmartInsightsRow.js). That means
-// JobEditModal.jsx's "Open in SmartMoving" link (added the same day as this change, before this was
-// known to be off) won't appear on any job until this is reactivated — it's dormant, not broken;
-// nothing needs undoing there once the API access comes back. To reactivate: change
-// `const pollSweepScheduled` back to `exports.pollSweepScheduled` below.
-const pollSweepScheduled = onSchedule(
+// RE-ENABLED 2026-09-29 — see this file's header comment ("SmartMoving webhooks (2026-09-29)") for
+// the full rollout story. History: 'every 15 minutes' originally, which burned through the account's
+// 20,000-calls/month Basic-tier quota in about two days mid team test (2026-08-18) — briefly
+// replaced by the free iCal feed as primary (icalSweepScheduled below) that same day, then
+// 'every 24 hours' while just a backstop, then 'every 2 hours' once pollSweep() started filtering to
+// booked-only opportunities — until the quota got exhausted again on 2026-08-27, which disabled this
+// entirely until today. Now that SmartMoving webhooks (Premium-only, just enabled) handle the
+// real-time case, this only needs to run as an occasional reconciliation backstop — once a day is
+// plenty, and the account's now on Premium's 125,000-calls/month quota besides. IMPORTANT: this being
+// back on means `smartMovingOpportunityId` (the real SmartMoving GUID — see mapJobs.js's `lead.id`)
+// is being set/backfilled again, so JobEditModal.jsx's "Open in SmartMoving" link will start
+// reappearing on jobs this touches — expected, not a bug. To disable again: change
+// `exports.pollSweepScheduled` back to `const pollSweepScheduled` + `void pollSweepScheduled;`.
+exports.pollSweepScheduled = onSchedule(
   {
-    // History: 'every 15 minutes' originally, which burned through the account's 20,000-calls/month
-    // Basic-tier quota in about two days mid team test (2026-08-18) — briefly replaced by the free
-    // iCal feed as primary (icalSweepScheduled below) that same day, then 'every 24 hours' while
-    // this was just a backstop. Was back to being primary (every 2 hours) once pollSweep() itself
-    // started filtering to booked-only opportunities (see server.js/mapJobs.js) to cut call volume —
-    // until the quota got exhausted again (see the DISABLED note above), which is the current state.
-    schedule: 'every 2 hours',
+    schedule: '0 6 * * *', // 6:00 AM ET daily — well before the business day, light backstop only
+    timeZone: 'America/New_York',
     secrets: ALL_SECRETS,
     region: 'us-central1',
     memory: '512MiB',
@@ -143,11 +150,14 @@ const pollSweepScheduled = onSchedule(
     });
   }
 );
-void pollSweepScheduled; // keep the linter quiet about the intentionally-unexported binding
 
 exports.smartInsightsSyncScheduled = onSchedule(
   {
-    // Reverted 2026-09-04 at the user's explicit request, back to two fixed daily checks instead of
+    // Deliberately left running as-is alongside the 2026-09-29 SmartMoving webhook rollout (see this
+    // file's header comment) — this pipeline costs nothing in SmartMoving API terms (it only reads
+    // Gmail), so keeping it live during the webhook trial period is a free safety net, not waste.
+    // Plan is to compare the two for a while and retire this once webhooks are proven reliable — not
+    // yet. Reverted 2026-09-04 at the user's explicit request, back to two fixed daily checks instead of
     // the 5-minute polling window this had been tightened to on 2026-08-27. Reason given: the actual
     // SmartMoving/Sigma report emails only ever go out at two fixed times — 11:51 AM and 3:51 PM
     // ET — so checking every 5 minutes all day was mostly wasted runs finding nothing; a single check
