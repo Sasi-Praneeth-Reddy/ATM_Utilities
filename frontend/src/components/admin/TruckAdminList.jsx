@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePagedSearch, ListSearch, SimplePager } from './ListControls';
 import { deriveTruckStatus, statusClass, statusLabel } from '../../utils/jobs';
 import { todayStr } from '../../utils/dates';
@@ -155,13 +155,18 @@ function truckMatches(t, q) {
 export default function TruckAdminList({ trucks, jobs, showAddForm, onSaveNewTruck, onCancelAddTruck, onUpdateField, onUpdateStatus, onDeleteTruck }) {
   const matchFn = useCallback(truckMatches, []);
   const paged = usePagedSearch(trucks, matchFn, 10);
+  // The cards scroll inside their own box (2026-09-30) instead of the whole page — jump back to the
+  // top of that box whenever the page or search changes.
+  const scrollRef = useRef(null);
+  useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = 0; }, [paged.page, paged.query, showAddForm]);
 
   return (
     <div>
-      {showAddForm && <AddTruckForm onSave={onSaveNewTruck} onCancel={onCancelAddTruck} truckCount={trucks.length} />}
       <ListSearch value={paged.query} onChange={paged.setQuery} placeholder="Search trucks (name, label, home base)…" />
       <SimplePager paged={paged} noun="trucks" />
       {paged.query.trim() && !paged.filtered.length && <div className="empty">No trucks match "{paged.query}".</div>}
+      <div className="admin-scroll" ref={scrollRef}>
+        {showAddForm && <AddTruckForm onSave={onSaveNewTruck} onCancel={onCancelAddTruck} truckCount={trucks.length} />}
       {paged.pageItems.map((t) => (
         <TruckCard
           key={t.id}
@@ -173,7 +178,7 @@ export default function TruckAdminList({ trucks, jobs, showAddForm, onSaveNewTru
           drag={null}
         />
       ))}
-      {paged.pageItems.length > 3 && <SimplePager paged={paged} noun="trucks" />}
+      </div>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePagedSearch, ListSearch, SimplePager } from './ListControls';
 import { driverColor } from '../../utils/jobs';
 
@@ -86,13 +86,18 @@ function driverMatches(d, q) {
 export default function DriverAdminList({ drivers, showAddForm, onSaveNewDriver, onCancelAddDriver, onUpdateField, onDeleteDriver }) {
   const matchFn = useCallback(driverMatches, []);
   const paged = usePagedSearch(drivers, matchFn, 10);
+  // The cards scroll inside their own box (2026-09-30) instead of the whole page — jump back to the
+  // top of that box whenever the page or search changes.
+  const scrollRef = useRef(null);
+  useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = 0; }, [paged.page, paged.query, showAddForm]);
 
   return (
     <div>
-      {showAddForm && <AddDriverForm onSave={onSaveNewDriver} onCancel={onCancelAddDriver} />}
       <ListSearch value={paged.query} onChange={paged.setQuery} placeholder="Search drivers (name, phone, label)…" />
       <SimplePager paged={paged} noun="drivers" />
       {paged.query.trim() && !paged.filtered.length && <div className="empty">No drivers match "{paged.query}".</div>}
+      <div className="admin-scroll" ref={scrollRef}>
+        {showAddForm && <AddDriverForm onSave={onSaveNewDriver} onCancel={onCancelAddDriver} />}
       {paged.pageItems.map((d) => (
         <DriverCard
           key={d.id}
@@ -102,7 +107,7 @@ export default function DriverAdminList({ drivers, showAddForm, onSaveNewDriver,
           onDeleteDriver={onDeleteDriver}
         />
       ))}
-      {paged.pageItems.length > 3 && <SimplePager paged={paged} noun="drivers" />}
+      </div>
     </div>
   );
 }
