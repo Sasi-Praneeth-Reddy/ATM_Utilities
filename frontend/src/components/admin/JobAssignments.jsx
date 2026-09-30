@@ -84,8 +84,12 @@ function TruckDriverPicker({ job, truck, drivers, jobs, onSetJobTruckDriver }) {
   );
 }
 
-export default function JobAssignments({ trucks, drivers, jobs, conflictIds, onSetJobSingleTruck, onToggleJobTruck, onUpdateJobField, onAddExtraTruck, onSetJobTruckDriver }) {
-  const sorted = [...jobs].sort((a, b) => a.date.localeCompare(b.date));
+/* `jobs` is the rows to render (already sorted + paged by JobAssignmentsTab since 2026-09-30);
+ * `allJobs` is the full job list, used for the driver-availability check so a driver busy on a job
+ * that's on another page / filtered out by search is still correctly hidden. */
+export default function JobAssignments({ trucks, drivers, jobs, allJobs, conflictIds, onSetJobSingleTruck, onToggleJobTruck, onUpdateJobField, onAddExtraTruck, onSetJobTruckDriver }) {
+  const sorted = jobs;
+  const busyJobs = allJobs || jobs;
 
   return (
     <div>
@@ -144,7 +148,7 @@ export default function JobAssignments({ trucks, drivers, jobs, conflictIds, onS
                   {ts.length > 0 && (
                     <div className="truck-driver-list">
                       {ts.map((t) => (
-                        <TruckDriverPicker key={t.id} job={j} truck={t} drivers={drivers} jobs={jobs} onSetJobTruckDriver={onSetJobTruckDriver} />
+                        <TruckDriverPicker key={t.id} job={j} truck={t} drivers={drivers} jobs={busyJobs} onSetJobTruckDriver={onSetJobTruckDriver} />
                       ))}
                     </div>
                   )}
@@ -157,7 +161,7 @@ export default function JobAssignments({ trucks, drivers, jobs, conflictIds, onS
                   </select>
                   {ts.length > 0 && (
                     <div className="truck-driver-list">
-                      <TruckDriverPicker job={j} truck={ts[0]} drivers={drivers} jobs={jobs} onSetJobTruckDriver={onSetJobTruckDriver} />
+                      <TruckDriverPicker job={j} truck={ts[0]} drivers={drivers} jobs={busyJobs} onSetJobTruckDriver={onSetJobTruckDriver} />
                     </div>
                   )}
                   {jobTruckIds(j).length > 0 && (() => {

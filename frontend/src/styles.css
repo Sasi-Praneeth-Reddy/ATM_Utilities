@@ -1334,3 +1334,16 @@ col.pt-col-truck{width:calc(150px * var(--pt-scale, 1));}
   background:var(--red);box-shadow:0 0 0 2px var(--navy2);animation:nav-dot-pulse 2s ease-in-out infinite;}
 @keyframes nav-dot-pulse{0%,100%{transform:scale(1);opacity:1;}50%{transform:scale(1.25);opacity:.75;}}
 @media (prefers-reduced-motion: reduce){.nav-alert-dot{animation:none;}}
+
+/* Inline (in-tab) loading animation + Job Assignments pagination (added 2026-09-30) */
+.loading-screen--inline{min-height:320px;background:transparent;}
+.pager{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin:10px 0;font-size:13px;color:var(--muted);}
+.pager-controls{display:flex;align-items:center;flex-wrap:wrap;gap:6px;}
+.pager-controls .btn{padding:5px 10px;}
+.pager-controls .btn:disabled{opacity:.4;cursor:not-allowed;}
+.pager-page{padding:0 6px;color:var(--text);font-weight:600;}
+.pager-size{margin-left:8px;display:flex;align-items:center;gap:6px;}
+.pager-size select{padding:4px 6px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text);}
+.pager-body{position:relative;}
+.pager-body.is-pending > :not(.pager-overlay){opacity:.35;pointer-events:none;}
+.pager-overlay{position:absolute;inset:0;display:flex;align-items:flex-start;justify-content:center;padding-top:40px;background:transparent;}

@@ -5,9 +5,11 @@
  * response arrived). A moving truck on a scrolling road, in the app's navy/orange brand colours.
  * Pure CSS (see .loading-screen in styles.css); respects prefers-reduced-motion.
  */
-export default function LoadingScreen({ message = 'Loading the scheduler' }) {
+/* `inline` (2026-09-30): transparent background, sized to a section instead of the full viewport —
+ * used inside a tab (e.g. Job Assignments) while its content is getting ready. */
+export default function LoadingScreen({ message = 'Loading the scheduler', inline = false }) {
   return (
-    <div className="loading-screen" role="status" aria-live="polite">
+    <div className={`loading-screen${inline ? ' loading-screen--inline' : ''}`} role="status" aria-live="polite">
       <div className="loading-scene" aria-hidden="true">
         <svg className="loading-truck" viewBox="0 0 120 64" width="120" height="64">
           {/* cargo box */}
