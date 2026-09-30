@@ -52,6 +52,9 @@ export default function JobAssignmentsTab({
   // once SmartMoving had synced a few hundred jobs. `page` is 1-based; null = "not chosen yet",
   // which resolves to the page containing today's jobs rather than the oldest ones.
   const [pageSize, setPageSize] = useState(50);
+  // Sort (2026-09-30, replaced the "Today" button): by date or customer name, asc/desc.
+  const [sortBy, setSortBy] = useState('date'); // 'date' | 'name'
+  const [sortDir, setSortDir] = useState('asc'); // 'asc' | 'desc'
   const [page, setPage] = useState(null);
   // Truck loading animation while the tab first renders / while switching pages.
   const [ready, setReady] = useState(false);
@@ -64,15 +67,25 @@ export default function JobAssignmentsTab({
   const filteredJobs = useMemo(() => {
     const q = query.trim().toLowerCase();
     const list = q ? jobs.filter((j) => matchesQuery(j, trucks, drivers, q)) : jobs;
-    return [...list].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-  }, [jobs, trucks, drivers, query]);
+    const dir = sortDir === 'desc' ? -1 : 1;
+    const byDate = (a, b) => (a.date || '').localeCompare(b.date || '');
+    const byName = (a, b) => (a.customer || '').localeCompare(b.customer || '', undefined, { sensitivity: 'base' });
+    // Ties broken by the other key (always ascending) so the order is stable and predictable.
+    const cmp = sortBy === 'name'
+      ? (a, b) => dir * byName(a, b) || byDate(a, b)
+      : (a, b) => dir * byDate(a, b) || byName(a, b);
+    return [...list].sort(cmp);
+  }, [jobs, trucks, drivers, query, sortBy, sortDir]);
 
   const totalPages = Math.max(1, Math.ceil(filteredJobs.length / pageSize));
+  // Default view (date ascending, no search) still opens on the page with today's jobs rather than
+  // the oldest ones; any other sort starts at page 1.
   const todayPage = useMemo(() => {
+    if (sortBy !== 'date' || sortDir !== 'asc') return 1;
     const today = todayStr();
     const idx = filteredJobs.findIndex((j) => (j.endDate || j.date || '') >= today);
     return idx === -1 ? totalPages : Math.floor(idx / pageSize) + 1;
-  }, [filteredJobs, pageSize, totalPages]);
+  }, [filteredJobs, pageSize, totalPages, sortBy, sortDir]);
   const currentPage = Math.min(Math.max(page ?? todayPage, 1), totalPages);
   const pageJobs = filteredJobs.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   const firstShown = filteredJobs.length ? (currentPage - 1) * pageSize + 1 : 0;
@@ -81,6 +94,8 @@ export default function JobAssignmentsTab({
   const goToPage = (n) => startTransition(() => setPage(Math.min(Math.max(n, 1), totalPages)));
   const onQueryChange = (value) => { setQuery(value); setPage(value.trim() ? 1 : null); };
   const onPageSizeChange = (size) => startTransition(() => { setPageSize(size); setPage(null); });
+  const onSortByChange = (value) => startTransition(() => { setSortBy(value); setPage(query.trim() ? 1 : null); });
+  const onToggleSortDir = () => startTransition(() => { setSortDir((d) => (d === 'asc' ? 'desc' : 'asc')); setPage(query.trim() ? 1 : null); });
 
   const pager = (
     <div className="pager">
@@ -93,9 +108,20 @@ export default function JobAssignmentsTab({
         <span className="pager-page">Page {currentPage} of {totalPages}</span>
         <button className="btn secondary" onClick={() => goToPage(currentPage + 1)} disabled={currentPage >= totalPages}>Next ›</button>
         <button className="btn secondary" onClick={() => goToPage(totalPages)} disabled={currentPage >= totalPages} title="Last page">»</button>
-        {!query.trim() && (
-          <button className="btn secondary" onClick={() => goToPage(todayPage)} disabled={currentPage === todayPage} title="Jump to the page with today's jobs">Today</button>
-        )}
+        <label className="pager-size">
+          Sort by{' '}
+          <select value={sortBy} onChange={(e) => onSortByChange(e.target.value)}>
+            <option value="date">Date</option>
+            <option value="name">Name</option>
+          </select>
+        </label>
+        <button
+          className="btn secondary"
+          onClick={onToggleSortDir}
+          title={sortDir === 'asc' ? 'Ascending — click for descending' : 'Descending — click for ascending'}
+        >
+          {sortBy === 'name' ? (sortDir === 'asc' ? 'A → Z ↑' : 'Z → A ↓') : (sortDir === 'asc' ? 'Oldest first ↑' : 'Newest first ↓')}
+        </button>
         <label className="pager-size">
           Per page{' '}
           <select value={pageSize} onChange={(e) => onPageSizeChange(Number(e.target.value))}>
