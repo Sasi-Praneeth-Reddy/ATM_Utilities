@@ -35,9 +35,20 @@ function matchesQuery(job, q) {
  * after the 2026-08-31 branch-filter removal (server.js), since more jobs now get calendar-merged
  * than before. Fix: check smartInsightsQuoteNumber first regardless of source — it's set once and
  * never overwritten, so it stays valid and meaningful even after a job's source label changes. */
+// Fixed 2026-09-30 (reported: REST/webhook-synced jobs showed a long GUID like
+// "#53ef2ff6-b8e6-…" instead of the job number): for jobs from the REST poll / webhooks,
+// smartMovingJobId and smartMovingOpportunityId are SmartMoving's internal GUIDs, never the number
+// dispatchers use. The real job number ("24508-1") is embedded in the board id instead —
+// mapOpportunity.js/mapJobs.js build it as `SM-<jobNumber>` (Smart Insights: `SI-<jobNumber>`).
+// So: quote number first, then the number parsed from the board id, then a smartMovingJobId only
+// if it's NOT a GUID / iCal UID. Never show a GUID.
+const LOOKS_LIKE_GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function jobIdNumber(job) {
   if (job.smartInsightsQuoteNumber) return job.smartInsightsQuoteNumber;
-  if (job.source === 'smartmoving') return job.smartMovingJobId || job.smartMovingOpportunityId || null;
+  const fromId = String(job.id || '').match(/^(?:SM|SI)-(\d+(?:-\d+)?)$/);
+  if (fromId) return fromId[1];
+  const smId = job.smartMovingJobId;
+  if (smId && !LOOKS_LIKE_GUID.test(smId) && /^\d+(-\d+)?$/.test(smId)) return smId;
   return null;
 }
 
