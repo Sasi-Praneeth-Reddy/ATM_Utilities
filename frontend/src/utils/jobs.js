@@ -653,6 +653,64 @@ export function stackZIndex(j) {
 
 /** Lane assignment for month-view multi-day LD bars — shorter jobs claim the topmost lane first,
     same "less time on top" rule as the day view. Mutates each event with `_dur` and `lane`. */
+/**
+ * Month-view ordering helpers (added 2026-09-30, user request — the month view / Long Distance
+ * Planner looked "clumsy" with shortest bars on top):
+ *  - multi-day jobs first, LONGEST span on top, then shorter ones in descending order;
+ *  - then single-day jobs by start time ascending; jobs with no start time go to the bottom.
+ * `timeSortKey` returns a sortable string, with '~' (sorts after any "HH:MM") for no time.
+ */
+export function timeSortKey(job) {
+  const t = job && job.startTime;
+  return t && /^\d{1,2}:\d{2}/.test(t) ? t.padStart(5, '0') : '~';
+}
+
+export function compareByStartTime(a, b) {
+  const ka = timeSortKey(a), kb = timeSortKey(b);
+  if (ka !== kb) return ka < kb ? -1 : 1;
+  return (a.customer || '').localeCompare(b.customer || '');
+}
+
+function spanDays(job) {
+  return daysBetweenIso(job.date, job.endDate || job.date) + 1;
+}
+function daysBetweenIso(a, b) {
+  if (!a || !b) return 0;
+  return Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86400000);
+}
+
+/** Lane assignment for the month view's spanning bars in the order described above. Unlike
+ * assignLanes (which assumes start-sorted input), this tracks per-lane occupied columns, so a
+ * bar goes in the highest lane that's free across ALL of its columns — longer bars claim the top
+ * lanes first, and each day's bars read top-to-bottom as longest → shortest → by time → no time. */
+export function assignLanesLongestFirst(events) {
+  const multi = events.filter((ev) => spanDays(ev.job) > 1)
+    .sort((a, b) => spanDays(b.job) - spanDays(a.job) || (a.job.date || '').localeCompare(b.job.date || '') || compareByStartTime(a.job, b.job));
+  const single = events.filter((ev) => spanDays(ev.job) <= 1).sort((a, b) => compareByStartTime(a.job, b.job));
+  const ordered = [...multi, ...single];
+  const lanes = []; // lanes[i] = Set of occupied columns
+  const multiTop = {}; // column -> deepest (highest-index) lane used by a multi-day bar in that column
+  ordered.forEach((ev) => {
+    const isMulti = spanDays(ev.job) > 1;
+    // Single-day bars always sit BELOW every multi-day bar in their column (never fill a gap
+    // above a longer bar), so each day reads longest → shorter → by time → no time.
+    let li = isMulti ? 0 : ((multiTop[ev.startCol] ?? -1) + 1);
+    for (; li < lanes.length; li++) {
+      let free = true;
+      for (let c = ev.startCol; c <= ev.endCol; c++) if (lanes[li].has(c)) { free = false; break; }
+      if (free) break;
+    }
+    while (lanes.length <= li) lanes.push(new Set());
+    for (let c = ev.startCol; c <= ev.endCol; c++) {
+      lanes[li].add(c);
+      if (isMulti) multiTop[c] = Math.max(multiTop[c] ?? -1, li);
+    }
+    ev.lane = li;
+  });
+  events.splice(0, events.length, ...ordered);
+  return lanes.length;
+}
+
 export function assignLanes(events) {
   events.forEach((ev) => { ev._dur = jobDurationHours(ev.job); });
   events.sort((a, b) => a._dur - b._dur || a.startCol - b.startCol);

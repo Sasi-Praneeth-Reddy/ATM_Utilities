@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { addDays, isoDate, todayStr, daysBetween } from '../../utils/dates';
-import { assignLanes, jobTruckIds, groupByOpportunity } from '../../utils/jobs';
+import { assignLanesLongestFirst, compareByStartTime, jobTruckIds, groupByOpportunity } from '../../utils/jobs';
 import { MonthChip, MonthGroupedChip, WeekBar, GroupedWeekBar, ConflictOverlayChip } from './JobVisuals';
 
 const DAY_NUM_H = 23; // reserved space (px) for the date number, so bars never cover it
@@ -56,7 +56,8 @@ function Week({ week, monthStr, jobs, trucks, drivers, role, currentCrewTruck, c
       ...unassignedLdSingles.map((j) => toEvent(j)),
       ...ldGroups.map((g) => toEvent(g[0], g)),
     ];
-    const count = assignLanes(events);
+    // Longest bar on top, then descending; single-day bars by start time, no-time last (2026-09-30).
+    const count = assignLanesLongestFirst(events);
     const map = {};
     events.forEach((ev) => { map[ev.job.id] = ev.lane; });
     return { ldEvents: events, laneCount: count, laneMap: map };
@@ -156,43 +157,36 @@ function Week({ week, monthStr, jobs, trucks, drivers, role, currentCrewTruck, c
               <div className="day-num">{dayNum}</div>
               <div className="bar-spacer" style={{ height: barsAreaHeight }} />
               <div className="day-events">
-                {assignedLocalJobs.map((j) => (
-                  <MonthChip
-                    key={j.id}
-                    job={j}
-                    trucks={trucks}
-                    drivers={drivers}
-                    conflict={conflictIds.has(j.id)}
-                    conflicts={conflicts}
-                    mine={role === 'crew' && (j.truckIds || []).includes(currentCrewTruck)}
-                    draggable={draggable}
-                    onDragStart={(e, jobId) => e.dataTransfer.setData('text/plain', jobId)}
-                    onAddExtraTruck={onAddExtraTruck}
-                  />
-                ))}
-                {unassignedLocalSingles.map((j) => (
-                  <MonthChip
-                    key={j.id}
-                    job={j}
-                    trucks={trucks}
-                    drivers={drivers}
-                    conflict={conflictIds.has(j.id)}
-                    conflicts={conflicts}
-                    mine={role === 'crew' && (j.truckIds || []).includes(currentCrewTruck)}
-                    draggable={draggable}
-                    onDragStart={(e, jobId) => e.dataTransfer.setData('text/plain', jobId)}
-                    onAddExtraTruck={onAddExtraTruck}
-                  />
-                ))}
-                {localGroups.map((g) => (
-                  <MonthGroupedChip
-                    key={g[0].smartMovingOpportunityId}
-                    jobsInGroup={g}
-                    conflictIds={conflictIds}
-                    mine={role === 'crew' && g.some((j) => (j.truckIds || []).includes(currentCrewTruck))}
-                    draggable={draggable}
-                    onDragStart={(e, jobId) => e.dataTransfer.setData('text/plain', jobId)}
-                  />
+                {/* One list, sorted by start time ascending, no-time jobs last (2026-09-30) —
+                    previously assigned jobs, then unassigned, then grouped, each in raw order. */}
+                {[
+                  ...assignedLocalJobs.map((j) => ({ kind: 'job', key: j.id, sortJob: j, job: j })),
+                  ...unassignedLocalSingles.map((j) => ({ kind: 'job', key: j.id, sortJob: j, job: j })),
+                  ...localGroups.map((g) => ({ kind: 'group', key: g[0].smartMovingOpportunityId, sortJob: [...g].sort(compareByStartTime)[0], group: g })),
+                ].sort((a, b) => compareByStartTime(a.sortJob, b.sortJob)).map((item) => (
+                  item.kind === 'job' ? (
+                    <MonthChip
+                      key={item.key}
+                      job={item.job}
+                      trucks={trucks}
+                      drivers={drivers}
+                      conflict={conflictIds.has(item.job.id)}
+                      conflicts={conflicts}
+                      mine={role === 'crew' && (item.job.truckIds || []).includes(currentCrewTruck)}
+                      draggable={draggable}
+                      onDragStart={(e, jobId) => e.dataTransfer.setData('text/plain', jobId)}
+                      onAddExtraTruck={onAddExtraTruck}
+                    />
+                  ) : (
+                    <MonthGroupedChip
+                      key={item.key}
+                      jobsInGroup={item.group}
+                      conflictIds={conflictIds}
+                      mine={role === 'crew' && item.group.some((j) => (j.truckIds || []).includes(currentCrewTruck))}
+                      draggable={draggable}
+                      onDragStart={(e, jobId) => e.dataTransfer.setData('text/plain', jobId)}
+                    />
+                  )
                 ))}
               </div>
             </div>
