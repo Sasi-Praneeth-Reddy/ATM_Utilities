@@ -4,9 +4,21 @@ export default function BackendBanner({ backendConnected, backendErrorMsg, backe
   const [urlInput, setUrlInput] = useState(backendUrl);
 
   if (!backendConnected) {
-    // backendUrl is '' for same-origin production hosting (see api.js) — name it explicitly
-    // instead of showing a blank.
-    const where = backendUrl || 'this site';
+    // Production (same-origin hosting, backendUrl === '' — see api.js): a plain, non-technical
+    // message. The localhost / `npm start` / custom-URL form below only makes sense for local dev,
+    // and was confusing for dispatchers (2026-09-30).
+    if (!backendUrl) {
+      return (
+        <div className="conflict-banner">
+          <div className="cb-title">⚠ Can't connect to the scheduler server</div>
+          Check your internet connection. The board will reconnect automatically, or you can try again now.
+          <div className="sync-row" style={{ marginTop: 8 }}>
+            <button className="btn secondary" onClick={() => window.location.reload()}>Try again</button>
+          </div>
+        </div>
+      );
+    }
+    const where = backendUrl;
     return (
       <div className="conflict-banner">
         <div className="cb-title">⚠ Can't reach the backend at {where}</div>

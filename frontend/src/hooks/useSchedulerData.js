@@ -118,6 +118,11 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
   const [jobs, setJobs] = useState([]);
   const [backendConnected, setBackendConnected] = useState(false);
   const [backendErrorMsg, setBackendErrorMsg] = useState('');
+  // True until the first /api/state attempt settles (added 2026-09-30). backendConnected starts
+  // false, so without this the "Can't reach the backend" banner flashed for a split second on every
+  // load/reload before the first response arrived. App.jsx shows a loading animation instead while
+  // this is true, and BackendBanner only renders once it's false.
+  const [initialLoading, setInitialLoading] = useState(true);
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
   const [syncStatus, setSyncStatus] = useState({ loading: false, message: '', error: null });
   const [smartInsightsSyncStatus, setSmartInsightsSyncStatus] = useState({ loading: false, message: '', error: null });
@@ -171,8 +176,21 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
   // Initial load, and reload whenever the backend URL changes (e.g. the user retries with a
   // different one from the disconnected banner) — only once logged in.
   useEffect(() => {
-    if (!enabled) return;
-    loadStateFromServer();
+    if (!enabled) { setInitialLoading(true); return; }
+    let cancelled = false;
+    setInitialLoading(true);
+    (async () => {
+      let ok = await loadStateFromServer();
+      // One quiet retry before admitting defeat — the `api` Cloud Function runs with
+      // minInstances: 0, so the first request after idle can fail/timeout on a cold start even
+      // though the backend is fine a second later.
+      if (!ok && !cancelled) {
+        await new Promise((r) => setTimeout(r, 1500));
+        if (!cancelled) ok = await loadStateFromServer();
+      }
+      if (!cancelled) setInitialLoading(false);
+    })();
+    return () => { cancelled = true; };
   }, [enabled, loadStateFromServer]);
 
   /** Fetches the Gmail/Calendar OAuth re-auth countdown. Crew/dispatcher accounts get a 403 from
@@ -220,6 +238,9 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
 
     const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes of no interaction counts as "not using it"
     let lastActivityAt = Date.now();
+    // Background polls only flag the backend as unreachable after 2 failures in a row, so a single
+    // blip (cold start, brief network hiccup) doesn't flash the disconnected banner mid-session.
+    let consecutivePollFailures = 0;
     function markActive() { lastActivityAt = Date.now(); }
     const activityEvents = ['mousemove', 'mousedown', 'keydown', 'wheel', 'scroll', 'touchstart'];
     activityEvents.forEach((evt) => window.addEventListener(evt, markActive, { passive: true }));
@@ -227,6 +248,7 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
     async function pollOnce() {
       try {
         const state = await call('GET', '/api/state');
+        consecutivePollFailures = 0;
         setBackendConnected(true);
         setBackendErrorMsg('');
         setLastSyncedAt(new Date());
@@ -235,6 +257,8 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
         setJobs((prev) => (sameJSON(prev, state.jobs) ? prev : state.jobs));
       } catch (err) {
         if (err.status === 401) { onAuthError?.(); return; }
+        consecutivePollFailures += 1;
+        if (consecutivePollFailures < 2) return;
         setBackendConnected(false);
         setBackendErrorMsg(err.message);
       }
@@ -853,7 +877,7 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
 
   return {
     trucks, drivers, jobs,
-    backendConnected, backendErrorMsg,
+    backendConnected, backendErrorMsg, initialLoading,
     lastSyncedAt,
     syncStatus, syncNow,
     calendarSyncStatus, syncCalendarNow,

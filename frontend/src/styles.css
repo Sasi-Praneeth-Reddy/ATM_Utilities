@@ -1303,3 +1303,34 @@ col.pt-col-truck{width:calc(150px * var(--pt-scale, 1));}
   @page pt-landscape{size:letter landscape;margin:10mm;}
   .print-sheet-timeline.print-active{page:pt-landscape;}
 }
+
+/* ---------- Loading screen (added 2026-09-30, see components/LoadingScreen.jsx) ---------- */
+.loading-screen{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;background:var(--bg);color:var(--muted);}
+.loading-scene{position:relative;width:220px;height:84px;overflow:hidden;}
+.loading-truck{position:absolute;left:50%;bottom:1px;transform:translateX(-50%);animation:truck-bounce .5s ease-in-out infinite;}
+.loading-truck .lt-box{fill:var(--navy);}
+.loading-truck .lt-stripe{fill:var(--orange);}
+.loading-truck .lt-cab{fill:var(--orange);}
+.loading-truck .lt-window{fill:#dfe9fb;}
+.loading-truck .lt-tire{fill:#2a2f3a;}
+.loading-truck .lt-hub{fill:#c9d0dc;}
+.loading-truck .lt-wheel{animation:truck-wheel .6s linear infinite;}
+.loading-road{position:absolute;left:0;right:0;bottom:4px;height:3px;border-radius:2px;
+  background:repeating-linear-gradient(90deg,var(--muted) 0 18px,transparent 18px 32px);opacity:.55;
+  background-size:32px 3px;animation:road-scroll .45s linear infinite;}
+.loading-text{font-size:14px;letter-spacing:.2px;}
+.loading-text::after{content:'';display:inline-block;width:1.2em;text-align:left;animation:loading-dots 1.2s steps(4,end) infinite;}
+:root[data-theme='dark'] .loading-truck .lt-box{fill:#3a5a92;}
+@keyframes truck-bounce{0%,100%{transform:translateX(-50%) translateY(0);}50%{transform:translateX(-50%) translateY(-2px);}}
+@keyframes truck-wheel{to{transform:rotate(360deg);}}
+@keyframes road-scroll{from{background-position:0 0;}to{background-position:-32px 0;}}
+@keyframes loading-dots{0%{content:'';}25%{content:'.';}50%{content:'..';}75%{content:'...';}}
+@media (prefers-reduced-motion: reduce){
+  .loading-truck,.loading-truck .lt-wheel,.loading-road,.loading-text::after{animation:none;}
+}
+
+/* Red alert dot on a nav tab (added 2026-09-30) — e.g. Job Assignments when Gmail auth is expiring. */
+.nav-alert-dot{display:inline-block;width:8px;height:8px;margin-left:6px;vertical-align:super;border-radius:50%;
+  background:var(--red);box-shadow:0 0 0 2px var(--navy2);animation:nav-dot-pulse 2s ease-in-out infinite;}
+@keyframes nav-dot-pulse{0%,100%{transform:scale(1);opacity:1;}50%{transform:scale(1.25);opacity:.75;}}
+@media (prefers-reduced-motion: reduce){.nav-alert-dot{animation:none;}}

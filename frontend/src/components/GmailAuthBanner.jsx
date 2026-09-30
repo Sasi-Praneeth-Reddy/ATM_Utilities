@@ -12,9 +12,16 @@
  * account seeing this couldn't act on it anyway. */
 const GMAIL_AUTH_BANNER_WARNING_DAYS = 1;
 
+/** True when the banner would show — also drives the red dot on the Job Assignments nav tab
+ * (App.jsx / Nav.jsx). Since 2026-09-30 the banner itself only renders on that tab, at the user's
+ * request (it was obstructing every other page), so the dot is what alerts from elsewhere. */
+export function isGmailAuthAlert(status) {
+  if (!status || !status.tracked) return false;
+  return Boolean(status.expired) || status.daysRemaining <= GMAIL_AUTH_BANNER_WARNING_DAYS;
+}
+
 export default function GmailAuthBanner({ status }) {
-  if (!status || !status.tracked) return null;
-  if (!status.expired && status.daysRemaining > GMAIL_AUTH_BANNER_WARNING_DAYS) return null;
+  if (!isGmailAuthAlert(status)) return null;
 
   const daysAgo = status.expired ? Math.abs(status.daysRemaining) : 0;
   const message = status.expired
@@ -23,7 +30,7 @@ export default function GmailAuthBanner({ status }) {
 
   return (
     <div className="conflict-banner" role="alert">
-      <div className="cb-title">⚠ {message} Run <code>npm run gmail-auth</code> (see server/gmail-oauth-setup.js), or see Job Assignments → Smart Insights Report Sync for details.</div>
+      <div className="cb-title">⚠ {message} Run <code>npm run gmail-auth</code> (see server/gmail-oauth-setup.js), or see Smart Insights Report Sync below for details.</div>
     </div>
   );
 }

@@ -16,7 +16,9 @@ const TABS_BY_ROLE = {
   ],
 };
 
-export default function Nav({ role, activeTab, onTabChange }) {
+/** `alertTabs` (added 2026-09-30): { [tabId]: 'tooltip text' } — shows a small red dot on that tab,
+ * e.g. the Job Assignments tab when the Gmail authorization is expiring (see App.jsx). */
+export default function Nav({ role, activeTab, onTabChange, alertTabs = {} }) {
   const tabs = TABS_BY_ROLE[role] || TABS_BY_ROLE.dispatcher;
   return (
     <nav>
@@ -27,6 +29,9 @@ export default function Nav({ role, activeTab, onTabChange }) {
           onClick={() => onTabChange(tab.id)}
         >
           {tab.label}
+          {alertTabs[tab.id] && (
+            <span className="nav-alert-dot" title={alertTabs[tab.id]} aria-label={alertTabs[tab.id]} />
+          )}
         </button>
       ))}
     </nav>

@@ -8,7 +8,8 @@ import { todayStr } from './utils/dates';
 import Header from './components/Header';
 import Nav from './components/Nav';
 import BackendBanner from './components/BackendBanner';
-import GmailAuthBanner from './components/GmailAuthBanner';
+import LoadingScreen from './components/LoadingScreen';
+import GmailAuthBanner, { isGmailAuthAlert } from './components/GmailAuthBanner';
 import LoginScreen from './components/LoginScreen';
 import DeletedJobsPanel from './components/DeletedJobsPanel';
 import BoardTab from './components/board/BoardTab';
@@ -118,17 +119,18 @@ export default function App() {
   // sensible ancestor, not buried inside the element that merely triggers them).
   const [showDeletedJobs, setShowDeletedJobs] = useState(false);
   useEffect(() => {
-    if (!isAuthenticated) return;
+    // Wait for the loading screen to finish, so the 3s is actually visible time.
+    if (!isAuthenticated || data.initialLoading) return;
     const t = setTimeout(() => setShowRoleHint(false), 3000);
     return () => clearTimeout(t);
-  }, [isAuthenticated]);
+  }, [isAuthenticated, data.initialLoading]);
 
   const conflicts = useMemo(() => getConflicts(jobs), [jobs]);
   const conflictIds = useMemo(() => conflictIdsFrom(conflicts), [conflicts]);
   const placeholderDuplicates = useMemo(() => getPlaceholderDuplicates(jobs), [jobs]);
 
   if (authStatus === 'loading') {
-    return <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)' }}>Loading…</div>;
+    return <LoadingScreen />;
   }
 
   if (authStatus === 'unauthenticated') {
@@ -142,6 +144,12 @@ export default function App() {
         devLoginUrl={authState.devLoginUrl}
       />
     );
+  }
+
+  // Logged in but the first board data hasn't arrived yet — keep showing the loading animation
+  // rather than an empty board with a flashing "Can't reach the backend" banner (2026-09-30).
+  if (data.initialLoading) {
+    return <LoadingScreen />;
   }
 
   return (
@@ -175,7 +183,11 @@ export default function App() {
         onToggleTheme={toggleTheme}
         onOpenDeletedJobs={role === 'admin' ? () => setShowDeletedJobs(true) : undefined}
       />
-      <Nav role={role} activeTab={activeTab} onTabChange={setActiveTab} />
+      <Nav
+        role={role} activeTab={activeTab} onTabChange={setActiveTab}
+        alertTabs={role === 'admin' && isGmailAuthAlert(data.gmailAuthStatus)
+          ? { assignments: 'Gmail authorization is expiring or expired — see Job Assignments' } : {}}
+      />
       {/* Board tab (the truck timeline, now a full 24-hour day) needs real width — capping it at
           the same 1400px reading width as the admin forms just left empty space on both sides of
           a wide monitor while still forcing the timeline to scroll horizontally. Other tabs keep
@@ -187,7 +199,8 @@ export default function App() {
           backendUrl={backendUrl}
           onRetryUrl={setBackendUrl}
         />
-        {role === 'admin' && <GmailAuthBanner status={data.gmailAuthStatus} />}
+        {/* Only on Job Assignments (2026-09-30) — elsewhere the red dot on that tab is the alert. */}
+        {role === 'admin' && activeTab === 'assignments' && <GmailAuthBanner status={data.gmailAuthStatus} />}
         {showRoleHint && <div className="hint">{roleLabels[role]}</div>}
 
         {activeTab === 'board' && (

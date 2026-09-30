@@ -38,7 +38,10 @@ export function useAuth(backendUrl) {
       // backendUrl is '' for same-origin production hosting (see api.js) — "the backend at "
       // reads oddly with nothing after it, so name it explicitly in that case.
       const where = backendUrl || 'this site';
-      setConnectionError(err.status === undefined ? `Can't reach the backend at ${where}. Is it running?` : '');
+      const unreachableMsg = backendUrl
+        ? `Can't reach the backend at ${where}. Is it running?`
+        : "Can't connect to the scheduler server. Check your internet connection and try again.";
+      setConnectionError(err.status === undefined ? unreachableMsg : '');
       return false;
     }
   }, [backendUrl]);
