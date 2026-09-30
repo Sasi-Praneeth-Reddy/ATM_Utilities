@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
+import { usePagedSearch, ListSearch, SimplePager } from './ListControls';
 import { deriveTruckStatus, statusClass, statusLabel } from '../../utils/jobs';
 import { todayStr } from '../../utils/dates';
 
@@ -142,46 +143,26 @@ function TruckCard({ t, jobs, onUpdateField, onUpdateStatus, onDeleteTruck, drag
   );
 }
 
-export default function TruckAdminList({ trucks, jobs, showAddForm, onSaveNewTruck, onCancelAddTruck, onUpdateField, onUpdateStatus, onDeleteTruck, onReorder }) {
-  const [dragIndex, setDragIndex] = useState(null);
-  const [overIndex, setOverIndex] = useState(null);
+/** Search matches name, capacity, home base, SmartMoving labels and id. */
+function truckMatches(t, q) {
+  return [t.name, t.capacity, t.homeBase, t.id, ...(t.smartMovingLabels || [])]
+    .filter(Boolean).join(' ').toLowerCase().includes(q);
+}
 
-  function handleDragStart(e, index) {
-    setDragIndex(index);
-    // Firefox requires data to be set for drag to actually start.
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', String(index));
-  }
-
-  function handleDragOver(e, index) {
-    e.preventDefault(); // required to allow a drop
-    e.dataTransfer.dropEffect = 'move';
-    if (index !== overIndex) setOverIndex(index);
-  }
-
-  function handleDrop(e, index) {
-    e.preventDefault();
-    const from = dragIndex;
-    const to = index;
-    setDragIndex(null);
-    setOverIndex(null);
-    if (from === null || from === to) return;
-
-    const reordered = trucks.map((t) => t.id);
-    const [moved] = reordered.splice(from, 1);
-    reordered.splice(to, 0, moved);
-    onReorder(reordered);
-  }
-
-  function handleDragEnd() {
-    setDragIndex(null);
-    setOverIndex(null);
-  }
+/* 2026-09-30: searchable + 10 per page. Drag-to-reorder on these cards was removed — it can't work
+ * across pages/search results — and replaced by the "Arrange truck order" dialog
+ * (TruckOrderDialog.jsx, opened from AdminTab). */
+export default function TruckAdminList({ trucks, jobs, showAddForm, onSaveNewTruck, onCancelAddTruck, onUpdateField, onUpdateStatus, onDeleteTruck }) {
+  const matchFn = useCallback(truckMatches, []);
+  const paged = usePagedSearch(trucks, matchFn, 10);
 
   return (
     <div>
       {showAddForm && <AddTruckForm onSave={onSaveNewTruck} onCancel={onCancelAddTruck} truckCount={trucks.length} />}
-      {trucks.map((t, index) => (
+      <ListSearch value={paged.query} onChange={paged.setQuery} placeholder="Search trucks (name, label, home base)…" />
+      <SimplePager paged={paged} noun="trucks" />
+      {paged.query.trim() && !paged.filtered.length && <div className="empty">No trucks match "{paged.query}".</div>}
+      {paged.pageItems.map((t) => (
         <TruckCard
           key={t.id}
           t={t}
@@ -189,16 +170,10 @@ export default function TruckAdminList({ trucks, jobs, showAddForm, onSaveNewTru
           onUpdateField={onUpdateField}
           onUpdateStatus={onUpdateStatus}
           onDeleteTruck={onDeleteTruck}
-          drag={onReorder ? {
-            onDragStart: (e) => handleDragStart(e, index),
-            onDragOver: (e) => handleDragOver(e, index),
-            onDrop: (e) => handleDrop(e, index),
-            onDragEnd: handleDragEnd,
-            isDragging: dragIndex === index,
-            isDropTarget: overIndex === index && dragIndex !== null && dragIndex !== index,
-          } : null}
+          drag={null}
         />
       ))}
+      {paged.pageItems.length > 3 && <SimplePager paged={paged} noun="trucks" />}
     </div>
   );
 }

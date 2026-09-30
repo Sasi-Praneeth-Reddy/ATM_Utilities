@@ -32,7 +32,8 @@ export function matchesQuery(job, trucks, drivers, q) {
  * checking for/pulling in newly-synced jobs belongs here rather than on the truck/driver roster
  * page) — see SyncPanel.jsx for what it does.
  *
- * Also hosts "Reset to sample data" (moved here 2026-09-10 from Trucks & Drivers, at the user's
+ * REMOVED 2026-09-30 (user request — production is live on real data, a one-click wipe is too
+ * risky): the "Reset to sample data" button. Historical note: it was moved here 2026-09-10 from Trucks & Drivers, at the user's
  * request) — same "this page is where the consequential stuff happens" reasoning as SyncPanel's own
  * move: a dispatcher managing job assignments and syncs is already in the right headspace to notice
  * a big red warning button, more so than someone just adding a truck or fixing a driver's phone
@@ -44,7 +45,6 @@ export default function JobAssignmentsTab({
   syncStatus, onSyncNow, lastSyncedAt,
   calendarSyncStatus, onSyncCalendarNow,
   smartInsightsSyncStatus, onSyncSmartInsightsNow, gmailAuthStatus,
-  onResetToSampleData,
 }) {
   const [query, setQuery] = useState('');
   // Pagination (added 2026-09-30) — rendering every job at once (each row with truck + driver
@@ -152,14 +152,6 @@ export default function JobAssignmentsTab({
             onChange={(e) => onQueryChange(e.target.value)}
           />
         </div>
-        <button
-          className="btn secondary"
-          style={{ color: 'var(--red)' }}
-          onClick={onResetToSampleData}
-          title="Clear all local changes and reload the original sample data — asks twice before doing anything"
-        >
-          Reset to sample data
-        </button>
       </div>
       {query.trim() && !filteredJobs.length ? (
         <div className="empty">No jobs match "{query}".</div>

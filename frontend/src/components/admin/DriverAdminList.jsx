@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
+import { usePagedSearch, ListSearch, SimplePager } from './ListControls';
 import { driverColor } from '../../utils/jobs';
 
 function AddDriverForm({ onSave, onCancel }) {
@@ -75,11 +76,24 @@ function DriverCard({ d, drivers, onUpdateField, onDeleteDriver }) {
   );
 }
 
+/** Search matches name, phone, license and SmartMoving labels. */
+function driverMatches(d, q) {
+  return [d.name, d.phone, d.cdl, ...(d.smartMovingLabels || [])]
+    .filter(Boolean).join(' ').toLowerCase().includes(q);
+}
+
+/* 2026-09-30: searchable + 10 per page (user request). */
 export default function DriverAdminList({ drivers, showAddForm, onSaveNewDriver, onCancelAddDriver, onUpdateField, onDeleteDriver }) {
+  const matchFn = useCallback(driverMatches, []);
+  const paged = usePagedSearch(drivers, matchFn, 10);
+
   return (
     <div>
       {showAddForm && <AddDriverForm onSave={onSaveNewDriver} onCancel={onCancelAddDriver} />}
-      {drivers.map((d) => (
+      <ListSearch value={paged.query} onChange={paged.setQuery} placeholder="Search drivers (name, phone, label)…" />
+      <SimplePager paged={paged} noun="drivers" />
+      {paged.query.trim() && !paged.filtered.length && <div className="empty">No drivers match "{paged.query}".</div>}
+      {paged.pageItems.map((d) => (
         <DriverCard
           key={d.id}
           d={d}
@@ -88,6 +102,7 @@ export default function DriverAdminList({ drivers, showAddForm, onSaveNewDriver,
           onDeleteDriver={onDeleteDriver}
         />
       ))}
+      {paged.pageItems.length > 3 && <SimplePager paged={paged} noun="drivers" />}
     </div>
   );
 }

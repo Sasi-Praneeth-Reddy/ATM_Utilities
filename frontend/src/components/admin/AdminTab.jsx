@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import TruckAdminList from './TruckAdminList';
 import DriverAdminList from './DriverAdminList';
+import TruckOrderDialog from './TruckOrderDialog';
 
 export default function AdminTab({
   trucks, drivers, jobs,
@@ -10,6 +11,7 @@ export default function AdminTab({
 }) {
   const [showAddTruckForm, setShowAddTruckForm] = useState(false);
   const [showAddDriverForm, setShowAddDriverForm] = useState(false);
+  const [showTruckOrder, setShowTruckOrder] = useState(false);
 
   async function saveNewTruck(fields) {
     try {
@@ -55,7 +57,14 @@ export default function AdminTab({
 
       <div className="grid-2">
         <div>
-          <h2 className="section-title">Trucks</h2>
+          <div className="list-heading">
+            <h2 className="section-title">Trucks</h2>
+            {onReorderTrucks && trucks.length > 1 && (
+              <button className="btn-order" onClick={() => setShowTruckOrder(true)} title="Change the order trucks appear on the board">
+                <span className="btn-order-icon" aria-hidden="true">⇅</span> Arrange truck order
+              </button>
+            )}
+          </div>
           <TruckAdminList
             trucks={trucks} jobs={jobs}
             showAddForm={showAddTruckForm}
@@ -64,11 +73,12 @@ export default function AdminTab({
             onUpdateField={onUpdateTruckField}
             onUpdateStatus={onUpdateTruckStatus}
             onDeleteTruck={onDeleteTruck}
-            onReorder={onReorderTrucks}
           />
         </div>
         <div>
-          <h2 className="section-title">Drivers</h2>
+          <div className="list-heading">
+            <h2 className="section-title">Drivers</h2>
+          </div>
           <DriverAdminList
             drivers={drivers}
             showAddForm={showAddDriverForm}
@@ -79,6 +89,9 @@ export default function AdminTab({
           />
         </div>
       </div>
+      {showTruckOrder && (
+        <TruckOrderDialog trucks={trucks} onReorder={onReorderTrucks} onClose={() => setShowTruckOrder(false)} />
+      )}
     </section>
   );
 }

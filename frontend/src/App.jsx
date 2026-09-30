@@ -261,7 +261,6 @@ export default function App() {
             calendarSyncStatus={data.calendarSyncStatus} onSyncCalendarNow={data.syncCalendarNow}
             smartInsightsSyncStatus={data.smartInsightsSyncStatus} onSyncSmartInsightsNow={data.syncSmartInsightsNow}
             gmailAuthStatus={data.gmailAuthStatus}
-            onResetToSampleData={data.resetToSampleData}
           />
         )}
 
