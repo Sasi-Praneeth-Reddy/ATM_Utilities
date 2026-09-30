@@ -348,10 +348,22 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
           : ' Nothing new to add to the board.')
         : ` ${jobCount} job${jobCount === 1 ? '' : 's'} added/updated on the board.`;
       const skippedNote = skippedNotBookedCount > 0 ? ` ${skippedNotBookedCount} opportunit${skippedNotBookedCount === 1 ? 'y was' : 'ies were'} skipped (not booked yet).` : '';
+      // 2026-09-30: pollSweep is diff-only by default — webhooks keep jobs current, so most
+      // opportunities are skipped as already up to date — and it's capped by a daily API budget.
+      const upToDate = result.skippedUpToDateCount ?? 0;
+      const upToDateNote = upToDate > 0 ? ` ${upToDate} already up to date (kept current by webhooks).` : '';
+      const budgetNote = result.stoppedForBudget ? ' Stopped early: daily SmartMoving API budget reached.' : '';
+      if (result.skipped === 'daily-budget-exceeded') {
+        setSyncStatus({
+          loading: false, message: '',
+          error: `Sync skipped: today's SmartMoving API budget is used up (${result.budget?.used ?? '?'} / ${result.budget?.budget ?? '?'} calls). Webhooks are still syncing live.`,
+        });
+        return;
+      }
       const rangeNote = result.from && result.to ? ` Range: ${yyyymmddToLabel(result.from)} – ${yyyymmddToLabel(result.to)}.` : '';
       setSyncStatus({
         loading: false,
-        message: `Synced with SmartMoving (booked jobs only).${rangeNote}${sourceNote}${jobNote}${skippedNote}${errNote}`,
+        message: `Synced with SmartMoving (booked jobs only).${rangeNote}${sourceNote}${upToDateNote}${jobNote}${skippedNote}${budgetNote}${errNote}`,
         error: null,
       });
     } catch (err) {

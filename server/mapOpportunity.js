@@ -86,7 +86,13 @@ function mapOpportunityToJobs(opportunity, premiumJobsById = {}) {
 
     let date = smartMovingIntDateToIso(job.jobDate) || smartMovingIntDateToIso(opportunity.serviceDate);
     let endDate = date;
-    if (type === 'long_distance' && pickupDate && deliveryDate) {
+    // tripInfo's pickup/delivery dates belong to the OPPORTUNITY as a whole, not to any one job on
+    // it. Only safe to stamp onto a job when it's the opportunity's only job — for a multi-job
+    // booking (e.g. 24508-1/2/3 on 10/13, 10/14, 10/16) applying it to every job overwrote each
+    // job's own jobDate with the same span, collapsing all legs onto one date (fixed 2026-09-30).
+    // Multi-job opportunities keep each job's own jobDate; any real multi-day endDate for a leg
+    // comes from the calendar sync (per-event dtend) instead.
+    if (type === 'long_distance' && pickupDate && deliveryDate && jobs.length === 1) {
       // Real multi-day span from tripInfo, not a single-day guess.
       date = pickupDate;
       endDate = deliveryDate;

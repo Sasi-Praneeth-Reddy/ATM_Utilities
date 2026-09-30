@@ -1404,6 +1404,17 @@ async function backfillTruckOrder() {
   await batch.commit();
 }
 
+/**
+ * Jobs already in Firestore that came from SmartMoving (have a smartMovingOpportunityId) with a
+ * date in [fromIso, toIso]. Used by server.js's diff-only pollSweep (2026-09-30) to skip
+ * re-hydrating opportunities webhooks have already kept current. Single-field range query on
+ * `date`, so no composite index needed; the opportunity-id filter happens in memory.
+ */
+async function listSmartMovingJobsInRange(fromIso, toIso) {
+  const snap = await jobsCol.where('date', '>=', fromIso).where('date', '<=', toIso).get();
+  return snap.docs.map(docToJob).filter(j => j && j.smartMovingOpportunityId);
+}
+
 module.exports = {
   initDb,
   getState, getJob,
@@ -1419,4 +1430,5 @@ module.exports = {
   setUserPassword, setUserOtp, clearUserOtp,
   addAllowedExternalEmail, listAllowedExternalEmails, isEmailAllowedExternally, removeAllowedExternalEmail,
   getGmailAuthStatus, setGmailAuthRefreshed,
+  listSmartMovingJobsInRange,
 };

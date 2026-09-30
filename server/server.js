@@ -152,6 +152,7 @@
  *                                                              see frontend/src/utils/jobs.js's
  *                                                              getPlaceholderDuplicates().
  *   POST  /webhooks/smartmoving?secret=...           [public, secret-checked] SmartMoving webhook receiver
+ *   GET   /api/usage?days=14                        [any user] SmartMoving API calls per day/month, by source, vs. daily budget
  */
 
 const fs = require('fs');
@@ -173,11 +174,12 @@ const {
   getAllCrewMembers, getAllJobsByCrewMemberId, getAllCustomersWithOpportunities,
 } = require('./smartmovingClient');
 const { mapOpportunityToJobs } = require('./mapOpportunity');
-const { OPPORTUNITY_STATUS, BOOKED_STATUSES } = require('./mapJobs');
+const { OPPORTUNITY_STATUS, BOOKED_STATUSES, smartMovingIntDateToIso } = require('./mapJobs');
 const { fetchIcalEvents } = require('./icalClient');
 const { fetchCalendarEvents } = require('./googleCalendarClient');
 const { mapIcalEventToJob, parseDescription } = require('./mapIcalEvent');
 const { syncSmartInsights } = require('./smartInsightsSync');
+const apiUsage = require('./apiUsage');
 
 const PORT = process.env.PORT || 8787;
 // .trim() guards against a real bug hit 2026-09-29: `firebase functions:secrets:set` reads its
@@ -704,7 +706,59 @@ async function hydrateOpportunity(opportunityId) {
  * function is the single source of truth for the booked-status check, so a customer-sourced
  * opportunity that slips past this file's fail-open pre-filter still gets caught there.
  */
-async function pollSweep({ from: fromOverride, to: toOverride } = {}) {
+/*
+ * DIFF-ONLY RECONCILE (2026-09-30, user decision). Now that SmartMoving webhooks push every new /
+ * changed opportunity straight into Firestore, re-downloading every booked opportunity in a
+ * -7..+60 day window each run is wasted quota (≈30 crew-member calls + customer pages + 2 calls per
+ * opportunity). Default `mode: 'diff'` now:
+ *   1. Discovers via GET /api/customers ONLY (a few paged calls; each opportunity already carries
+ *      its status and its jobs' service dates). The crew-member source is skipped.
+ *   2. Compares against what's already in Firestore (db.listSmartMovingJobsInRange) and hydrates
+ *      ONLY opportunities that are missing, whose status changed, or whose job date(s) moved —
+ *      i.e. exactly what a missed/failed webhook would have left behind.
+ * `mode: 'full'` keeps the old behaviour (both discovery sources, hydrate everything) for a manual
+ * backfill via POST /api/sync-now?full=1.
+ *
+ * DAILY BUDGET: every SmartMoving call is counted in Firestore (apiUsage.js). The sweep refuses to
+ * start once the scheduler's daily budget (SMARTMOVING_DAILY_BUDGET, default 1,000) is used up, and
+ * stops hydrating mid-run when it runs out. Webhooks are never blocked by the budget — live sync
+ * keeps working; only this reconciliation backstop pauses. `ignoreBudget: true` (admin manual sync
+ * only) overrides.
+ */
+function smartMovingDateToIso(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const iso = smartMovingIntDateToIso(value);
+  if (iso) return iso;
+  const str = String(value);
+  return /^\d{4}-\d{2}-\d{2}/.test(str) ? str.slice(0, 10) : null;
+}
+
+function yyyymmddToIso(n) { return smartMovingIntDateToIso(n); }
+
+/** Why (if at all) an opportunity from GET /api/customers needs a hydration call. */
+function diffReason(opp, existingJobs) {
+  if (!existingJobs || existingJobs.length === 0) return 'missing';
+  if (opp.status !== undefined && opp.status !== null &&
+      existingJobs.some(j => !j.manuallyEditedAt && j.smartMovingStatusCode !== undefined &&
+        j.smartMovingStatusCode !== null && Number(j.smartMovingStatusCode) !== Number(opp.status))) {
+    return 'status-changed';
+  }
+  const smDates = [...new Set((opp.jobs || []).map(j => smartMovingDateToIso(j.serviceDate ?? j.jobDate)).filter(Boolean))];
+  const haveDates = new Set(existingJobs.map(j => j.date));
+  const uncovered = smDates.filter(d => !haveDates.has(d));
+  // A dispatcher's manually-edited job intentionally sits on a different date than SmartMoving's —
+  // let each one "cover" one uncovered date so we don't re-hydrate it every day for nothing
+  // (upsertSmartMovingJob would skip it anyway).
+  const manualCount = existingJobs.filter(j => j.manuallyEditedAt).length;
+  if (uncovered.length > manualCount) return 'date-changed';
+  return null;
+}
+
+async function pollSweep(options = {}) {
+  return apiUsage.withApiSource('poll', () => pollSweepInner(options));
+}
+
+async function pollSweepInner({ from: fromOverride, to: toOverride, mode = 'diff', ignoreBudget = false } = {}) {
   const from = fromOverride ?? todayYyyymmdd(-POLL_LOOKBACK_DAYS);
   const to = toOverride ?? todayYyyymmdd(POLL_LOOKAHEAD_DAYS);
   const errors = [];
@@ -712,31 +766,58 @@ async function pollSweep({ from: fromOverride, to: toOverride } = {}) {
   let customerJobOpportunityCount = 0;
   let jobCount = 0;
   let skippedNotBookedCount = 0;
+  let skippedUpToDateCount = 0;
   let sourcesFailed = 0;
+  let stoppedForBudget = false;
+  const reasons = {};
 
-  // opportunityId -> customerName (undefined if only found via source 1, which doesn't carry one
-  // in the shape used here — source 2 does have a name, applied below).
+  let budget = await apiUsage.getBudgetStatus().catch(() => null);
+  if (!ignoreBudget && budget && budget.exceeded) {
+    lastPollAt = new Date().toISOString();
+    recordEvent({ type: 'poll-sweep-skipped-budget', used: budget.used, budget: budget.budget });
+    return { skipped: 'daily-budget-exceeded', budget, errors, from, to, mode, jobCount: 0 };
+  }
+
+  // opportunityId -> customerName
   const opportunityIds = new Map();
 
-  try {
-    // No status filter — see smartmovingClient.js's getAllCrewMembers doc comment. Filtering to
-    // "Active" only risks silently missing jobs assigned to crew whose real status string doesn't
-    // exactly match that, which has no relationship to whether they're actually working today.
-    const crewMembers = await getAllCrewMembers();
-    const crewOpportunityIds = new Set();
-    for (const crew of crewMembers) {
-      try {
-        const jobs = await getAllJobsByCrewMemberId(crew.id, { from, to });
-        jobs.forEach(job => { if (job.opportunityId) crewOpportunityIds.add(job.opportunityId); });
-      } catch (err) {
-        errors.push({ opportunityId: null, customer: crew.name, message: `crew jobs: ${err.message}` });
+  if (mode === 'full') {
+    try {
+      const crewMembers = await getAllCrewMembers();
+      const crewOpportunityIds = new Set();
+      for (const crew of crewMembers) {
+        try {
+          const jobs = await getAllJobsByCrewMemberId(crew.id, { from, to });
+          jobs.forEach(job => { if (job.opportunityId) crewOpportunityIds.add(job.opportunityId); });
+        } catch (err) {
+          errors.push({ opportunityId: null, customer: crew.name, message: `crew jobs: ${err.message}` });
+        }
       }
+      crewJobOpportunityCount = crewOpportunityIds.size;
+      crewOpportunityIds.forEach(id => { if (!opportunityIds.has(id)) opportunityIds.set(id, undefined); });
+    } catch (err) {
+      sourcesFailed += 1;
+      errors.push({ opportunityId: null, customer: null, message: `GET /api/crew-members: ${err.message}` });
     }
-    crewJobOpportunityCount = crewOpportunityIds.size;
-    crewOpportunityIds.forEach(id => { if (!opportunityIds.has(id)) opportunityIds.set(id, undefined); });
-  } catch (err) {
-    sourcesFailed += 1;
-    errors.push({ opportunityId: null, customer: null, message: `GET /api/crew-members: ${err.message}` });
+  }
+
+  // Firestore snapshot of what webhooks / earlier syncs already stored, keyed by opportunity id.
+  let existingByOpp = null;
+  if (mode === 'diff') {
+    try {
+      const existing = await db.listSmartMovingJobsInRange(yyyymmddToIso(from), yyyymmddToIso(to));
+      existingByOpp = new Map();
+      existing.forEach(j => {
+        const list = existingByOpp.get(j.smartMovingOpportunityId) || [];
+        list.push(j);
+        existingByOpp.set(j.smartMovingOpportunityId, list);
+      });
+    } catch (err) {
+      // Can't diff without the snapshot — fall back to hydrating everything found (old behaviour)
+      // rather than silently skipping real jobs.
+      errors.push({ opportunityId: null, customer: null, message: `Firestore diff snapshot failed, hydrating all: ${err.message}` });
+      existingByOpp = null;
+    }
   }
 
   try {
@@ -746,9 +827,14 @@ async function pollSweep({ from: fromOverride, to: toOverride } = {}) {
       (customer.opportunities || []).forEach(opp => {
         if (!opp.id || !Array.isArray(opp.jobs) || opp.jobs.length === 0) return;
         // Fail OPEN on a missing/unrecognized status — only skip once we positively know it's not
-        // booked. See this function's doc comment for why.
+        // booked.
         if (opp.status !== undefined && opp.status !== null && !BOOKED_STATUSES.has(opp.status)) return;
         customerOpportunityIds.add(opp.id);
+        if (existingByOpp) {
+          const reason = diffReason(opp, existingByOpp.get(opp.id));
+          if (!reason) { skippedUpToDateCount += 1; return; }
+          reasons[reason] = (reasons[reason] || 0) + 1;
+        }
         if (!opportunityIds.has(opp.id)) opportunityIds.set(opp.id, customer.name);
       });
     });
@@ -758,26 +844,41 @@ async function pollSweep({ from: fromOverride, to: toOverride } = {}) {
     errors.push({ opportunityId: null, customer: null, message: `GET /api/customers: ${err.message}` });
   }
 
+  let hydratedSinceCheck = 0;
   for (const [opportunityId, customerName] of opportunityIds) {
+    if (!ignoreBudget) {
+      // Re-read the real Firestore count every 20 hydrations (cheap), estimate in between
+      // (each hydration ≈ 2 SmartMoving calls).
+      if (hydratedSinceCheck >= 20 || !budget) {
+        budget = await apiUsage.getBudgetStatus().catch(() => budget);
+        hydratedSinceCheck = 0;
+      }
+      const estRemaining = budget ? budget.remaining - hydratedSinceCheck * 2 : Infinity;
+      if (estRemaining < 2) { stoppedForBudget = true; break; }
+    }
     try {
       const mappedJobs = await hydrateOpportunity(opportunityId);
       jobCount += mappedJobs.length;
-      // Covers both "hydrated but genuinely had zero job records" and "filtered out because it
-      // wasn't booked" (hydrateOpportunity returns [] for both) — this count is a rough "how much
-      // of what we discovered didn't turn into a board job" signal, not a precise not-booked tally.
       if (mappedJobs.length === 0) skippedNotBookedCount += 1;
     } catch (err) {
       errors.push({ opportunityId, customer: customerName, message: err.message });
     }
+    hydratedSinceCheck += 1;
   }
 
   lastPollAt = new Date().toISOString();
-  lastPollError = sourcesFailed >= 2 ? errors[0].message : null;
+  const expectedSources = mode === 'full' ? 2 : 1;
+  lastPollError = sourcesFailed >= expectedSources ? errors[errors.length - 1].message
+    : stoppedForBudget ? 'Stopped early: daily SmartMoving API budget reached' : null;
   recordEvent({
-    type: 'poll-sweep', crewJobOpportunityCount, customerJobOpportunityCount,
-    opportunityCount: opportunityIds.size, jobCount, skippedNotBookedCount, errorCount: errors.length,
+    type: 'poll-sweep', mode, crewJobOpportunityCount, customerJobOpportunityCount,
+    opportunityCount: opportunityIds.size, skippedUpToDateCount, reasons, jobCount,
+    skippedNotBookedCount, errorCount: errors.length, stoppedForBudget,
   });
-  return { errors, crewJobOpportunityCount, customerJobOpportunityCount, jobCount, skippedNotBookedCount, from, to };
+  return {
+    errors, mode, crewJobOpportunityCount, customerJobOpportunityCount, hydratedCount: opportunityIds.size,
+    skippedUpToDateCount, reasons, jobCount, skippedNotBookedCount, stoppedForBudget, from, to,
+  };
 }
 
 let pollTimer = null;
@@ -849,7 +950,8 @@ async function handleWebhook(req, res, url) {
   }
 
   try {
-    const jobs = await hydrateOpportunity(opportunityId);
+    // Tagged 'webhook' so these calls show up separately in the daily API usage (apiUsage.js).
+    const jobs = await apiUsage.withApiSource('webhook', () => hydrateOpportunity(opportunityId));
     recordEvent({ type: 'webhook-ingested', eventType, opportunityId, jobCount: jobs.length });
   } catch (err) {
     recordEvent({ type: 'webhook-ingest-failed', eventType, opportunityId, message: err.message });
@@ -950,6 +1052,7 @@ async function handleRequest(req, res) {
         lastPollAt, lastPollError, lastIcalSyncAt, lastIcalSyncError,
         lastCalendarSyncAt, lastCalendarSyncError, lastWebhookAt,
         recentEvents: recentWebhookEvents,
+        apiBudget: await apiUsage.getBudgetStatus().catch(() => null),
       });
       return;
     }
@@ -1060,6 +1163,20 @@ async function handleRequest(req, res) {
 
     /* ---- Everything below here requires a logged-in user ---- */
     const currentUser = await requireAuth(req);
+
+    /* ---- SmartMoving API usage (2026-09-30) — any logged-in user can view, it's read-only ---- */
+    if (p === '/api/usage' && req.method === 'GET') {
+      const days = Math.min(Math.max(Number(url.searchParams.get('days')) || 14, 1), 62);
+      const [budget, today, month, recent] = await Promise.all([
+        apiUsage.getBudgetStatus(), apiUsage.getDayUsage(), apiUsage.getMonthUsage(), apiUsage.getRecentDays(days),
+      ]);
+      sendJson(req, res, 200, {
+        budget, today, month, monthlyQuota: apiUsage.MONTHLY_QUOTA,
+        monthRemaining: Math.max(apiUsage.MONTHLY_QUOTA - (month.total || 0), 0),
+        recent: recent.map(d => ({ date: d.date, total: d.total || 0, bySource: d.bySource || {}, status429: d.status429 || 0 })),
+      });
+      return;
+    }
 
     /* ---- User management (admin only) ---- */
 
@@ -1218,7 +1335,14 @@ async function handleRequest(req, res) {
       // the calendar sync from running too, even though the calendar sync itself was healthy. Now
       // each has its own endpoint (see POST /api/calendar-sync-now just below) and can succeed or
       // time out independently — see SyncPanel.jsx for the two buttons this backs.
-      const result = await pollSweep({ from, to });
+      // 2026-09-30: diff-only by default (see pollSweep). `?full=1` re-hydrates everything in range
+      // (old behaviour, for a manual backfill); `?ignoreBudget=1` lets an admin run past the
+      // scheduler's daily SmartMoving API budget.
+      const result = await pollSweep({
+        from, to,
+        mode: url.searchParams.get('full') === '1' ? 'full' : 'diff',
+        ignoreBudget: url.searchParams.get('ignoreBudget') === '1',
+      });
       sendJson(req, res, 200, { ...result, state: await db.getState() });
       return;
     }

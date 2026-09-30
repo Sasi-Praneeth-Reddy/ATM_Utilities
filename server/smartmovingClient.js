@@ -9,6 +9,8 @@
  * writeup of what was checked and why write-back isn't implemented yet.
  */
 
+const { recordApiCall } = require('./apiUsage');
+
 const BASE_URL = process.env.SMARTMOVING_BASE_URL || 'https://api-public.smartmoving.com/v1';
 const API_KEY = process.env.SMARTMOVING_API_KEY || '';
 
@@ -61,6 +63,9 @@ async function smartMovingGet(path, params = {}) {
         'x-api-key': API_KEY,
       },
     });
+    // Every request that actually reaches SmartMoving counts against the monthly quota (429
+    // retries included), so record each one — see apiUsage.js. Best-effort, never throws.
+    await recordApiCall({ path, status: res.status });
 
     if (res.ok) return res.json();
 
