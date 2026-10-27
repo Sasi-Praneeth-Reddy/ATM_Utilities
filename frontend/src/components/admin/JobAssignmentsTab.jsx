@@ -54,7 +54,8 @@ export default function JobAssignmentsTab({
   const [pageSize, setPageSize] = useState(50);
   // Sort (2026-09-30, replaced the "Today" button): by date or customer name, asc/desc.
   const [sortBy, setSortBy] = useState('date'); // 'date' | 'name'
-  const [sortDir, setSortDir] = useState('asc'); // 'asc' | 'desc'
+  // Default changed 2026-10-01 (user request): open on Newest first (date desc), page 1.
+  const [sortDir, setSortDir] = useState('desc'); // 'asc' | 'desc'
   const [page, setPage] = useState(null);
   // Truck loading animation while the tab first renders / while switching pages.
   const [ready, setReady] = useState(false);
@@ -78,8 +79,8 @@ export default function JobAssignmentsTab({
   }, [jobs, trucks, drivers, query, sortBy, sortDir]);
 
   const totalPages = Math.max(1, Math.ceil(filteredJobs.length / pageSize));
-  // Default view (date ascending, no search) still opens on the page with today's jobs rather than
-  // the oldest ones; any other sort starts at page 1.
+  // Date ascending (no search) opens on the page with today's jobs rather than the oldest ones;
+  // every other sort — including the default Newest first — starts at page 1.
   const todayPage = useMemo(() => {
     if (sortBy !== 'date' || sortDir !== 'asc') return 1;
     const today = todayStr();

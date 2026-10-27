@@ -1,0 +1,6 @@
+# Normalize line endings so Windows (CRLF) edits do not show up as whole-file diffs.
+* text=auto
+*.png binary
+*.jpg binary
+*.db binary
+*.docx binary

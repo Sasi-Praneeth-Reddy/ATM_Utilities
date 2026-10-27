@@ -34,6 +34,8 @@
 
 const { initializeApp, getApps, applicationDefault, cert } = require('firebase-admin/app');
 const { getFirestore } = require('firebase-admin/firestore');
+const path = require('path');
+const fs = require('fs');
 
 if (getApps().length === 0) {
   const projectId = process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT || undefined;
@@ -54,7 +56,12 @@ if (getApps().length === 0) {
     process.env.K_SERVICE || process.env.FUNCTION_TARGET || process.env.FUNCTIONS_EMULATOR
   );
 
-  const appOptions = { projectId };
+  const defaultKeyPath = path.resolve(__dirname, '../atm-scheduler-firebase-adminsdk-fbsvc-5a61cc7d23.json');
+  // Opt-in only (USE_LOCAL_FIREBASE_KEY=true, set in server/local.secrets): a plain `node server.js` or
+  // test script must NOT silently pick up the production key and talk to the live database.
+  const autoCredPath = credPath || (process.env.USE_LOCAL_FIREBASE_KEY === 'true' && fs.existsSync(defaultKeyPath) ? defaultKeyPath : null);
+
+  const appOptions = { projectId: projectId || 'atm-scheduler' };
   if (serviceAccountJson) {
     // AWS App Runner (or any host with no filesystem to pre-place a key file) — the key's contents
     // come in directly as an env var/secret rather than a file path.
@@ -69,10 +76,11 @@ if (getApps().length === 0) {
       );
     }
     appOptions.credential = cert(parsed);
-  } else if (credPath && !runningInFunctionsRuntime) {
+  } else if (autoCredPath && !runningInFunctionsRuntime) {
     // Local dev against REAL Firestore with a downloaded service account key file — a bare `node
     // some-script.js` run on a laptop, not Cloud Functions/the emulator (see above).
-    appOptions.credential = cert(require(credPath));
+    const resolvedPath = path.isAbsolute(autoCredPath) ? autoCredPath : path.resolve(process.cwd(), autoCredPath);
+    appOptions.credential = cert(require(resolvedPath));
   } else if (!usingEmulator) {
     // Only reached on an actual GCP host with its own built-in identity (e.g. `gcloud auth
     // application-default login` on a developer machine, or a GCP compute product) — not the
@@ -90,6 +98,7 @@ const db = getFirestore();
 // (e.g. optional SmartMoving fields not present on a given job) — ignoring them instead of
 // throwing matches the old SQLite layer's behavior, where a missing key just meant "don't touch
 // that column," and avoids having to null-coalesce every single field at every call site.
-db.settings({ ignoreUndefinedProperties: true });
+// FIRESTORE_PREFER_REST=true: use HTTPS instead of gRPC (for networks/proxies that block gRPC).
+db.settings({ ignoreUndefinedProperties: true, ...(process.env.FIRESTORE_PREFER_REST === 'true' ? { preferRest: true } : {}) });
 
 module.exports = { db };

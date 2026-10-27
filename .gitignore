@@ -33,3 +33,12 @@ primary-container.json
 
 # Firebase CLI's local deploy cache — regenerated on every `firebase deploy`, not source.
 .firebase/
+
+# Firestore JSON backups (contain customer data)
+backups/
+
+# SQLite files (e.g. storage_tracker_aws.db — customer/listing data)
+*.db
+
+# Scratch exports from assistant sessions (may contain customer data)
+Claude outputs/

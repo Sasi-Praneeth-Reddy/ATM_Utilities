@@ -58,7 +58,7 @@ This whole design went through three iterations, in order:
      regardless of pipeline stage. Confirmed directly in the webhook docs: `Opportunity Created` is
      described as firing "whether submitted via web form, entered manually, or created through an
      integration or API." Payloads are thin — `opportunity-*` events give `{event-type,
-     opportunity-id, opportunity-status}` (confirmed via the dev portal's webhook document), so
+opportunity-id, opportunity-status}` (confirmed via the dev portal's webhook document), so
      receiving one tells the backend which opportunity to re-fetch via
      `GET /api/opportunities/{id}` — `hydrateOpportunity` then applies the booked-only filter on
      the fresh `status`. **`job-created` only ever gives `{event-type, job-id}` — no
@@ -79,7 +79,7 @@ This whole design went through three iterations, in order:
        user reported jobs missing even with no crew assigned. Each customer comes back with
        `opportunities[]` across the **full** `OpportunityStatus` range and each opportunity's
        `status` field directly embedded — so `pollSweep` pre-filters against `BOOKED_STATUSES`
-       *here*, before it's even added to the discovery list, which is the main lever that keeps
+       _here_, before it's even added to the discovery list, which is the main lever that keeps
        poll-sweep call volume down (this source alone previously found ~977
        opportunities-with-jobs in one real test, most not booked). Fails open on a missing/unusual
        `status` value rather than silently dropping a real job over an unexpected shape.
@@ -105,6 +105,29 @@ webhook involved at all** and confirmed each one landed on the board through the
 which. `test-webhook.js` still exercises the webhook path itself (`npm run test-webhook`) —
 webhooks remain the better real-time signal once hosting is in place, but polling is no longer
 structurally blind to any booking state.
+
+### Opportunity status codes
+
+SmartMoving reports an opportunity's pipeline stage as a number — the `status` field on
+opportunity/lead responses and `opportunity-status` in webhook payloads (e.g.
+`{"event-type": "opportunity-status-changed", "opportunity-id": "...", "opportunity-status": 10}`).
+Mapped in `mapJobs.js` as `OPPORTUNITY_STATUS`:
+
+| Code | Status           | Meaning                                      |
+| ---- | ---------------- | -------------------------------------------- |
+| 0    | New Lead         | Fresh inquiry, not yet worked                |
+| 1    | Lead In Progress | Sales is working the lead                    |
+| 3    | Opportunity      | Quoted/estimated, not booked yet             |
+| 4    | Booked           | Customer committed — a real job to dispatch  |
+| 10   | Completed        | The move has been performed                  |
+| 11   | Closed           | Job finalized (billing/paperwork wrapped up) |
+| 20   | Cancelled        | Was booked, then cancelled                   |
+| 30   | Lost             | Customer went elsewhere / didn't book        |
+| 50   | Bad Lead         | Junk or invalid lead                         |
+
+The gaps (no 2, 5–9, etc.) are SmartMoving's own numbering. Only **4, 10 and 11**
+(`BOOKED_STATUSES`) are imported as jobs. A job already imported that later moves to 20
+(Cancelled) is **not** removed automatically — delete it from the board manually.
 
 ### Rate limits
 
@@ -142,7 +165,7 @@ to 6 retries per call. If a sync summary still shows `429` errors after that, ra
    refreshes its SmartMoving-owned fields (customer, date, time, addresses, crew size) — truck
    assignments and status a dispatcher has set locally are left alone, so a sync can't undo their
    work. Jobs are never deleted by a sync — a cancelled booking just stops showing up as
-   *schedulable*, but stays in the database until removed by hand.
+   _schedulable_, but stays in the database until removed by hand.
 
 Imported jobs show a small **SM** badge in the UI so it's clear which ones came from SmartMoving
 vs. were entered by hand. From the scheduler, Admin → Trucks & Drivers → SmartMoving Sync panel →
@@ -199,6 +222,7 @@ an `x-webhook-secret` header and a `secret` query param. Requires Premium tier (
 available on this account as of 2026-08-05).
 
 Test the receiver without waiting on SmartMoving:
+
 ```bash
 node test-webhook.js http://localhost:8787 <opportunityId> job-created
 # or against the mock server's sample direct-booking job:
@@ -254,7 +278,7 @@ access before it can ever sign in, same as before.
 into Node — no `bcrypt` package needed), salted per account, before anything touches the database.
 
 **There's no admin-set temp password.** A brand new account (created by an admin with just an email
-and role) starts with no password at all, and the *only* way to set one — for a new account or one
+and role) starts with no password at all, and the _only_ way to set one — for a new account or one
 that's actually locked out — is the same self-service flow: click "Forgot password?" on the login
 screen, get a 6-digit code emailed to that address (valid 10 minutes, single-use), and submit it
 along with a new password. This means the same code path covers both "first time signing in" and
@@ -319,6 +343,7 @@ Users panel flags any account that hasn't done this yet with a "NO PASSWORD YET"
 access to a new address or changes an existing one's role (and password, if you give one). Useful
 for the very first admin, for adding a second admin, or for recovering access without waiting on
 email delivery:
+
 ```bash
 node create-admin.js csr4@aroundtownmovers.com admin
 node create-admin.js csr4@aroundtownmovers.com admin "a strong temp password"
@@ -333,7 +358,7 @@ node create-admin.js csr4@aroundtownmovers.com admin "a strong temp password"
 
 **Sessions** are a signed httpOnly cookie (`atm_session`), not a database table — after a successful
 login (or password reset), this backend signs its own token containing just the user's id and an
-expiry (7 days); every request re-reads that user's *current* role from the database, so changing
+expiry (7 days); every request re-reads that user's _current_ role from the database, so changing
 someone's role (or removing their access) takes effect on their very next request rather than
 waiting out their existing session. Restarting the server without a stable `SESSION_SECRET`
 invalidates every session at once (see the table below) — that's a deliberate simplicity tradeoff,
@@ -359,29 +384,29 @@ can't recover a usable code, same idea as the password hashing above.
 
 Environment variables (set in `.env`, or via your hosting platform):
 
-| Variable | Default | Notes |
-|---|---|---|
-| `SMARTMOVING_API_KEY` | — | Optional — only needed for CRM sync. Never put this in the frontend. |
-| `WEBHOOK_SECRET` | — (disabled) | Verifies incoming webhook POSTs. Set before exposing the backend publicly. |
-| `POLL_INTERVAL_MINUTES` | `15` | Fallback sweep frequency. `0` disables it — webhook-only, not recommended. |
-| `POLL_LOOKBACK_DAYS` | `7` | How far back the poll sweep's date window starts. |
-| `POLL_LOOKAHEAD_DAYS` | `60` | How far forward the poll sweep's date window extends. |
-| `SMARTMOVING_BASE_URL` | `https://api-public.smartmoving.com/v1` | Override to point at the mock server for testing. |
-| `SMARTMOVING_MIN_REQUEST_INTERVAL_MS` | `350` | Minimum gap between consecutive SmartMoving API calls. Raise this if you have a large fleet/branch (many crew members, many opportunities) and still see `429` errors in the sync summary despite the built-in retry — see "Rate limits" below. |
-| `PORT` | `8787` | Port the backend listens on. Set this to whatever port your AWS App Runner service is configured to send traffic to. |
-| `FIREBASE_PROJECT_ID` | — | The Firebase/GCP project the Firestore data lives in (`atm-scheduler`). Always required on AWS — unlike Cloud Run, App Runner has no GCP environment to infer this from. |
-| `FIREBASE_SERVICE_ACCOUNT_JSON` | — | The full contents of a downloaded service account key, as one JSON string — how the backend authenticates to Firestore on AWS (no built-in GCP identity there). Set via an App Runner secret, not a plain env var — see "AWS deployment" below and `server/firestore.js`'s header comment. |
-| `GOOGLE_APPLICATION_CREDENTIALS` | — | Path to a downloaded service account JSON key **file**. Local-dev-only alternative to `FIREBASE_SERVICE_ACCOUNT_JSON` (a file path is more convenient than a JSON string on a laptop) — see `server/firestore.js`'s header comment. Never commit that file. |
-| `FIRESTORE_EMULATOR_HOST` | — | Set to `localhost:8080` (or wherever `firebase emulators:start --only firestore` is listening) to develop locally without touching real data. |
-| `SMTP_USER` / `SMTP_PASS` | — | The mailbox that sends the forgot-password/first-time-setup one-time code (see "Login & accounts" → "One-time setup: email delivery"). Without these, that flow's emails silently don't go out. |
-| `SMTP_HOST` / `SMTP_PORT` | `smtp.gmail.com` / `465` | Override for a different mailbox, e.g. Microsoft 365 (`smtp.office365.com` / `587` — see the tenant SMTP AUTH caveat above). |
-| `SMTP_FROM` | `SMTP_USER` | Override only if the mailbox has "send as" delegation set up for a different address. |
-| `ADMIN_EMAIL` | — | Only used to grant the very first admin account (see "Login & accounts"). |
-| `ADMIN_PASSWORD` | — | Optional — lets the first admin sign in immediately instead of waiting on email delivery. Only consulted alongside `ADMIN_EMAIL` while zero accounts exist. |
-| `FRONTEND_URL` | `http://localhost:5173` | Where the browser gets sent back to after using the dev-login bypass (a full-page redirect, unlike the regular fetch-based login). |
-| `SESSION_SECRET` | random, regenerated each restart | Signs session cookies and one-time codes. Set this to a stable random string, or every restart logs everyone out (and invalidates any outstanding reset code). Generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. |
-| `COOKIE_SECURE` | unset | Set to `true` once served over HTTPS, to add the `Secure` flag to the session cookie. Leave unset for local `http://` development. |
-| `DEV_BYPASS_LOGIN` | unset | Local dev only — see "Working on the app without email configured." Never set on a publicly reachable server. |
+| Variable                              | Default                                 | Notes                                                                                                                                                                                                                                                                                      |
+| ------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `SMARTMOVING_API_KEY`                 | —                                       | Optional — only needed for CRM sync. Never put this in the frontend.                                                                                                                                                                                                                       |
+| `WEBHOOK_SECRET`                      | — (disabled)                            | Verifies incoming webhook POSTs. Set before exposing the backend publicly.                                                                                                                                                                                                                 |
+| `POLL_INTERVAL_MINUTES`               | `15`                                    | Fallback sweep frequency. `0` disables it — webhook-only, not recommended.                                                                                                                                                                                                                 |
+| `POLL_LOOKBACK_DAYS`                  | `7`                                     | How far back the poll sweep's date window starts.                                                                                                                                                                                                                                          |
+| `POLL_LOOKAHEAD_DAYS`                 | `60`                                    | How far forward the poll sweep's date window extends.                                                                                                                                                                                                                                      |
+| `SMARTMOVING_BASE_URL`                | `https://api-public.smartmoving.com/v1` | Override to point at the mock server for testing.                                                                                                                                                                                                                                          |
+| `SMARTMOVING_MIN_REQUEST_INTERVAL_MS` | `350`                                   | Minimum gap between consecutive SmartMoving API calls. Raise this if you have a large fleet/branch (many crew members, many opportunities) and still see `429` errors in the sync summary despite the built-in retry — see "Rate limits" below.                                            |
+| `PORT`                                | `8787`                                  | Port the backend listens on. Set this to whatever port your AWS App Runner service is configured to send traffic to.                                                                                                                                                                       |
+| `FIREBASE_PROJECT_ID`                 | —                                       | The Firebase/GCP project the Firestore data lives in (`atm-scheduler`). Always required on AWS — unlike Cloud Run, App Runner has no GCP environment to infer this from.                                                                                                                   |
+| `FIREBASE_SERVICE_ACCOUNT_JSON`       | —                                       | The full contents of a downloaded service account key, as one JSON string — how the backend authenticates to Firestore on AWS (no built-in GCP identity there). Set via an App Runner secret, not a plain env var — see "AWS deployment" below and `server/firestore.js`'s header comment. |
+| `GOOGLE_APPLICATION_CREDENTIALS`      | —                                       | Path to a downloaded service account JSON key **file**. Local-dev-only alternative to `FIREBASE_SERVICE_ACCOUNT_JSON` (a file path is more convenient than a JSON string on a laptop) — see `server/firestore.js`'s header comment. Never commit that file.                                |
+| `FIRESTORE_EMULATOR_HOST`             | —                                       | Set to `localhost:8080` (or wherever `firebase emulators:start --only firestore` is listening) to develop locally without touching real data.                                                                                                                                              |
+| `SMTP_USER` / `SMTP_PASS`             | —                                       | The mailbox that sends the forgot-password/first-time-setup one-time code (see "Login & accounts" → "One-time setup: email delivery"). Without these, that flow's emails silently don't go out.                                                                                            |
+| `SMTP_HOST` / `SMTP_PORT`             | `smtp.gmail.com` / `465`                | Override for a different mailbox, e.g. Microsoft 365 (`smtp.office365.com` / `587` — see the tenant SMTP AUTH caveat above).                                                                                                                                                               |
+| `SMTP_FROM`                           | `SMTP_USER`                             | Override only if the mailbox has "send as" delegation set up for a different address.                                                                                                                                                                                                      |
+| `ADMIN_EMAIL`                         | —                                       | Only used to grant the very first admin account (see "Login & accounts").                                                                                                                                                                                                                  |
+| `ADMIN_PASSWORD`                      | —                                       | Optional — lets the first admin sign in immediately instead of waiting on email delivery. Only consulted alongside `ADMIN_EMAIL` while zero accounts exist.                                                                                                                                |
+| `FRONTEND_URL`                        | `http://localhost:5173`                 | Where the browser gets sent back to after using the dev-login bypass (a full-page redirect, unlike the regular fetch-based login).                                                                                                                                                         |
+| `SESSION_SECRET`                      | random, regenerated each restart        | Signs session cookies and one-time codes. Set this to a stable random string, or every restart logs everyone out (and invalidates any outstanding reset code). Generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.                               |
+| `COOKIE_SECURE`                       | unset                                   | Set to `true` once served over HTTPS, to add the `Secure` flag to the session cookie. Leave unset for local `http://` development.                                                                                                                                                         |
+| `DEV_BYPASS_LOGIN`                    | unset                                   | Local dev only — see "Working on the app without email configured." Never set on a publicly reachable server.                                                                                                                                                                              |
 
 The scheduler picks up the backend URL from a `?api=` query parameter. In local dev (`npm run
 dev`, frontend and backend as two separate processes/ports) it falls back to
@@ -472,18 +497,18 @@ reference): Source = "Container registry" → pick the `atm-scheduler` ECR repo/
 `8787` (matches the Dockerfile's `EXPOSE`/`server.js`'s default). Under environment variables and
 secrets:
 
-| Name | Value | Type |
-|---|---|---|
-| `FIREBASE_PROJECT_ID` | `atm-scheduler` | plain env var |
-| `FIREBASE_SERVICE_ACCOUNT_JSON` | `atm-scheduler/firebase-key` | secret (from Secrets Manager) |
-| `SESSION_SECRET` | `atm-scheduler/session-secret` | secret |
-| `SMTP_PASS` | `atm-scheduler/smtp-pass` | secret |
-| `SMARTMOVING_API_KEY` | `atm-scheduler/smartmoving-api-key` | secret |
-| `WEBHOOK_SECRET` | `atm-scheduler/webhook-secret` | secret |
-| `ADMIN_EMAIL` | your email | plain env var — grants the first admin, see "Login & accounts" |
-| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` | `smtp.gmail.com` / `465` / your sending address | plain env vars |
-| `POLL_LOOKBACK_DAYS` / `POLL_LOOKAHEAD_DAYS` | `7` / `30` | plain env vars |
-| `COOKIE_SECURE` | `true` | plain env var — App Runner is HTTPS-only, so this should always be `true` |
+| Name                                         | Value                                           | Type                                                                      |
+| -------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------- |
+| `FIREBASE_PROJECT_ID`                        | `atm-scheduler`                                 | plain env var                                                             |
+| `FIREBASE_SERVICE_ACCOUNT_JSON`              | `atm-scheduler/firebase-key`                    | secret (from Secrets Manager)                                             |
+| `SESSION_SECRET`                             | `atm-scheduler/session-secret`                  | secret                                                                    |
+| `SMTP_PASS`                                  | `atm-scheduler/smtp-pass`                       | secret                                                                    |
+| `SMARTMOVING_API_KEY`                        | `atm-scheduler/smartmoving-api-key`             | secret                                                                    |
+| `WEBHOOK_SECRET`                             | `atm-scheduler/webhook-secret`                  | secret                                                                    |
+| `ADMIN_EMAIL`                                | your email                                      | plain env var — grants the first admin, see "Login & accounts"            |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER`      | `smtp.gmail.com` / `465` / your sending address | plain env vars                                                            |
+| `POLL_LOOKBACK_DAYS` / `POLL_LOOKAHEAD_DAYS` | `7` / `30`                                      | plain env vars                                                            |
+| `COOKIE_SECURE`                              | `true`                                          | plain env var — App Runner is HTTPS-only, so this should always be `true` |
 
 Under "Auto scaling," set **minimum size to 1** — App Runner can otherwise scale a service to zero
 between requests, which would silently stop the SmartMoving poll-sweep timer (the same
@@ -500,6 +525,7 @@ running (a custom domain can be attached later under "Custom domains" if you hav
 whichever machine still has the real `server/data/atm.db` file on it (this uses
 `GOOGLE_APPLICATION_CREDENTIALS` pointing at a **local copy** of the same downloaded key file,
 since that's more convenient than pasting JSON into an env var on a laptop):
+
 ```
 cd server
 GOOGLE_APPLICATION_CREDENTIALS=/path/to/the-downloaded-key.json FIREBASE_PROJECT_ID=atm-scheduler \
@@ -515,10 +541,12 @@ serving both the frontend and the API, and that it can reach Firestore.
 
 Grant the team's actual accounts once it's live, from your own machine (same
 `GOOGLE_APPLICATION_CREDENTIALS`/`FIREBASE_PROJECT_ID` as the migration step above):
+
 ```
 node create-admin.js dispatcher1@aroundtownmovers.com dispatcher
 node create-admin.js crewlead1@aroundtownmovers.com crew
 ```
+
 Each person then uses "Forgot password?" on the login screen to set their own password via an
 emailed one-time code — see "Login & accounts" above.
 
@@ -554,3 +582,7 @@ deployments" on the service so a new image push redeploys on its own.
   available on the opportunity.
 - ~~Jobs booked directly (not via a lead) were invisible to the sync~~ — fixed by the webhook path
   described above.
+
+### Weekly Google Authorization
+
+- Every week google should be authorised using this command: "$env:GOOGLE_APPLICATION_CREDENTIALS="../atm-scheduler-firebase-adminsdk-fbsvc-5a61cc7d23.json"; npm run gmail-auth" followed by "firebase deploy --only functions --project atm-scheduler" to make the atm-scheduler running without any disturbances as we are using the google test mode for this project.

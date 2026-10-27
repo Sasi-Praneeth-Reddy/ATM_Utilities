@@ -1037,15 +1037,14 @@ async function handleRequest(req, res) {
     if (req.method === 'OPTIONS') { sendJson(req, res, 204, {}); return; }
 
     if (p === '/api/health') {
-      const state = await db.getState();
-      const users = await db.listUsers();
+      const counts = await db.getCounts(); // count() aggregation — this endpoint is public, so no full reads
       sendJson(req, res, 200, {
         ok: true,
         hasApiKey: Boolean(process.env.SMARTMOVING_API_KEY),
         webhookSecretConfigured: Boolean(WEBHOOK_SECRET),
         pollIntervalMinutes: POLL_INTERVAL_MINUTES,
-        truckCount: state.trucks.length, driverCount: state.drivers.length, jobCount: state.jobs.length,
-        userCount: users.length,
+        truckCount: counts.trucks, driverCount: counts.drivers, jobCount: counts.jobs,
+        userCount: counts.users,
         dataStore: 'firestore',
         hasIcalUrl: Boolean(process.env.SMARTMOVING_ICAL_URL),
         hasCalendarSync: Boolean(process.env.GMAIL_OAUTH_REFRESH_TOKEN),
@@ -1290,13 +1289,20 @@ async function handleRequest(req, res) {
     /* ---- Scheduler data API ---- */
 
     if (p === '/api/state' && req.method === 'GET') {
-      sendJson(req, res, 200, await db.getState());
+      // ?since=<version> -> 1-read "no change" reply when nothing was written (see db.getStateIfChanged).
+      // No `since` (old clients, first load, periodic full refresh) -> full state as before, plus `version`.
+      const sinceParam = url.searchParams.get('since');
+      const since = sinceParam !== null && sinceParam !== '' && Number.isFinite(Number(sinceParam)) ? Number(sinceParam) : null;
+      sendJson(req, res, 200, await db.getStateIfChanged(since));
       return;
     }
 
+    // DISABLED 2026-09-30 (user request): the app runs on real production data now, so wiping every
+    // truck/driver/job back to sample data must not be reachable at all — the UI button was removed
+    // too. db.resetToSampleData() is left in db.js (unused) in case a dev/emulator setup needs it.
     if (p === '/api/reset-to-sample-data' && req.method === 'POST') {
       requireRole(currentUser, ['admin']);
-      sendJson(req, res, 200, await db.resetToSampleData());
+      sendJson(req, res, 410, { error: 'Reset to sample data is disabled on this deployment.' });
       return;
     }
 

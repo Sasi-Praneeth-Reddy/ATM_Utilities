@@ -162,6 +162,48 @@ async function getState() {
   return { trucks, drivers, jobs };
 }
 
+/* ---------- Change-version (added 2026-10-26) ----------
+ * One tiny doc, system/dataVersion, holds a counter that every board-data write bumps (see the
+ * wrapper at the bottom of this file — every write function in module.exports is wrapped, so no
+ * write path can forget). The browser polls /api/state?since=<version>; getStateIfChanged() reads
+ * just this one doc (1 Firestore read) and only does the full trucks+drivers+jobs read when the
+ * counter has actually moved. The version is read BEFORE the data, so a write landing in between
+ * can only make the client refetch once more (harmless), never miss a change. */
+const dataVersionRef = systemCol.doc('dataVersion');
+
+async function getDataVersion() {
+  const doc = await dataVersionRef.get();
+  return doc.exists ? Number(doc.data().version) || 0 : 0;
+}
+
+async function bumpDataVersion() {
+  try {
+    await dataVersionRef.set({ version: FieldValue.increment(1), updatedAt: new Date().toISOString() }, { merge: true });
+  } catch (err) {
+    // Never fail the real write because the bookkeeping doc failed — clients' periodic full
+    // refresh (see useSchedulerData.js) is the safety net for a missed bump.
+    console.error('bumpDataVersion failed:', err.message);
+  }
+}
+
+/** since === undefined/null -> always the full state (old clients, first load). Otherwise returns
+ * { changed: false, version } for 1 read when nothing moved, or { changed: true, version, ...state }. */
+async function getStateIfChanged(since) {
+  const version = await getDataVersion();
+  if (since !== undefined && since !== null && Number(since) === version) {
+    return { changed: false, version };
+  }
+  return { changed: true, version, ...(await getState()) };
+}
+
+/** Document counts via count() aggregation (~1 read per 1,000 docs) — for /api/health, which is public
+ * and must never read whole collections. null = count unavailable. */
+async function getCounts() {
+  const c = async (col) => { try { return (await col.count().get()).data().count; } catch (e) { return null; } };
+  const [trucks, drivers, jobs, users] = await Promise.all([c(trucksCol), c(driversCol), c(jobsCol), c(usersCol)]);
+  return { trucks, drivers, jobs, users };
+}
+
 async function getJob(id) {
   const doc = await jobsCol.doc(id).get();
   return docToJob(doc);
@@ -1415,9 +1457,28 @@ async function listSmartMovingJobsInRange(fromIso, toIso) {
   return snap.docs.map(docToJob).filter(j => j && j.smartMovingOpportunityId);
 }
 
-module.exports = {
+/* Every function below changes board data (trucks/drivers/jobs), so each is wrapped to bump the
+ * change-version after it runs (in `finally`, so a partially-applied write still invalidates).
+ * Deliberately NOT wrapped: initDb (runs every cold start), history/audit logging, users, the
+ * deleted-jobs archive and Gmail auth — none of those appear in /api/state. */
+const WRITERS = [
+  'createTruck', 'updateTruck', 'deleteTruck', 'reorderTrucks',
+  'createDriver', 'updateDriver', 'deleteDriver',
+  'createJob', 'updateJob', 'deleteJob', 'restoreJob', 'setJobTrucks', 'setJobTruckDriver', 'setJobColor',
+  'upsertSmartMovingJob', 'upsertSmartInsightsJob', 'removeLostSmartInsightsJob',
+  'fillAssignmentIfEmpty', 'mergeCalendarDataOntoExistingJob',
+  'markJobManuallyEdited', 'markTruckAssignmentManual', 'clearJobManualEdit',
+  'resetToSampleData', 'clearJobs',
+];
+function withVersionBump(fn) {
+  return async function (...args) {
+    try { return await fn.apply(this, args); } finally { await bumpDataVersion(); }
+  };
+}
+
+const exported = {
   initDb,
-  getState, getJob,
+  getState, getStateIfChanged, getDataVersion, getCounts, getJob,
   createTruck, updateTruck, deleteTruck, reorderTrucks,
   findTruckIdBySmartMovingLabel, findDriverIdBySmartMovingLabel,
   createDriver, updateDriver, deleteDriver,
@@ -1432,3 +1493,8 @@ module.exports = {
   getGmailAuthStatus, setGmailAuthRefreshed,
   listSmartMovingJobsInRange,
 };
+for (const name of WRITERS) {
+  if (typeof exported[name] !== 'function') throw new Error(`db.js WRITERS lists unknown export ${name}`);
+  exported[name] = withVersionBump(exported[name]);
+}
+module.exports = exported;

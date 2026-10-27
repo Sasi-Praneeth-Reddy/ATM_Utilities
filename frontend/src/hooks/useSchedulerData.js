@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiCall } from '../api';
 import { addDays, daysBetween } from '../utils/dates';
 import { fieldsTripManualEditLock, fieldsTripTruckLock } from '../utils/jobs';
@@ -123,6 +123,11 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
   // load/reload before the first response arrived. App.jsx shows a loading animation instead while
   // this is true, and BackendBanner only renders once it's false.
   const [initialLoading, setInitialLoading] = useState(true);
+  // Server data-version we last received (added 2026-10-26). Polls send it as /api/state?since=N and
+  // the server answers { changed: false } for ~1 Firestore read when nothing was written, instead of
+  // re-reading and re-sending every truck/driver/job. null = no version yet -> ask for the full state.
+  const stateVersionRef = useRef(null);
+  const lastFullLoadAtRef = useRef(0);
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
   const [syncStatus, setSyncStatus] = useState({ loading: false, message: '', error: null });
   const [smartInsightsSyncStatus, setSmartInsightsSyncStatus] = useState({ loading: false, message: '', error: null });
@@ -158,6 +163,8 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
   const loadStateFromServer = useCallback(async () => {
     try {
       const state = await call('GET', '/api/state');
+      stateVersionRef.current = state.version ?? null;
+      lastFullLoadAtRef.current = Date.now();
       setTrucks(state.trucks);
       setDrivers(state.drivers);
       setJobs(state.jobs);
@@ -236,6 +243,7 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
   useEffect(() => {
     if (!enabled) return;
 
+    const FULL_REFRESH_MS = 10 * 60 * 1000; // force a full reload at least this often
     const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes of no interaction counts as "not using it"
     let lastActivityAt = Date.now();
     // Background polls only flag the backend as unreachable after 2 failures in a row, so a single
@@ -247,11 +255,17 @@ export function useSchedulerData(backendUrl, { enabled = true, onAuthError } = {
 
     async function pollOnce() {
       try {
-        const state = await call('GET', '/api/state');
+        // Cheap "anything new?" check unless we have no version yet or it's been FULL_REFRESH_MS
+        // since the last full load (safety net against a missed server-side version bump).
+        const needFull = stateVersionRef.current === null || Date.now() - lastFullLoadAtRef.current >= FULL_REFRESH_MS;
+        const state = await call('GET', needFull ? '/api/state' : `/api/state?since=${stateVersionRef.current}`);
         consecutivePollFailures = 0;
         setBackendConnected(true);
         setBackendErrorMsg('');
         setLastSyncedAt(new Date());
+        if (state.changed === false) return; // nothing was written since our last load
+        stateVersionRef.current = state.version ?? null;
+        lastFullLoadAtRef.current = Date.now();
         setTrucks((prev) => (sameJSON(prev, state.trucks) ? prev : state.trucks));
         setDrivers((prev) => (sameJSON(prev, state.drivers) ? prev : state.drivers));
         setJobs((prev) => (sameJSON(prev, state.jobs) ? prev : state.jobs));

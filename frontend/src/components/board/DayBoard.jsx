@@ -268,6 +268,26 @@ export default function DayBoard({
     el.scrollLeft = Math.max(0, targetScrollLeft);
   }, [date]);
 
+  // Publishes the truck-column width and the visible hours-area width as CSS vars on .timeline so a
+  // long-distance/multi-day bar's label (styles.css `.job-block.ld .jb-line-wrap`, position:sticky)
+  // pins just right of the truck column and is only as wide as what's on screen. Measured, not
+  // hardcoded, since the truck column narrows at mobile widths. Re-measured on resize.
+  useEffect(() => {
+    const el = timelineRef.current;
+    if (!el) return undefined;
+    const update = () => {
+      const truckColEl = el.querySelector('.truck-col-spacer');
+      const colW = truckColEl ? truckColEl.getBoundingClientRect().width : 160;
+      el.style.setProperty('--tl-sticky-left', `${colW}px`);
+      el.style.setProperty('--tl-visible-w', `${Math.max(120, el.clientWidth - colW - 12)}px`);
+    };
+    update();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   // Unassigned jobs only show in the tray on their OWN start date — a long-distance job starting
   // 7/31 shouldn't appear as "unassigned" on 8/1, 8/2, etc. just because it's still in transit;
   // it only needs picking up once, on the day it starts. (Once it's actually assigned to a truck,
