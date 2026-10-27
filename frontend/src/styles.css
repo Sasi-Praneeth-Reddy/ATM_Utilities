@@ -2,6 +2,7 @@
   /* Brand surfaces — deliberately NOT overridden in dark mode (header/nav/crew-header are already
      dark surfaces with white text, so they read fine either way). */
   --navy:#152a4e; --navy2:#1e3a66; --orange:#ff6b35; --orange-dk:#e0551f;
+  --accent:#1f5fd6; --sidebar-w:232px; --sidebar-w-collapsed:68px; --topbar-h:56px;
 
   /* Page/card surfaces — these DO switch in dark mode. */
   --bg:#f4f6fa; --card:#ffffff; --card-alt:#f4f6fa; --card-alt-2:#eef1f8;
@@ -65,6 +66,7 @@
 }
 
 :root[data-theme='dark']{
+  --accent:#6b9bf5;
   --bg:#0f1420; --card:#161d2e; --card-alt:#1b2334; --card-alt-2:#212a3f;
   --border:#2a3448; --text:#e4e9f5; --muted:#8993ab;
   --heading:#e4ebfb;
@@ -1048,7 +1050,8 @@ select, input[type=text]{padding:6px 8px;border:1px solid var(--border);border-r
    identical to it not existing at all — so it costs nothing outside of @media print below, where
    it's what makes hiding the whole app for printing a single, reliable rule instead of the fragile
    visibility-based one this replaced. */
-.app-shell{display:contents;}
+/* CRM shell: sidebar + main column. (Was display:contents before the sidebar existed.) */
+.app-shell{display:flex;align-items:flex-start;min-height:100vh;}
 
 /* PRINT — day view's "🖨 Print" button prints a clean manifest (DayPrintSheet.jsx) instead of the
    interactive drag-and-drop timeline, which relies on absolute positioning and hover-only controls
@@ -1437,3 +1440,60 @@ col.pt-col-truck{width:calc(150px * var(--pt-scale, 1));}
 .admin-scroll::-webkit-scrollbar-thumb:hover{background:var(--muted);}
 .admin-scroll > .admin-card:last-child{margin-bottom:0;}
 @media (max-width:720px){ .admin-scroll{max-height:70vh;} }
+
+
+/* ================= CRM shell (sidebar + top bar + tab strip) ================= */
+.shell-sidebar{position:sticky;top:0;align-self:flex-start;height:100vh;width:var(--sidebar-w);flex:none;box-sizing:border-box;background:var(--card);border-right:1px solid var(--border);display:flex;flex-direction:column;gap:20px;padding:16px 12px;overflow-y:auto;overflow-x:hidden;z-index:1001;transition:width .18s ease;}
+.shell-sidebar.collapsed{width:var(--sidebar-w-collapsed);}
+.shell-brand{display:flex;align-items:center;gap:12px;padding:4px 6px;min-height:36px;}
+.shell-logo{width:36px;height:36px;border-radius:10px;background:var(--accent);color:#fff;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;flex:none;cursor:pointer;user-select:none;}
+.shell-brand-name{font-size:14px;font-weight:600;color:var(--heading);line-height:1.25;white-space:nowrap;}
+.shell-brand-sub{font-size:12px;color:var(--muted);}
+.shell-modules{display:flex;flex-direction:column;gap:4px;}
+.shell-item{position:relative;display:flex;align-items:center;gap:12px;min-height:44px;padding:10px 12px;box-sizing:border-box;border:none;border-radius:10px;background:transparent;color:var(--muted);font-size:14px;font-weight:500;cursor:pointer;text-align:left;white-space:nowrap;transition:background-color .12s ease,color .12s ease;}
+.shell-item:hover{background:var(--card-alt);color:var(--text);}
+.shell-item:focus-visible,.topbar-icon-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+.shell-item.active{background:color-mix(in srgb,var(--accent) 12%,var(--card));color:var(--heading);font-weight:600;}
+.shell-item.active svg{color:var(--accent);}
+.shell-soon{margin-left:auto;font-size:10px;font-weight:600;letter-spacing:.3px;text-transform:uppercase;color:var(--muted);background:var(--card-alt-2);border-radius:999px;padding:2px 7px;}
+.shell-item .nav-alert-dot{position:absolute;top:10px;left:28px;}
+.shell-sidebar.collapsed .shell-brand-text,.shell-sidebar.collapsed .shell-label,.shell-sidebar.collapsed .shell-soon{display:none;}
+.shell-sidebar.collapsed .shell-brand,.shell-sidebar.collapsed .shell-item{justify-content:center;padding-left:0;padding-right:0;}
+.shell-backdrop{display:none;}
+
+.shell-main{flex:1 1 0;min-width:0;display:flex;flex-direction:column;}
+header.topbar{background:var(--card);color:var(--text);border-bottom:1px solid var(--border);box-shadow:none;padding:0 20px;min-height:var(--topbar-h);height:var(--topbar-h);box-sizing:border-box;justify-content:flex-start;flex-wrap:nowrap;gap:14px;position:sticky;top:0;z-index:1000;}
+.topbar-icon-btn{width:40px;height:40px;flex:none;border:1px solid var(--border);background:var(--card);color:var(--muted);border-radius:10px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;}
+.topbar-icon-btn:hover{background:var(--card-alt);color:var(--text);}
+.crumbs{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--muted);white-space:nowrap;}
+.crumbs strong{color:var(--heading);font-weight:600;}
+header.topbar .job-search{margin-left:12px;}
+header.topbar .role-switch{margin-left:auto;color:var(--muted);flex-wrap:nowrap;}
+header.topbar .role-switch select{background:var(--card-alt);color:var(--text);border:1px solid var(--border);}
+header.topbar .theme-toggle{background:var(--card-alt);color:var(--text);border:1px solid var(--border);}
+
+nav.tabstrip{background:var(--card);border-bottom:1px solid var(--border);padding:0 20px;gap:2px;top:var(--topbar-h);z-index:999;}
+nav.tabstrip:empty{display:none;}
+nav.tabstrip button{color:var(--muted);padding:12px 14px;}
+nav.tabstrip button:hover:not(:disabled){color:var(--text);}
+nav.tabstrip button.active{color:var(--heading);border-bottom-color:var(--accent);}
+nav.tabstrip .nav-alert-dot{box-shadow:0 0 0 2px var(--card);}
+
+.coming-soon{display:flex;flex-direction:column;align-items:center;text-align:center;gap:10px;padding:90px 20px;color:var(--muted);}
+.coming-soon-icon{width:60px;height:60px;border-radius:16px;background:color-mix(in srgb,var(--accent) 12%,var(--card));color:var(--accent);display:flex;align-items:center;justify-content:center;}
+.coming-soon h2{margin:6px 0 0;font-size:22px;color:var(--heading);}
+.coming-soon p{margin:0;font-size:14px;max-width:360px;}
+
+@media (max-width:1100px){ .topbar-user{display:none;} }
+@media (max-width:720px){
+  .shell-sidebar{position:fixed;left:0;top:0;width:min(260px,80vw);box-shadow:var(--shadow-md);}
+  .shell-sidebar.collapsed{transform:translateX(-100%);width:min(260px,80vw);box-shadow:none;}
+  .shell-sidebar.collapsed .shell-brand-text,.shell-sidebar.collapsed .shell-label{display:initial;}
+  .shell-sidebar.collapsed .shell-soon{display:inline;}
+  .shell-sidebar.collapsed .shell-brand,.shell-sidebar.collapsed .shell-item{justify-content:flex-start;padding-left:12px;padding-right:12px;}
+  .shell-backdrop{display:block;position:fixed;inset:0;background:rgba(15,20,32,.45);z-index:1000;}
+  .crumbs span:first-child{display:none;}
+  .crumbs span[aria-hidden]{display:none;}
+  header.topbar{padding:0 12px;gap:8px;}
+  header.topbar .job-search{min-width:0;margin-left:0;}
+}

@@ -7,6 +7,9 @@ import { getConflicts, conflictIdsFrom, getPlaceholderDuplicates, roleLabels } f
 import { todayStr } from './utils/dates';
 import Header from './components/Header';
 import Nav from './components/Nav';
+import Sidebar from './components/shell/Sidebar';
+import ComingSoon from './components/shell/ComingSoon';
+import { MODULES, TAB_LABELS, tabsFor, moduleOfTab } from './components/shell/modules';
 import BackendBanner from './components/BackendBanner';
 import LoadingScreen from './components/LoadingScreen';
 import GmailAuthBanner, { isGmailAuthAlert } from './components/GmailAuthBanner';
@@ -52,15 +55,19 @@ export default function App() {
   const { trucks, drivers, jobs } = data;
 
   const [activeTab, setActiveTab] = useState('board');
-  const [activeModule, setActiveModule] = useState('scheduler'); // 'scheduler' | 'market'
+  // CRM shell: the sidebar picks a module, the module's tab strip picks a page. The active module is
+  // derived from the active tab (so e.g. a job-search jump to the Board switches module on its own);
+  // "coming soon" modules have no tab, so they're tracked separately in soonModule.
+  const [soonModule, setSoonModule] = useState(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => (typeof window !== 'undefined' ? window.innerWidth < 1000 : false));
+  const activeMod = soonModule || moduleOfTab(activeTab, role) || MODULES.find((m) => m.id === 'dispatch');
 
   function handleSelectModule(mod) {
-    setActiveModule(mod);
-    if (mod === 'market') {
-      setActiveTab('leads');
-    } else {
-      setActiveTab(role === 'crew' ? 'crew' : 'board');
-    }
+    if (typeof window !== 'undefined' && window.innerWidth <= 720) setSidebarCollapsed(true);
+    if (mod.soon) { setSoonModule(mod); return; }
+    setSoonModule(null);
+    const tabs = tabsFor(mod, role);
+    if (tabs.length) setActiveTab(tabs.includes(activeTab) ? activeTab : tabs[0]);
   }
   const [currentCrewTruck, setCurrentCrewTruck] = useState('T1');
   const [boardMode, setBoardMode] = useState('day');
@@ -88,6 +95,7 @@ export default function App() {
   }, [highlightedJobId]);
 
   function handleJumpToJob(job) {
+    setSoonModule(null);
     setActiveTab('board');
     setBoardMode('day');
     setBoardDate(job.date);
@@ -108,6 +116,7 @@ export default function App() {
   // Land on that role's default tab once we know who's logged in (or right after logging in).
   useEffect(() => {
     if (!role) return;
+    setSoonModule(null);
     setActiveTab(role === 'crew' ? 'crew' : 'board');
   }, [role]);
 
@@ -183,6 +192,17 @@ export default function App() {
           this div adds no box of its own and changes nothing about the on-screen layout — it exists
           purely so @media print has one simple thing to hide (see styles.css). */}
       <div className="app-shell">
+      <Sidebar
+        role={role}
+        activeModuleId={activeMod.id}
+        onSelectModule={handleSelectModule}
+        collapsed={sidebarCollapsed}
+        onToggle={() => setSidebarCollapsed((c) => !c)}
+        onOpenDeletedJobs={role === 'admin' ? () => setShowDeletedJobs(true) : undefined}
+        alertModules={role === 'admin' && isGmailAuthAlert(data.gmailAuthStatus)
+          ? { dispatch: 'Gmail authorization is expiring or expired — see Job Assignments' } : {}}
+      />
+      <div className="shell-main">
       <Header
         user={user}
         role={role}
@@ -194,21 +214,18 @@ export default function App() {
         onCrewTruckChange={setCurrentCrewTruck}
         theme={theme}
         onToggleTheme={toggleTheme}
-        onOpenDeletedJobs={role === 'admin' ? () => setShowDeletedJobs(true) : undefined}
-        activeModule={activeModule}
-        onSelectModule={handleSelectModule}
+        onToggleSidebar={() => setSidebarCollapsed((c) => !c)}
+        moduleLabel={activeMod.label}
+        tabLabel={soonModule ? null : TAB_LABELS[activeTab]}
       />
       <Nav
-        role={role} activeTab={activeTab} onTabChange={setActiveTab}
-        activeModule={activeModule}
+        tabIds={soonModule ? [] : tabsFor(activeMod, role)}
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
         alertTabs={role === 'admin' && isGmailAuthAlert(data.gmailAuthStatus)
           ? { assignments: 'Gmail authorization is expiring or expired — see Job Assignments' } : {}}
       />
-      {/* Board tab (the truck timeline, now a full 24-hour day) needs real width — capping it at
-          the same 1400px reading width as the admin forms just left empty space on both sides of
-          a wide monitor while still forcing the timeline to scroll horizontally. Other tabs keep
-          the narrower, more readable width. */}
-      <main className={activeTab === 'board' || activeTab === 'ld' ? 'board-main' : ''}>
+      <main className={!soonModule && (activeTab === 'board' || activeTab === 'ld') ? 'board-main' : ''}>
         <BackendBanner
           backendConnected={data.backendConnected}
           backendErrorMsg={data.backendErrorMsg}
@@ -219,7 +236,9 @@ export default function App() {
         {role === 'admin' && activeTab === 'assignments' && <GmailAuthBanner status={data.gmailAuthStatus} />}
         {showRoleHint && <div className="hint">{roleLabels[role]}</div>}
 
-        {activeTab === 'board' && (
+        {soonModule && <ComingSoon module={soonModule} />}
+
+        {!soonModule && activeTab === 'board' && (
           <BoardTab
             role={role}
             boardMode={boardMode} setBoardMode={setBoardMode}
@@ -247,7 +266,7 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'ld' && (
+        {!soonModule && activeTab === 'ld' && (
           <LDPlanner
             role={role}
             trucks={trucks} drivers={drivers} jobs={jobs}
@@ -255,7 +274,7 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'admin' && role === 'admin' && (
+        {!soonModule && activeTab === 'admin' && role === 'admin' && (
           <AdminTab
             trucks={trucks} drivers={drivers} jobs={jobs}
             onCreateTruck={data.createTruck} onCreateDriver={data.createDriver}
@@ -266,7 +285,7 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'assignments' && role === 'admin' && (
+        {!soonModule && activeTab === 'assignments' && role === 'admin' && (
           <JobAssignmentsTab
             trucks={trucks} drivers={drivers} jobs={jobs} conflictIds={conflictIds}
             onSetJobSingleTruck={data.setJobSingleTruck} onToggleJobTruck={data.toggleJobTruck}
@@ -280,7 +299,7 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'users' && role === 'admin' && (
+        {!soonModule && activeTab === 'users' && role === 'admin' && (
           <UsersTab
             users={usersData.users} currentUserId={user.id}
             onCreateUser={usersData.createUser} onChangeUserRole={usersData.changeRole}
@@ -291,22 +310,23 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'leads' && (role === 'admin' || role === 'dispatcher') && (
+        {!soonModule && activeTab === 'leads' && (role === 'admin' || role === 'dispatcher') && (
           <LeadsTab backendUrl={backendUrl} role={role} />
         )}
 
-        {activeTab === 'storage' && (role === 'admin' || role === 'dispatcher') && (
+        {!soonModule && activeTab === 'storage' && (role === 'admin' || role === 'dispatcher') && (
           <StorageTab backendUrl={backendUrl} />
         )}
 
-        {activeTab === 'benchmarks' && (role === 'admin' || role === 'dispatcher') && (
+        {!soonModule && activeTab === 'benchmarks' && (role === 'admin' || role === 'dispatcher') && (
           <BenchmarksTab backendUrl={backendUrl} />
         )}
 
-        {activeTab === 'crew' && (
+        {!soonModule && activeTab === 'crew' && (
           <CrewTab trucks={trucks} drivers={drivers} jobs={jobs} currentCrewTruck={currentCrewTruck} conflictIds={conflictIds} />
         )}
       </main>
+      </div>
       <DeletedJobsPanel
         open={showDeletedJobs}
         onClose={() => setShowDeletedJobs(false)}
@@ -319,7 +339,7 @@ export default function App() {
           BoardTab.jsx anymore either, as of 2026-09-11 — see .app-shell's own comment above for
           why). Only need to exist when the "Print List"/"Print Board" buttons that target them are
           actually reachable, same as before this move. */}
-      {activeTab === 'board' && boardMode === 'day' && (
+      {!soonModule && activeTab === 'board' && boardMode === 'day' && (
         <>
           <DayPrintSheet id="day-print-list" date={boardDate} trucks={trucks} drivers={drivers} jobs={jobs} conflictIds={conflictIds} />
           <DayPrintTimeline id="day-print-timeline" date={boardDate} trucks={trucks} drivers={drivers} jobs={jobs} conflicts={conflicts} includeTransit={includeTransitPrint} />
