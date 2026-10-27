@@ -93,7 +93,7 @@
 
 *{box-sizing:border-box;}
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);transition:background-color .2s ease,color .2s ease;}
-header{background:var(--navy);color:#fff;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;position:sticky;top:0;z-index:50;box-shadow:var(--shadow-md);}
+header{background:var(--navy);color:#fff;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;position:sticky;top:0;z-index:1000;box-shadow:var(--shadow-md);}
 header .brand{display:flex;align-items:center;gap:10px;}
 header .brand .logo{background:var(--orange);width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;}
 header .brand h1{font-size:16px;margin:0;font-weight:700;letter-spacing:.2px;}
@@ -103,7 +103,34 @@ header .brand span{display:block;font-size:11px;color:#b7c4dd;font-weight:400;}
 .theme-toggle{background:#22375f;color:#fff;border:1px solid #33507f;border-radius:20px;width:32px;height:32px;display:inline-flex;align-items:center;justify-content:center;font-size:14px;cursor:pointer;transition:filter .15s ease,transform .1s ease;padding:0;line-height:1;}
 .theme-toggle:hover{filter:brightness(1.2);}
 .theme-toggle:active{transform:scale(.92);}
-nav{display:flex;gap:4px;background:var(--navy2);padding:0 16px;overflow-x:auto;position:sticky;top:58px;z-index:49;}
+nav{display:flex;gap:4px;background:var(--navy2);padding:0 16px;overflow-x:auto;position:sticky;top:58px;z-index:999;}
+
+/* Contain Leaflet maps so they never escape their container or overlap the sticky header/nav bar */
+.leaflet-container {
+  isolation: isolate;
+  z-index: 1 !important;
+}
+.leaflet-pane {
+  z-index: 2 !important;
+}
+.leaflet-top,
+.leaflet-bottom {
+  z-index: 5 !important;
+}
+.city-bubble-badge {
+  background: rgba(30, 58, 102, 0.9);
+  color: #ffffff;
+  border: 1.5px solid rgba(255, 255, 255, 0.95);
+  border-radius: 12px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  white-space: nowrap;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.35);
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
 nav button{background:transparent;border:none;color:#c6d2e8;padding:12px 14px;font-size:13px;cursor:pointer;border-bottom:3px solid transparent;white-space:nowrap;font-weight:600;transition:color .15s ease,border-color .15s ease;}
 nav button:hover:not(:disabled){color:#fff;}
 nav button.active{color:#fff;border-bottom-color:var(--orange);}
@@ -442,6 +469,23 @@ h2.section-title{font-size:15px;margin:0 0 12px;color:var(--heading);}
    fall back to the block's `title` tooltip for the full text when either one runs out of room —
    same "nothing is ever fully hidden, just visually condensed" approach used on the print board. */
 .jb-line-wrap{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:5px;overflow:hidden;}
+/* Long-distance / multi-day bars (added 2026-10-23 at the user's request): these start at 12am (or
+   far left of the 6am default scroll), so their name + detail line used to sit off-screen at the bar's
+   left edge. The label wrap now sticks just right of the pinned truck column while scrolling sideways
+   and stays on the bar. position:sticky needs the block to NOT be a scroll container, hence
+   overflow:clip (still clips to the rounded box, unlike overflow:hidden it creates no scrollport).
+   --tl-sticky-left / --tl-visible-w are set on .timeline by DayBoard.jsx (truck column width and the
+   visible hours-area width), so the label is only as wide as what's actually on screen. */
+.job-block.ld{overflow:clip;}
+.job-block.ld .jb-line-wrap{position:sticky;left:calc(var(--tl-sticky-left, 160px) + 6px);flex:0 1 var(--tl-visible-w, auto);}
+/* The "Also: ..." conflict tag used to land on top of the sticky label. It now sticks to the RIGHT edge
+   of the visible area (so it reads at the end of the bar), and the label gives up room for it. */
+/* Sticky offsets move an element visually but NOT its flow position, so the tag (which sits after the
+   label in flow) kept landing at the bar's far-left natural spot, under the label, on bars that start
+   off-screen. A sticky `left` pins it at the right end of the visible area instead; `right` keeps it
+   on screen for bars that start inside the view. */
+.job-block.ld .jb-conflict-names{position:sticky;left:calc(var(--tl-sticky-left, 160px) + var(--tl-visible-w, 600px) - 162px);right:12px;flex:0 0 auto;}
+.job-block.ld:has(.jb-conflict-names) .jb-line-wrap{flex-basis:calc(var(--tl-visible-w, 600px) - 170px);}
 .jb-name{flex:0 1 auto;max-width:42%;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 /* Both of these were still hardcoded for the OLD always-dark, always-white-text .job-block fills —
    missed in 2026-09-15's earlier light-mode pass, which only fixed .job-block's OWN text color, not

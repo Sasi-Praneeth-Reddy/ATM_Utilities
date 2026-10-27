@@ -20,6 +20,9 @@ import AdminTab from './components/admin/AdminTab';
 import JobAssignmentsTab from './components/admin/JobAssignmentsTab';
 import UsersTab from './components/admin/UsersTab';
 import CrewTab from './components/CrewTab';
+import LeadsTab from './components/leads/LeadsTab';
+import StorageTab from './components/storage/StorageTab';
+import BenchmarksTab from './components/storage/BenchmarksTab';
 
 export default function App() {
   const [backendUrl, setBackendUrlState] = useState(initialBackendUrl());
@@ -49,6 +52,16 @@ export default function App() {
   const { trucks, drivers, jobs } = data;
 
   const [activeTab, setActiveTab] = useState('board');
+  const [activeModule, setActiveModule] = useState('scheduler'); // 'scheduler' | 'market'
+
+  function handleSelectModule(mod) {
+    setActiveModule(mod);
+    if (mod === 'market') {
+      setActiveTab('leads');
+    } else {
+      setActiveTab(role === 'crew' ? 'crew' : 'board');
+    }
+  }
   const [currentCrewTruck, setCurrentCrewTruck] = useState('T1');
   const [boardMode, setBoardMode] = useState('day');
   // Opens on today's date/month, not a hardcoded one — was pinned to a fixed 2026-08-05 (a leftover
@@ -182,9 +195,12 @@ export default function App() {
         theme={theme}
         onToggleTheme={toggleTheme}
         onOpenDeletedJobs={role === 'admin' ? () => setShowDeletedJobs(true) : undefined}
+        activeModule={activeModule}
+        onSelectModule={handleSelectModule}
       />
       <Nav
         role={role} activeTab={activeTab} onTabChange={setActiveTab}
+        activeModule={activeModule}
         alertTabs={role === 'admin' && isGmailAuthAlert(data.gmailAuthStatus)
           ? { assignments: 'Gmail authorization is expiring or expired — see Job Assignments' } : {}}
       />
@@ -273,6 +289,18 @@ export default function App() {
             onAddAllowedExternalEmail={usersData.addAllowedExternalEmail}
             onRemoveAllowedExternalEmail={usersData.removeAllowedExternalEmail}
           />
+        )}
+
+        {activeTab === 'leads' && (role === 'admin' || role === 'dispatcher') && (
+          <LeadsTab backendUrl={backendUrl} role={role} />
+        )}
+
+        {activeTab === 'storage' && (role === 'admin' || role === 'dispatcher') && (
+          <StorageTab backendUrl={backendUrl} />
+        )}
+
+        {activeTab === 'benchmarks' && (role === 'admin' || role === 'dispatcher') && (
+          <BenchmarksTab backendUrl={backendUrl} />
         )}
 
         {activeTab === 'crew' && (

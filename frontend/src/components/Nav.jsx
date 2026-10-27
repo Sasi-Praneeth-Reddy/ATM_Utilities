@@ -1,4 +1,4 @@
-const TABS_BY_ROLE = {
+const SCHEDULER_TABS_BY_ROLE = {
   crew: [
     { id: 'crew', label: 'My Jobs' },
     { id: 'board', label: 'Truck Board' },
@@ -16,10 +16,19 @@ const TABS_BY_ROLE = {
   ],
 };
 
-/** `alertTabs` (added 2026-09-30): { [tabId]: 'tooltip text' } — shows a small red dot on that tab,
- * e.g. the Job Assignments tab when the Gmail authorization is expiring (see App.jsx). */
-export default function Nav({ role, activeTab, onTabChange, alertTabs = {} }) {
-  const tabs = TABS_BY_ROLE[role] || TABS_BY_ROLE.dispatcher;
+const MARKET_TABS = [
+  { id: 'leads', label: '🏠 Pre-Mover Leads & Matches' },
+  { id: 'storage', label: '📦 Self-Storage Tracker' },
+  { id: 'benchmarks', label: '📈 Real Estate Benchmarks' },
+];
+
+/** `alertTabs`: { [tabId]: 'tooltip text' } — shows a small red dot on that tab */
+export default function Nav({ role, activeTab, onTabChange, activeModule = 'scheduler', alertTabs = {} }) {
+  const tabs =
+    activeModule === 'market'
+      ? MARKET_TABS
+      : SCHEDULER_TABS_BY_ROLE[role] || SCHEDULER_TABS_BY_ROLE.dispatcher;
+
   return (
     <nav>
       {tabs.map((tab) => (

@@ -1756,6 +1756,18 @@ async function handleRequest(req, res) {
       return;
     }
 
+    /* ---- Pre-Mover Leads & Customer Matching (isolated in leads/ subfolder) ---- */
+    if (p.startsWith('/api/leads')) {
+      const { handleLeadsRequest } = require('./leads/leadsRouter');
+      if (await handleLeadsRequest(req, res, url, currentUser)) return;
+    }
+
+    /* ---- Self-Storage Tracking & Intelligence (isolated in storage/ subfolder) ---- */
+    if (p.startsWith('/api/storage')) {
+      const { handleStorageRequest } = require('./storage/storageRouter');
+      if (await handleStorageRequest(req, res, url, currentUser)) return;
+    }
+
     sendJson(req, res, 404, { error: 'Not found' });
   } catch (err) {
     sendJson(req, res, err.status || 500, { error: err.message });

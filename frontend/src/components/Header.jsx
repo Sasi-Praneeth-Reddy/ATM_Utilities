@@ -6,14 +6,21 @@ import JobSearch from './board/JobSearch';
 const SECRET_CLICK_COUNT = 5;
 const SECRET_CLICK_WINDOW_MS = 2000;
 
-export default function Header({ user, onLogout, role, trucks, jobs, onJumpToJob, crewTruck, onCrewTruckChange, theme, onToggleTheme, onOpenDeletedJobs }) {
-  // Hidden trigger for the Deleted Jobs archive (added 2026-09-24, at the user's request: "place
-  // this deleted jobs button in a very secret place only i should know it"): clicking the "ATM"
-  // logo 5 times within 2 seconds opens DeletedJobsPanel, admin-only. Deliberately no visible
-  // affordance beyond the cursor change in styles.css (.brand .logo) — a counter/tooltip/badge
-  // would defeat the point of it being secret. Kept as a plain ref (not state) since the click
-  // count itself never needs to trigger a re-render — only the resulting onOpenDeletedJobs() call
-  // does anything visible.
+export default function Header({
+  user,
+  onLogout,
+  role,
+  trucks,
+  jobs,
+  onJumpToJob,
+  crewTruck,
+  onCrewTruckChange,
+  theme,
+  onToggleTheme,
+  onOpenDeletedJobs,
+  activeModule = 'scheduler',
+  onSelectModule,
+}) {
   const clickTimestampsRef = useRef([]);
   function handleLogoClick() {
     if (role !== 'admin' || !onOpenDeletedJobs) return;
@@ -33,17 +40,59 @@ export default function Header({ user, onLogout, role, trucks, jobs, onJumpToJob
         <div className="logo" onClick={handleLogoClick}>ATM</div>
         <div>
           <h1>Around Town Movers</h1>
-          <span>Scheduler</span>
+          <span>{activeModule === 'market' ? 'Market Intelligence' : 'Scheduler'}</span>
         </div>
       </div>
-      {/* Moved here from the Board tab's toolbar 2026-09-10 at the user's request — living in the
-          title bar instead means it's reachable from every tab (Admin, Assignments, Users, Crew),
-          not just Board. Available to every role, crew included: a picked result always switches to
-          the Board tab's day view (see App.jsx's handleJumpToJob), which crew already sees in its
-          own view-only form (BoardTab's title reads "view only" for role==='crew'), so there's
-          nothing here a crew member couldn't already reach by clicking around. The `jobs &&
-          onJumpToJob` guard is just for the brief render before App.jsx's data/handlers exist, not
-          a role check.*/}
+
+      {/* Module Switcher (Clean UI Separation between Dispatch Scheduler & Market Intelligence) */}
+      {role !== 'crew' && onSelectModule && (
+        <div style={{
+          display: 'flex',
+          backgroundColor: 'var(--bg-subtle, #f1f5f9)',
+          padding: '3px',
+          borderRadius: '8px',
+          border: '1px solid var(--border-color, #e2e8f0)',
+          margin: '0 14px'
+        }}>
+          <button
+            type="button"
+            onClick={() => onSelectModule('scheduler')}
+            style={{
+              padding: '6px 14px',
+              borderRadius: '6px',
+              fontSize: '13px',
+              fontWeight: 600,
+              border: 'none',
+              cursor: 'pointer',
+              backgroundColor: activeModule === 'scheduler' ? 'var(--bg-card, #ffffff)' : 'transparent',
+              color: activeModule === 'scheduler' ? '#2b6cb0' : '#64748b',
+              boxShadow: activeModule === 'scheduler' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+              transition: 'all 0.15s ease'
+            }}
+          >
+            🚚 Dispatch Scheduler
+          </button>
+          <button
+            type="button"
+            onClick={() => onSelectModule('market')}
+            style={{
+              padding: '6px 14px',
+              borderRadius: '6px',
+              fontSize: '13px',
+              fontWeight: 600,
+              border: 'none',
+              cursor: 'pointer',
+              backgroundColor: activeModule === 'market' ? 'var(--bg-card, #ffffff)' : 'transparent',
+              color: activeModule === 'market' ? '#2b6cb0' : '#64748b',
+              boxShadow: activeModule === 'market' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+              transition: 'all 0.15s ease'
+            }}
+          >
+            📊 Market & Leads
+          </button>
+        </div>
+      )}
+
       {jobs && onJumpToJob && <JobSearch jobs={jobs} trucks={trucks} onJumpToJob={onJumpToJob} />}
       <div className="role-switch">
         {role === 'crew' && (
