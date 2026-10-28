@@ -232,7 +232,7 @@ export default function StorageTab({ backendUrl }) {
   const avgRateForSize = kpis.avgRates?.[unitSize] || (unitSize === '10x10' ? 152 : unitSize === '5x5' ? 78 : unitSize === '10x15' ? 218 : 289);
 
   return (
-    <div style={{ padding: '16px 24px', maxWidth: '1440px', margin: '0 auto' }}>
+    <div>
       {/* Header Bar */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px', marginBottom: '20px' }}>
         <div>

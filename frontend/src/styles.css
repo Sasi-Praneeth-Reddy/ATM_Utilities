@@ -137,7 +137,7 @@ nav button{background:transparent;border:none;color:#c6d2e8;padding:12px 14px;fo
 nav button:hover:not(:disabled){color:#fff;}
 nav button.active{color:#fff;border-bottom-color:var(--orange);}
 nav button:disabled{opacity:.35;cursor:not-allowed;}
-main{padding:16px;max-width:1400px;margin:0 auto;}
+main{padding:20px 24px;max-width:2400px;margin:0 auto;width:100%;box-sizing:border-box;}
 /* Board tab escapes the normal reading-width cap so the 24-hour timeline can use the full window
    instead of scrolling inside a column that's narrower than the timeline wants to be. */
 main.board-main{max-width:none;}
@@ -1497,3 +1497,9 @@ nav.tabstrip .nav-alert-dot{box-shadow:0 0 0 2px var(--card);}
   header.topbar{padding:0 12px;gap:8px;}
   header.topbar .job-search{min-width:0;margin-left:0;}
 }
+
+/* Full-width pages (2026-10-28): the old 1400px reading cap left big empty side gutters once the
+   sidebar took its own column. Trucks & Drivers cards now flow into as many columns as fit. */
+.admin-scroll{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;align-content:start;}
+.admin-scroll > .admin-card{margin-bottom:0;}
+@media (max-width:720px){ main{padding:14px 12px;} }

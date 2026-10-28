@@ -917,7 +917,7 @@ export default function LeadsTab({ backendUrl, role }) {
   );
 
   return (
-    <div style={{ padding: '16px 24px', maxWidth: '1440px', margin: '0 auto' }}>
+    <div>
       {/* Top Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px', marginBottom: '20px' }}>
         <div>

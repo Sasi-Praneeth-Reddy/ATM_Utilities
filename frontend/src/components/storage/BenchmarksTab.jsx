@@ -28,7 +28,7 @@ export default function BenchmarksTab({ backendUrl }) {
   const latest = benchmarks[0] || {};
 
   return (
-    <div style={{ padding: '16px 24px', maxWidth: '1440px', margin: '0 auto' }}>
+    <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
         <div>
           <h1 style={{ margin: '0 0 4px 0', fontSize: '22px', fontWeight: 700 }}>
