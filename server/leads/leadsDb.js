@@ -118,7 +118,7 @@ async function upsertPreMoverLeads(leads = []) {
       bathrooms: Number(lead.bathrooms || 0) || null,
       sqft: Math.round(Number(lead.sqft || 0)) || null,
       isVacant: Boolean(lead.is_vacant || lead.isVacant),
-      listedDate: sql.dateOnly(lead.listed_date || lead.listedDate) || now.slice(0, 10),
+      listedDate: sql.dateOnly(lead.listed_date || lead.listedDate) || null, // blank = "not supplied"; resolved below
       realtorName: lead.realtor_name || lead.realtorName || '',
       realtorEmail: lead.realtor_email || lead.realtorEmail || '',
       realtorPhone: lead.realtor_phone || lead.realtorPhone || '',
@@ -129,6 +129,26 @@ async function upsertPreMoverLeads(leads = []) {
   }
 
   const rows = [...byId.values()];
+
+  // Listing dates: the portal CSV has no listing date, so a re-upload must never stamp "today" onto leads we
+  // already know. Existing leads keep their stored listedDate/scrapedAt; only brand-new leads get today (first seen).
+  const existing = new Map();
+  for (let i = 0; i < rows.length; i += 500) {
+    const ids = rows.slice(i, i + 500).map((r) => r.leadId);
+    const data = await sql.read(
+      'query E($ids: [String!]!) { leads(where: {leadId: {in: $ids}}) { leadId listedDate scrapedAt } }', { ids });
+    for (const e of data.leads || []) existing.set(e.leadId, e);
+  }
+  for (const r of rows) {
+    const prev = existing.get(r.leadId);
+    if (prev) {
+      if (prev.listedDate) r.listedDate = prev.listedDate; else if (!r.listedDate) r.listedDate = (prev.scrapedAt || '').slice(0, 10) || now.slice(0, 10);
+      // scrapedAt is not written for existing leads, so the original value stays
+    } else {
+      r.listedDate = r.listedDate || now.slice(0, 10);
+      r.scrapedAt = now.slice(0, 19).replace('T', ' ');
+    }
+  }
   await sql.upsertMany('Lead', 'lead_upsertMany', rows);
   invalidateLeadsCache();
   filteredAnalyticsCache.clear();
