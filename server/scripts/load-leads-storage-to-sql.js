@@ -18,7 +18,7 @@ const flag = (n) => args.includes(`--${n}`);
 const opt = (n, d) => { const i = args.indexOf(`--${n}`); return i >= 0 && args[i + 1] ? args[i + 1] : d; };
 const DIR = path.resolve(opt('dir', ''));
 const DRY = flag('dry-run');
-const BATCH = parseInt(opt('batch', '500'), 10);
+const BATCH = parseInt(opt('batch', '100'), 10);
 const SERVICE_ID = opt('service', 'atm-scheduler-service');
 const LOCATION = opt('location', 'us-east4');
 if (!opt('dir')) { console.error('Missing --dir <backup folder>'); process.exit(1); }
