@@ -102,6 +102,7 @@ export default function StorageTab({ backendUrl, role }) {
   const [visible, setVisible] = useState(100);
 
   const [kpis, setKpis] = useState(null);
+  const [overview, setOverview] = useState(null); // tiny city/brand averages - loads first
   const [pricing, setPricing] = useState([]);
   const [facilities, setFacilities] = useState([]);
   const [error, setError] = useState('');
@@ -124,6 +125,19 @@ export default function StorageTab({ backendUrl, role }) {
     script.onload = () => setLeafletReady(true);
     document.head.appendChild(script);
   }, []);
+
+  // City/brand averages: one small saved document, shown right away while the facility detail loads
+  useEffect(() => {
+    let active = true;
+    apiCall(backendUrl, 'GET', '/api/storage/overview').then((res) => { if (active && res) setOverview(res); }).catch(() => {});
+    return () => { active = false; };
+  }, [backendUrl]);
+
+  const cityOverview = useMemo(() => (overview?.cityRates || [])
+    .filter((r) => r.unitSize === unitSize)
+    .sort((a, b) => b.avg - a.avg)
+    .map((r) => ({ key: `${r.city}|${r.state}`, label: `${r.city}, ${r.state}`, value: r.avg, sub: `${money(r.min)}–${money(r.max)} · ${r.facilities} ${r.facilities === 1 ? 'facility' : 'facilities'}` })),
+  [overview, unitSize]);
 
   // Facilities + KPIs load once
   useEffect(() => {
@@ -465,6 +479,15 @@ export default function StorageTab({ backendUrl, role }) {
 
       {viewMode === 'dashboard' && (
         <>
+          {cityOverview.length > 0 && (
+            <div style={{ marginBottom: '20px' }}>
+              <Card title={`🏙️ Average ${unitSize} rate by city`} subtitle={`Quick summary of ${overview.totalFacilities} facilities, priciest first - hover a bar for the low-high range`}>
+                <div style={{ maxHeight: '340px', overflowY: 'auto', paddingRight: '6px' }}>
+                  <HBars rows={cityOverview} labelWidth={150} />
+                </div>
+              </Card>
+            </div>
+          )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: '20px', marginBottom: '20px' }}>
             {/* Map */}
             <div style={{ backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, #e2e8f0)', borderRadius: '8px', padding: '16px', display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 1, isolation: 'isolate', overflow: 'hidden', minWidth: 0 }}>

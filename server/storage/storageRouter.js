@@ -81,6 +81,22 @@ async function handleStorageRequest(req, res, url, currentUser) {
       return true;
     }
 
+    // GET /api/storage/overview - tiny city/brand roll-up (loads instantly, powers the dashboard's first view)
+    if (p === '/api/storage/overview' && req.method === 'GET') {
+      sendJson(req, res, 200, await storageDb.getStorageOverview());
+      return true;
+    }
+
+    // GET /api/storage/city-history?city=&state=&unitSize= - daily average rate (market-wide when no city)
+    if (p === '/api/storage/city-history' && req.method === 'GET') {
+      sendJson(req, res, 200, await storageDb.getCityHistory({
+        city: url.searchParams.get('city') || undefined,
+        state: url.searchParams.get('state') || undefined,
+        unitSize: url.searchParams.get('unitSize') || '10x10',
+      }));
+      return true;
+    }
+
     // GET /api/storage/kpis
     if (p === '/api/storage/kpis' && req.method === 'GET') {
       const kpis = await storageDb.getStorageKpis();

@@ -238,6 +238,23 @@ async function computeStorageSummary() {
     avgRates[sz] = sums[sz] && sums[sz].count ? Math.round(sums[sz].sum / sums[sz].count) : KPI_DEFAULT_RATES[sz];
   }
 
+  // Compact roll-ups for the dashboard: one row per city + unit size and per brand + unit size.
+  const byId = new Map((await getFacilities()).map((f) => [String(f.id), f]));
+  const cityAcc = new Map();
+  const brandAcc = new Map();
+  const bump = (m, key, base, rate) => {
+    const a = m.get(key) || { ...base, sum: 0, n: 0, min: Infinity, max: 0 };
+    a.sum += rate; a.n += 1; a.min = Math.min(a.min, rate); a.max = Math.max(a.max, rate);
+    m.set(key, a);
+  };
+  for (const b of best) {
+    const f = byId.get(String(b.facilityId));
+    if (!f || !b.webRate) continue;
+    if (f.city) bump(cityAcc, `${f.city}|${f.state}|${b.unitSize}`, { city: f.city, state: f.state, unitSize: b.unitSize }, b.webRate);
+    bump(brandAcc, `${f.brand || 'Independent'}|${b.unitSize}`, { brand: f.brand || 'Independent', unitSize: b.unitSize }, b.webRate);
+  }
+  const roll = (m) => [...m.values()].map(({ sum, n, min, max, ...k }) => ({ ...k, avg: Math.round(sum / n), min, max, facilities: n }));
+
   return {
     computedAt: new Date().toISOString(),
     dirty: false,
@@ -245,8 +262,46 @@ async function computeStorageSummary() {
     activeSnapshots,
     avgRates,
     lastScraped,
+    cityRates: roll(cityAcc),
+    brandRates: roll(brandAcc),
     latestPricing: best,
   };
+}
+
+const CITY_HISTORY_DAYS = 400;
+/** Small daily history of city averages, kept in one document, so trends do not need the raw price rows. */
+async function recordCityHistory(summary) {
+  if (!summary.lastScraped || !(summary.cityRates || []).length) return;
+  const day = String(summary.lastScraped).slice(0, 10);
+  const hist = (await sql.getState('storageCityHistory')) || {};
+  const entry = {};
+  for (const r of summary.cityRates) entry[`${r.city}|${r.state}|${r.unitSize}`] = [r.avg, r.facilities];
+  hist[day] = entry;
+  const days = Object.keys(hist).sort();
+  while (days.length > CITY_HISTORY_DAYS) delete hist[days.shift()];
+  await sql.setState('storageCityHistory', hist);
+}
+
+async function getStorageOverview() {
+  const s = await getStorageSummary();
+  return {
+    totalFacilities: s.totalFacilities,
+    avgRates: s.avgRates,
+    lastScraped: s.lastScraped,
+    cityRates: s.cityRates || [],
+    brandRates: s.brandRates || [],
+  };
+}
+
+async function getCityHistory({ city, state, unitSize = '10x10' } = {}) {
+  const hist = (await sql.getState('storageCityHistory')) || {};
+  const key = city ? `${city}|${state || ''}|${unitSize}` : null;
+  return Object.keys(hist).sort().map((day) => {
+    if (key) { const v = hist[day][key]; return v ? { day, avg: v[0], facilities: v[1] } : null; }
+    let sum = 0, n = 0;
+    for (const [k, v] of Object.entries(hist[day])) if (k.endsWith(`|${unitSize}`)) { sum += v[0] * v[1]; n += v[1]; }
+    return n ? { day, avg: Math.round(sum / n), facilities: n } : null;
+  }).filter(Boolean);
 }
 
 let summaryInflight = null;
@@ -259,6 +314,7 @@ async function refreshStorageSummary() {
     summaryInflight = (async () => {
       const fresh = await computeStorageSummary();
       await sql.setState('storageSummary', fresh);
+      try { await recordCityHistory(fresh); } catch (e) { console.error('recordCityHistory failed:', e.message); }
       return fresh;
     })().finally(() => { summaryInflight = null; });
   }
@@ -371,6 +427,8 @@ module.exports = {
   insertPricingSnapshots: insertPricingSnapshotsW,
   getStorageKpis,
   refreshStorageSummary,
+  getStorageOverview,
+  getCityHistory,
   getMarketShare,
   getMlsBenchmarks,
   upsertMlsBenchmarks: upsertMlsBenchmarksW,
