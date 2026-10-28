@@ -37,11 +37,6 @@ export default function Sidebar({ role, activeModuleId, onSelectModule, collapse
             <div className="shell-brand-name">Around Town Movers</div>
             <div className="shell-brand-sub">Operations</div>
           </div>
-          <button type="button" className="shell-toggle" onClick={onToggle} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
-            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" {...P}>
-              <rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" />
-            </svg>
-          </button>
         </div>
         <div className="shell-modules" role="navigation" aria-label="Main modules">
           {mods.map((m) => {
@@ -63,6 +58,14 @@ export default function Sidebar({ role, activeModuleId, onSelectModule, collapse
             );
           })}
         </div>
+        {/* Collapse control lives at the bottom as a regular full-size row (same look as the module
+            rows), so it can't get clipped in the narrow icon rail the way a small title-row button did. */}
+        <button type="button" className="shell-item shell-collapse" onClick={onToggle} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
+          <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" style={{ flex: 'none', transform: collapsed ? 'scaleX(-1)' : 'none' }} {...P}>
+            <rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /><path d="m15 10-2 2 2 2" />
+          </svg>
+          <span className="shell-label">Collapse</span>
+        </button>
       </aside>
     </>
   );
