@@ -29,13 +29,13 @@ const APPLY = args.includes('--yes');
   console.log(`Backup leads with a date: ${backup.size}`);
 
   const fixes = [];
-  await sql.pageAll('leads', 'leadId', 'leadId address status listedDate scrapedAt', {
+  await sql.pageAll('leads', 'leadId', 'leadId address status isVacant listedDate scrapedAt', {
     onPage: (rows) => {
       for (const r of rows) {
         const b = backup.get(r.leadId);
         if (!b) continue; // new since the backup: today is its true first-seen date
         if (r.listedDate !== b.listedDate || (b.scrapedAt && r.scrapedAt !== b.scrapedAt)) {
-          fixes.push({ leadId: r.leadId, address: r.address, status: r.status, listedDate: b.listedDate, scrapedAt: b.scrapedAt || r.scrapedAt || null });
+          fixes.push({ leadId: r.leadId, address: r.address, status: r.status, isVacant: !!r.isVacant, listedDate: b.listedDate, scrapedAt: b.scrapedAt || r.scrapedAt || null });
         }
       }
     },
