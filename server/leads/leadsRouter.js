@@ -8,6 +8,7 @@
 const crypto = require('crypto');
 const leadsDb = require('./leadsDb');
 const { generateOutreachDraft, sendOutreachEmail } = require('./outreachMailer');
+const { hasValidScraperKey } = require('../scraperAuth');
 
 /** Constant-time string compare (avoids leaking the scraper key through response timing). */
 function safeEqual(a, b) {
@@ -68,8 +69,7 @@ async function handleLeadsRequest(req, res, url, currentUser) {
 
   // Auth requirement: Lead intelligence is restricted to logged-in admin and dispatcher users,
   // OR automated scrapers authenticated via x-api-key header matching SECRET_WEBHOOK_KEY.
-  const apiKey = req.headers['x-api-key'] || req.headers['x-webhook-key'];
-  const hasValidApiKey = Boolean(apiKey && process.env.SECRET_WEBHOOK_KEY && safeEqual(apiKey, process.env.SECRET_WEBHOOK_KEY));
+  const hasValidApiKey = hasValidScraperKey(req);
   const isAuthorizedUser = Boolean(currentUser && ['admin', 'dispatcher'].includes(currentUser.role));
   const isAdmin = Boolean(currentUser && currentUser.role === 'admin');
 

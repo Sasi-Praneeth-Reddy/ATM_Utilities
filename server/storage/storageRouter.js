@@ -6,6 +6,7 @@
  */
 
 const storageDb = require('./storageDb');
+const { hasValidScraperKey } = require('../scraperAuth');
 
 function sendJson(req, res, status, body) {
   const data = JSON.stringify(body);
@@ -51,14 +52,18 @@ async function handleStorageRequest(req, res, url, currentUser) {
     return true;
   }
 
+  // The daily scraper (GitHub Actions) may push data with the x-api-key header; it can only use the
+  // bulk write endpoints below, never read anything.
+  const isScraperWrite = req.method === 'POST' && p.endsWith('/bulk') && hasValidScraperKey(req);
+
   // Auth requirement: storage tracking data visible to admin and dispatcher
-  if (!currentUser || !['admin', 'dispatcher'].includes(currentUser.role)) {
+  if (!isScraperWrite && (!currentUser || !['admin', 'dispatcher'].includes(currentUser.role))) {
     sendJson(req, res, 403, { error: 'Forbidden: Storage intelligence requires admin or dispatcher access' });
     return true;
   }
 
   // Bulk writes change shared market data, so they are admin-only (dispatchers can still read everything).
-  if (req.method === 'POST' && currentUser.role !== 'admin') {
+  if (req.method === 'POST' && !isScraperWrite && currentUser.role !== 'admin') {
     sendJson(req, res, 403, { error: 'Forbidden: changing storage data requires admin access' });
     return true;
   }
