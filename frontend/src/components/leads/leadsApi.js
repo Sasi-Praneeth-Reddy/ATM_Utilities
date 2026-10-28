@@ -48,3 +48,35 @@ export async function importLegacyCustomers(backendUrl, customers) {
 export async function triggerReconcile(backendUrl) {
   return apiCall(backendUrl, 'POST', '/api/leads/reconcile', {});
 }
+
+export async function fetchLegacyCustomers(backendUrl, limit = 5000) {
+  return apiCall(backendUrl, 'GET', `/api/leads/legacy-customers?limit=${limit}`);
+}
+
+/** Downloads every listing matching the filters as a CSV (opens in Excel). Returns the row count. */
+export async function downloadListingsCsv(backendUrl, { status, state, county, search, minPrice, maxPrice, month } = {}) {
+  const params = new URLSearchParams();
+  if (status && status !== 'all') params.set('status', status);
+  if (state && state !== 'all') params.set('state', state);
+  if (county && county !== 'all') params.set('county', county);
+  if (search) params.set('search', search);
+  if (minPrice) params.set('minPrice', String(minPrice));
+  if (maxPrice) params.set('maxPrice', String(maxPrice));
+  if (month && month !== 'all') params.set('month', month);
+  const res = await fetch(`${backendUrl}/api/leads/export.csv?${params.toString()}`, { credentials: 'include' });
+  if (!res.ok) throw new Error(`Export failed (${res.status})`);
+  const blob = await res.blob();
+  saveBlob(blob, `pre-mover-leads-${new Date().toISOString().slice(0, 10)}.csv`);
+  return Number(res.headers.get('X-Row-Count')) || null;
+}
+
+export function saveBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}

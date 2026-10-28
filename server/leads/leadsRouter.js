@@ -225,6 +225,33 @@ async function handleLeadsRequest(req, res, url, currentUser) {
     }
 
     // -------------------------------------------------------------
+    // GET /api/leads/export.csv — all listings matching the same filters as /listings, as CSV
+    // -------------------------------------------------------------
+    if (p === '/api/leads/export.csv' && req.method === 'GET') {
+      const monthParam = url.searchParams.get('month') || undefined;
+      const { csv, count } = await leadsDb.exportListingsCsv({
+        status: url.searchParams.get('status') || undefined,
+        state: url.searchParams.get('state') || undefined,
+        county: url.searchParams.get('county') || undefined,
+        search: url.searchParams.get('search') || undefined,
+        minPrice: url.searchParams.get('minPrice') || undefined,
+        maxPrice: url.searchParams.get('maxPrice') || undefined,
+        month: monthParam && /^\d{4}-\d{2}$/.test(monthParam) ? monthParam : undefined,
+      });
+      const origin = req.headers.origin;
+      res.writeHead(200, {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="pre-mover-leads-${new Date().toISOString().slice(0, 10)}.csv"`,
+        'X-Row-Count': String(count),
+        'Access-Control-Allow-Origin': origin || '*',
+        'Access-Control-Allow-Credentials': 'true',
+        'Access-Control-Expose-Headers': 'X-Row-Count',
+      });
+      res.end(csv);
+      return true;
+    }
+
+    // -------------------------------------------------------------
     // POST /api/leads/ingest — Ingest raw listings (from scraper)
     // -------------------------------------------------------------
     if (p === '/api/leads/ingest' && req.method === 'POST') {

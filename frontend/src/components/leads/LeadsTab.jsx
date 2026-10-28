@@ -9,6 +9,8 @@ import {
 } from './leadsApi';
 import OutreachModal from './OutreachModal';
 import LegacyUploadModal from './LegacyUploadModal';
+import LeadsSheet from './LeadsSheet';
+import { Card, StatusDonut, PriceHistogram, ActivityHeatmap, CountyBubbles, MonthlyPanel, monthLabel } from './LeadsCharts';
 
 const STATUS_COLORS = {
   for_sale: '#10b981',        // Emerald Green (Active)
@@ -205,149 +207,6 @@ function resolveLeadCoords(lead) {
 }
 
 
-// ---- Listing-volume charts (Market Visualizations tab) ----
-const STATUS_STACK = [
-  { key: 'for_sale', label: 'Active for sale', color: '#10b981' },
-  { key: 'under_contract', label: 'Under contract', color: '#f97316' },
-  { key: 'pending', label: 'Pending / contingent', color: '#3b82f6' },
-  { key: 'closed', label: 'Closed / sold', color: '#94a3b8' },
-];
-const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-function monthLabel(key, withYear = true) {
-  const [y, m] = String(key).split('-');
-  const name = MONTH_NAMES[Number(m) - 1] || key;
-  return withYear ? `${name} ${y}` : name;
-}
-
-function weekLabel(mondayKey) {
-  const [, m, d] = String(mondayKey).split('-');
-  return `${MONTH_NAMES[Number(m) - 1] || ''} ${Number(d)}`;
-}
-
-function niceMax(v) {
-  if (v <= 10) return 10;
-  const pow = 10 ** Math.floor(Math.log10(v));
-  const n = v / pow;
-  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * pow;
-}
-
-/** Stacked column chart. `rows`: [{ key, label, sub?, total, for_sale, ... }]; click a column to
-    drill in (onSelect(key)). Plain HTML/CSS so it stays responsive without a chart library. */
-function StackedColumns({ rows, selectedKey, onSelect, height = 200 }) {
-  const max = niceMax(Math.max(...rows.map((r) => r.total), 1));
-  const ticks = [1, 0.75, 0.5, 0.25, 0];
-  return (
-    <div style={{ display: 'flex', gap: '8px' }}>
-      <div style={{ position: 'relative', width: '38px', height: `${height}px`, flex: 'none' }}>
-        {ticks.map((t) => (
-          <span key={t} style={{ position: 'absolute', right: 0, top: `${(1 - t) * 100}%`, transform: 'translateY(-50%)', fontSize: '10px', color: '#718096' }}>
-            {Math.round(max * t).toLocaleString()}
-          </span>
-        ))}
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ position: 'relative', height: `${height}px`, display: 'flex', alignItems: 'flex-end', gap: '6px', borderBottom: '1px solid #cbd5e0' }}>
-          {ticks.slice(0, 4).map((t) => (
-            <div key={t} style={{ position: 'absolute', left: 0, right: 0, top: `${(1 - t) * 100}%`, borderTop: '1px dashed #e2e8f0', pointerEvents: 'none' }} />
-          ))}
-          {rows.map((r) => {
-            const known = STATUS_STACK.reduce((s, x) => s + (r[x.key] || 0), 0);
-            const segs = STATUS_STACK.map((x) => ({ ...x, n: r[x.key] || 0 }));
-            if (r.total > known) segs.push({ key: 'other', label: 'Other', color: '#cbd5e0', n: r.total - known });
-            const selected = selectedKey === r.key;
-            const tip = `${r.label}${r.sub ? ' ' + r.sub : ''}: ${r.total.toLocaleString()} listings\n` + segs.filter((s) => s.n).map((s) => `${s.label}: ${s.n.toLocaleString()}`).join('\n');
-            return (
-              <button
-                key={r.key}
-                type="button"
-                title={tip}
-                onClick={() => onSelect && onSelect(r.key)}
-                style={{
-                  position: 'relative', flex: 1, minWidth: 0, height: '100%', padding: 0, border: 'none', background: 'none',
-                  display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', cursor: onSelect ? 'pointer' : 'default',
-                  opacity: selectedKey && !selected ? 0.45 : 1,
-                }}
-              >
-                <span style={{ fontSize: '10px', fontWeight: 700, color: '#2d3748', textAlign: 'center', marginBottom: '2px', whiteSpace: 'nowrap' }}>
-                  {r.total.toLocaleString()}
-                </span>
-                <div style={{ display: 'flex', flexDirection: 'column-reverse', height: `${(r.total / max) * 100}%`, minHeight: '2px', borderRadius: '4px 4px 0 0', overflow: 'hidden', outline: selected ? '2px solid #2b6cb0' : 'none' }}>
-                  {segs.map((s) => (s.n ? <div key={s.key} style={{ height: `${(s.n / r.total) * 100}%`, backgroundColor: s.color }} /> : null))}
-                </div>
-              </button>
-            );
-          })}
-        </div>
-        <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
-          {rows.map((r) => (
-            <div key={r.key} style={{ flex: 1, minWidth: 0, textAlign: 'center', fontSize: '11px', color: '#4a5568', lineHeight: 1.2 }}>
-              <div style={{ fontWeight: selectedKey === r.key ? 800 : 600 }}>{r.label}</div>
-              {r.sub && <div style={{ fontSize: '10px', color: '#718096' }}>{r.sub}</div>}
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function StatusLegend() {
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', margin: '10px 0 0 46px', fontSize: '11px', color: '#4a5568' }}>
-      {STATUS_STACK.map((s) => (
-        <span key={s.key} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
-          <span style={{ width: '10px', height: '10px', borderRadius: '2px', backgroundColor: s.color }} />{s.label}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-function ListingVolumeCharts({ monthly, weekly, selectedMonth, onSelectMonth }) {
-  const card = { backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, #e2e8f0)', borderRadius: '8px', padding: '20px' };
-  if (!monthly.length) {
-    return (
-      <div style={card}>
-        <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: 700 }}>📈 Listings by month</h3>
-        <p style={{ margin: 0, fontSize: '12px', color: '#718096' }}>No listing dates on record yet. An admin can refresh analytics to rebuild this chart.</p>
-      </div>
-    );
-  }
-  const peak = monthly.reduce((a, b) => (b.total > a.total ? b : a), monthly[0]);
-  const latest = monthly[monthly.length - 1];
-  const monthRows = monthly.map((m, i) => ({
-    ...m,
-    key: m.month,
-    label: monthLabel(m.month, false),
-    sub: i === 0 || m.month.endsWith('-01') ? m.month.slice(0, 4) : '',
-  }));
-  const weekRows = weekly.map((w) => ({ ...w, key: w.week, label: weekLabel(w.week) }));
-  const lastWeek = weekly[weekly.length - 1];
-  return (
-    <>
-      <div style={card}>
-        <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: 700 }}>📈 Listings by month</h3>
-        <p style={{ margin: '0 0 14px 0', fontSize: '12px', color: '#718096' }}>
-          Homes by the month they were listed, split by current status. Busiest month: <strong>{monthLabel(peak.month)}</strong> ({peak.total.toLocaleString()}).
-          {' '}Latest: <strong>{monthLabel(latest.month)}</strong> ({latest.total.toLocaleString()}). Click a month to filter the listings to it.
-        </p>
-        <StackedColumns rows={monthRows} selectedKey={selectedMonth !== 'all' ? selectedMonth : null} onSelect={onSelectMonth} height={220} />
-        <StatusLegend />
-      </div>
-      {weekRows.length > 0 && (
-        <div style={card}>
-          <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: 700 }}>🗓️ Last {weekRows.length} weeks</h3>
-          <p style={{ margin: '0 0 14px 0', fontSize: '12px', color: '#718096' }}>
-            New listings per week (weeks start Monday).{lastWeek ? ` The latest week, starting ${weekLabel(lastWeek.week)}, may still be filling in.` : ''}
-          </p>
-          <StackedColumns rows={weekRows} height={150} />
-        </div>
-      )}
-    </>
-  );
-}
-
 export default function LeadsTab({ backendUrl, role }) {
   // Importing legacy customers and sweeping for matches touch lots of data, so the server only allows admins.
   const isAdmin = role === 'admin';
@@ -399,6 +258,20 @@ export default function LeadsTab({ backendUrl, role }) {
   const [priceTier, setPriceTier] = useState('all'); // 'all' | 'under500' | '500to800' | '800to1200' | '1200plus'
   const [listingSearch, setListingSearch] = useState('');
   const [selectedMonth, setSelectedMonth] = useState('all'); // 'all' | 'YYYY-MM' (by listing date)
+
+  // Months offered in the Month filter: every month that has listings in the database (with counts).
+  // If the analytics summary hasn't loaded (or predates monthly stats), fall back to the last 12
+  // calendar months so the dropdown is never just "All Months".
+  const monthOptions = useMemo(() => {
+    if (analytics.monthlyTrend?.length) return [...analytics.monthlyTrend].reverse().map((m) => ({ month: m.month, total: m.total }));
+    const out = [];
+    const d = new Date();
+    for (let i = 0; i < 12; i++) {
+      out.push({ month: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`, total: 0 });
+      d.setMonth(d.getMonth() - 1, 1);
+    }
+    return out;
+  }, [analytics.monthlyTrend]);
 
   // Pagination State (User configurable: 20, 50, 100)
   const [pageSize, setPageSize] = useState(50);
@@ -1214,6 +1087,19 @@ export default function LeadsTab({ backendUrl, role }) {
         </button>
 
         <button
+          onClick={() => setActiveSubTab('sheet')}
+          style={{
+            background: 'none', border: 'none', padding: '10px 4px',
+            fontSize: '14px', fontWeight: 600, cursor: 'pointer',
+            borderBottom: activeSubTab === 'sheet' ? '3px solid #3182ce' : '3px solid transparent',
+            color: activeSubTab === 'sheet' ? '#3182ce' : '#718096',
+            marginBottom: '-2px'
+          }}
+        >
+          📑 Data Sheet
+        </button>
+
+        <button
           onClick={() => setActiveSubTab('matches')}
           style={{
             background: 'none', border: 'none', padding: '10px 4px',
@@ -1249,7 +1135,7 @@ export default function LeadsTab({ backendUrl, role }) {
       </div>
 
       {/* FILTER TOOLBAR (Status, State, County, Price, Search) */}
-      {(activeSubTab === 'explorer' || activeSubTab === 'analytics') && (
+      {activeSubTab === 'explorer' && (
         <div style={{
           display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap',
           backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, #e2e8f0)',
@@ -1334,8 +1220,8 @@ export default function LeadsTab({ backendUrl, role }) {
               style={{ padding: '6px 10px', borderRadius: '4px', border: '1px solid #cbd5e0', fontSize: '12px', cursor: 'pointer' }}
             >
               <option value="all">All Months</option>
-              {[...(analytics.monthlyTrend || [])].reverse().map((m) => (
-                <option key={m.month} value={m.month}>{monthLabel(m.month)} ({m.total.toLocaleString()})</option>
+              {monthOptions.map((m) => (
+                <option key={m.month} value={m.month}>{monthLabel(m.month)}{m.total ? ` (${m.total.toLocaleString()})` : ''}</option>
               ))}
             </select>
           </div>
@@ -1620,132 +1506,42 @@ export default function LeadsTab({ backendUrl, role }) {
         </div>
       )}
 
-      {/* VIEW 2: COMPREHENSIVE MARKET VISUALIZATIONS & TRENDS */}
+      {/* VIEW 2: MARKET VISUALIZATIONS */}
       {activeSubTab === 'analytics' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-          {/* Row 1: County Breakdown & Average Price by County */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-            {/* Top Counties Volume Bar Chart */}
-            <div style={{
-              backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, #e2e8f0)',
-              borderRadius: '8px', padding: '20px'
-            }}>
-              <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: 700 }}>
-                🏘️ Listing Volume by County (Top 10)
-              </h3>
-              <p style={{ margin: '0 0 16px 0', fontSize: '12px', color: '#718096' }}>
-                Pre-mover opportunities across key Northern Virginia & DC counties
-              </p>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {analytics.topCounties?.map((c, i) => {
-                  const maxCount = (analytics.topCounties[0]?.count) || 8500;
-                  const pct = Math.min(100, Math.max(10, Math.round((c.count / maxCount) * 100)));
-                  return (
-                    <div key={c.county}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '3px' }}>
-                        <span style={{ fontWeight: 600 }}>{c.county}</span>
-                        <span style={{ fontWeight: 700, color: '#2b6cb0' }}>{c.count.toLocaleString()} listings</span>
-                      </div>
-                      <div style={{ width: '100%', height: '10px', backgroundColor: '#edf2f7', borderRadius: '5px', overflow: 'hidden' }}>
-                        <div style={{ width: `${pct}%`, height: '100%', backgroundColor: i === 0 ? '#2b6cb0' : '#4299e1', borderRadius: '5px' }} />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          {(!analytics.priceHistogram || !analytics.monthlyTrend?.length) && (
+            <div style={{ backgroundColor: '#fffaf0', border: '1px solid #fbd38d', color: '#7b341e', borderRadius: '8px', padding: '12px 16px', fontSize: '13px' }}>
+              These charts need the latest analytics. {isAdmin ? 'Restart the backend (or deploy it), then reload this page — the summary rebuilds itself on the first request.' : 'Ask an admin to refresh the analytics.'}
             </div>
-
-            {/* Average List Price by County */}
-            <div style={{
-              backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, #e2e8f0)',
-              borderRadius: '8px', padding: '20px'
-            }}>
-              <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: 700 }}>
-                💰 Avg Home List Price by County
-              </h3>
-              <p style={{ margin: '0 0 16px 0', fontSize: '12px', color: '#718096' }}>
-                Benchmark home values for high-value residential moving targets
-              </p>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {(analytics.topCountyAvgPrices?.length ? analytics.topCountyAvgPrices : [
-                  { county: 'Arlington County', avgPrice: 945000 },
-                  { county: 'Fairfax County', avgPrice: 865000 },
-                  { county: 'Loudoun County', avgPrice: 795000 },
-                  { county: 'Montgomery County', avgPrice: 760000 },
-                  { county: 'Prince William County', avgPrice: 595000 },
-                ]).map((cp) => {
-                  const maxPrice = 1000000;
-                  const pct = Math.min(100, Math.max(15, Math.round((cp.avgPrice / maxPrice) * 100)));
-                  return (
-                    <div key={cp.county}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '3px' }}>
-                        <span style={{ fontWeight: 600 }}>{cp.county}</span>
-                        <span style={{ fontWeight: 700, color: '#38a169' }}>${cp.avgPrice.toLocaleString()}</span>
-                      </div>
-                      <div style={{ width: '100%', height: '10px', backgroundColor: '#edf2f7', borderRadius: '5px', overflow: 'hidden' }}>
-                        <div style={{ width: `${pct}%`, height: '100%', backgroundColor: '#48bb78', borderRadius: '5px' }} />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+          )}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: '20px' }}>
+            <Card title="🍩 Where the listings stand" subtitle="Share of all homes by their current listing status">
+              <StatusDonut counts={analytics.statusCounts} />
+            </Card>
+            {analytics.priceHistogram && (
+              <Card title="💵 How homes are priced" subtitle="Number of listings in each price band">
+                <PriceHistogram bins={analytics.priceHistogram} median={analytics.medianListPrice} />
+              </Card>
+            )}
           </div>
-
-          {/* Row 2: Status Distribution & Weekly Listing Velocity */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-            {/* Detailed Status Breakdown */}
-            <div style={{
-              backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, #e2e8f0)',
-              borderRadius: '8px', padding: '20px'
-            }}>
-              <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: 700 }}>
-                🥧 Pre-Mover Funnel Distribution
-              </h3>
-              <p style={{ margin: '0 0 16px 0', fontSize: '12px', color: '#718096' }}>
-                Proportion of active vs under-contract vs pending moves
-              </p>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                {[
-                  { label: 'Active For Sale (Early Pre-Movers)', count: activeCount, color: '#10b981', desc: 'Preparing to move soon' },
-                  { label: 'Under Contract (High-Priority Target)', count: underContractCount, color: '#f97316', desc: 'Moving in 30–60 days' },
-                  { label: 'Pending & Contingent', count: analytics.statusCounts?.pending || 1540, color: '#3b82f6', desc: 'Closing imminent' },
-                  { label: 'Closed & Sold', count: analytics.statusCounts?.closed || 1111, color: '#64748b', desc: 'Move completed' },
-                ].map((s) => {
-                  const pct = Math.round((s.count / (listingsTotal || 27221)) * 100);
-                  return (
-                    <div key={s.label} style={{ padding: '10px 12px', border: '1px solid #edf2f7', borderRadius: '6px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <span style={{ width: '12px', height: '12px', borderRadius: '3px', backgroundColor: s.color }} />
-                          <span style={{ fontSize: '13px', fontWeight: 600 }}>{s.label}</span>
-                        </div>
-                        <span style={{ fontSize: '14px', fontWeight: 700, color: '#2d3748' }}>
-                          {s.count.toLocaleString()} ({pct}%)
-                        </span>
-                      </div>
-                      <div style={{ fontSize: '11px', color: '#718096', marginTop: '3px', marginLeft: '20px' }}>
-                        {s.desc}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Listing volume by month / week */}
-            <ListingVolumeCharts
-              monthly={analytics.monthlyTrend || []}
-              weekly={analytics.weeklyTrend || []}
-              selectedMonth={selectedMonth}
-              onSelectMonth={(m) => { setSelectedMonth(m); setActiveSubTab('explorer'); }}
-            />
-          </div>
+          {analytics.dailyTrend && (
+            <Card title="🗓️ When homes hit the market" subtitle="Each square is one day, over the last 22 weeks. Darker means more homes listed that day.">
+              <ActivityHeatmap daily={analytics.dailyTrend} />
+            </Card>
+          )}
+          <MonthlyPanel
+            monthly={analytics.monthlyTrend || []}
+            selectedMonth={selectedMonth}
+            onSelectMonth={(m) => { setSelectedMonth(m); setActiveSubTab('explorer'); }}
+          />
+          <Card title="🫧 Where volume meets value" subtitle="Each bubble is a county: further right means more listings, higher up means pricier homes. Hover for details.">
+            <CountyBubbles counties={analytics.countyValue || analytics.topCountyAvgPrices || []} />
+          </Card>
         </div>
       )}
+
+      {/* VIEW: DATA SHEET (relational spreadsheet of every record) */}
+      {activeSubTab === 'sheet' && <LeadsSheet backendUrl={backendUrl} months={monthOptions} />}
 
       {/* VIEW 3: VIP CUSTOMER MATCHES */}
       {activeSubTab === 'matches' && (

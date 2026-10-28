@@ -769,6 +769,7 @@ function computeLeadsAnalytics(leads) {
   const realtorMap = {};
   const weeklyMap = {}; // keyed by the Monday (YYYY-MM-DD) of the listing's week
   const monthlyMap = {}; // keyed by YYYY-MM of the listing date
+  const dailyMap = {}; // keyed by YYYY-MM-DD listing date
   const transitionMap = {};
   const statesSet = new Set(['VA', 'MD', 'DC', 'WV']);
   const countiesSet = new Set();
@@ -833,6 +834,7 @@ function computeLeadsAnalytics(leads) {
     // different months into meaningless "W01..W06" buckets).
     const dayStr = String(l.listedDate || l.scrapedAt || '').slice(0, 10);
     if (/^\d{4}-\d{2}-\d{2}$/.test(dayStr)) {
+      dailyMap[dayStr] = (dailyMap[dayStr] || 0) + 1;
       const monthKey = dayStr.slice(0, 7);
       if (!monthlyMap[monthKey]) monthlyMap[monthKey] = { for_sale: 0, under_contract: 0, pending: 0, closed: 0, total: 0 };
       monthlyMap[monthKey][st] = (monthlyMap[monthKey][st] || 0) + 1;
@@ -893,6 +895,13 @@ function computeLeadsAnalytics(leads) {
     .sort((a, b) => b.avgPrice - a.avgPrice)
     .slice(0, 10);
 
+  // Volume vs. value for the county bubble chart: the 16 busiest counties.
+  const countyValue = Object.entries(countyPriceMap)
+    .filter(([_, data]) => data.count >= 5)
+    .map(([county, data]) => ({ county, avgPrice: Math.round(data.sum / data.count), count: data.count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 16);
+
   const topRealtors = Object.values(realtorMap)
     .map((r) => ({
       name: r.name,
@@ -910,6 +919,27 @@ function computeLeadsAnalytics(leads) {
     .map(([week, counts]) => ({ week, ...counts }))
     .sort((a, b) => a.week.localeCompare(b.week))
     .slice(-12);
+
+  // Listings per day for the last 150 days (calendar heat map) — sparse: days with none are omitted.
+  const dailyCutoff = new Date(Date.now() - 150 * 86400000).toISOString().slice(0, 10);
+  const dailyTrend = Object.fromEntries(Object.entries(dailyMap).filter(([day]) => day >= dailyCutoff));
+
+  // Price histogram: how many listings fall in each price band.
+  const PRICE_EDGES = [0, 300000, 400000, 500000, 600000, 700000, 800000, 1000000, 1250000, 1500000, 2000000, Infinity];
+  const fmtK = (v) => (v >= 1000000 ? `$${(v / 1000000).toFixed(v % 1000000 ? 2 : 0).replace(/0$/, '')}M` : `$${v / 1000}k`);
+  const priceHistogram = PRICE_EDGES.slice(0, -1).map((min, i) => {
+    const max = PRICE_EDGES[i + 1];
+    return {
+      min,
+      max: Number.isFinite(max) ? max : null,
+      label: i === 0 ? `<${fmtK(max)}` : Number.isFinite(max) ? `${fmtK(min)}–${fmtK(max)}` : `${fmtK(min)}+`,
+      count: 0,
+    };
+  });
+  prices.forEach((p) => {
+    const idx = PRICE_EDGES.findIndex((edge, i) => p >= edge && p < PRICE_EDGES[i + 1]);
+    if (idx >= 0) priceHistogram[idx].count += 1;
+  });
 
   const monthlyTrend = Object.entries(monthlyMap)
     .map(([month, counts]) => ({ month, ...counts }))
@@ -976,9 +1006,12 @@ function computeLeadsAnalytics(leads) {
     statusCounts: statusMap,
     topCounties,
     topCountyAvgPrices,
+    countyValue,
     topRealtors,
     weeklyTrend,
     monthlyTrend,
+    dailyTrend,
+    priceHistogram,
     statusTransitions,
     countyStatusMatrix: countyStatusMap,
     cityStats,
@@ -1026,7 +1059,7 @@ async function getLeadsAnalytics({ refresh = false } = {}) {
   if (!refresh) {
     const stored = await readStoredAnalytics();
     // A stored summary from before monthlyTrend existed is treated as stale so the new charts fill in.
-    if (stored && stored.result && stored.result.monthlyTrend && Date.now() - Date.parse(stored.computedAt) < ANALYTICS_TTL_MS) return stored.result;
+    if (stored && stored.result && stored.result.monthlyTrend && stored.result.priceHistogram && Date.now() - Date.parse(stored.computedAt) < ANALYTICS_TTL_MS) return stored.result;
   }
   return refreshLeadsAnalytics();
 }
@@ -1038,7 +1071,32 @@ async function refreshLeadsAnalyticsIfStale() {
   return true;
 }
 
+const CSV_COLUMNS = [
+  ['id', 'Lead ID'], ['status', 'Status'], ['listedDate', 'Listed date'], ['address', 'Address'], ['city', 'City'],
+  ['state', 'State'], ['zipCode', 'ZIP'], ['county', 'County'], ['listPrice', 'List price'], ['bedrooms', 'Beds'],
+  ['bathrooms', 'Baths'], ['sqft', 'Sq ft'], ['ownerFullName', 'Owner'], ['phone', 'Owner phone'], ['email', 'Owner email'],
+  ['realtorName', 'Realtor'], ['realtorPhone', 'Realtor phone'], ['realtorEmail', 'Realtor email'], ['brokerName', 'Broker'],
+];
+
+function csvCell(v) {
+  if (v === null || v === undefined) return '';
+  let s = String(v);
+  // Spreadsheet-formula injection guard: a cell starting with = + - @ would run as a formula in Excel.
+  if (/^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s)) s = `'${s}`;
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/** Every listing matching the filters as CSV (opens in Excel). Served from the cached snapshot. */
+async function exportListingsCsv(filters = {}) {
+  const all = await getLeadsSnapshot();
+  const rows = all.filter((r) => listingMatchesFilters(r.d, filters));
+  const lines = [CSV_COLUMNS.map(([, label]) => csvCell(label)).join(',')];
+  for (const r of rows) lines.push(CSV_COLUMNS.map(([key]) => csvCell(r.d[key])).join(','));
+  return { csv: `\ufeff${lines.join('\r\n')}\r\n`, count: rows.length };
+}
+
 module.exports = {
+  exportListingsCsv,
   upsertPreMoverLeads,
   listPreMoverLeads,
   importLegacyCustomers,
