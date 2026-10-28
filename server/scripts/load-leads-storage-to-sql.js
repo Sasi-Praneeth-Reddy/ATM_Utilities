@@ -98,13 +98,13 @@ async function main() {
   const problems = [];
   const matches = (await readJsonl(path.join(DIR, 'matchedLeads.jsonl'))).map(tMatch).map((m) => {
     if (!leadIds.has(m.leadId)) problems.push(`match ${m.matchId}: lead ${m.leadId} missing`);
-    const { leadId, ...rest } = m; return { ...rest, lead: { leadId } };
+    const { leadId, ...rest } = m; return { ...rest, leadLeadId: leadId };
   });
   const pricing = (await readJsonl(path.join(DIR, 'storagePricing.jsonl'))).map(({ id, data: d }) => {
     const facilityId = idMap[String(d.facilityId)] || (facIds.has(String(d.facilityId)) ? String(d.facilityId) : null);
     if (!facilityId) { problems.push(`price ${id}: no facility for ${d.facilityId}`); return null; }
     return {
-      priceId: id, facility: { facilityId }, unitSize: str(d.unitSize) || 'Unknown', unitType: str(d.unitType),
+      priceId: id, facilityFacilityId: facilityId, unitSize: str(d.unitSize) || 'Unknown', unitType: str(d.unitType),
       streetRate: int(d.streetRate), webRate: int(d.webRate), availability: str(d.availability), source: str(d.source),
       scrapedAt: ts(d.scrapedAt) || new Date(0).toISOString(),
     };
