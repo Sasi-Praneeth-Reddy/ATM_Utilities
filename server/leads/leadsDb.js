@@ -336,7 +336,8 @@ function toLeadRow(d) {
   return { ...d, lat: coords.lat, lon: coords.lon };
 }
 
-function listingMatchesFilters(d, { status, state, county, search, minPrice, maxPrice }) {
+function listingMatchesFilters(d, { status, state, county, search, minPrice, maxPrice, month }) {
+  if (month && month !== 'all' && String(d.listedDate || d.scrapedAt || '').slice(0, 7) !== month) return false;
   if (status && status !== 'all' && d.status !== status) return false;
   if (state && state !== 'all' && d.state !== state) return false;
   if (county && county !== 'all' && d.county !== county) return false;
@@ -371,13 +372,14 @@ async function listPreMoverLeads({
   search,
   minPrice,
   maxPrice,
+  month,
   limit = 50,
   offset = 0,
   after,
 } = {}) {
   const fetchLimit = Math.min(Math.max(Number(limit) || 50, 10), 200);
   const fetchOffset = Math.max(Number(offset) || 0, 0);
-  const filters = { status, state, county, search, minPrice, maxPrice };
+  const filters = { status, state, county, search, minPrice, maxPrice, month };
 
   async function fromSnapshot() {
     const all = await getLeadsSnapshot();
@@ -393,7 +395,8 @@ async function listPreMoverLeads({
     };
   }
 
-  if (search || minPrice || maxPrice || leadsCacheWarm()) return fromSnapshot();
+  // The month filter is served from the in-memory snapshot too (a date-range query would need its own index).
+  if (search || minPrice || maxPrice || (month && month !== 'all') || leadsCacheWarm()) return fromSnapshot();
 
   let query = leadsCol;
   if (status && status !== 'all') query = query.where('status', '==', status);
@@ -764,7 +767,8 @@ function computeLeadsAnalytics(leads) {
   const countyStatusMap = {};
   const statusMap = { for_sale: 0, under_contract: 0, pending: 0, closed: 0 };
   const realtorMap = {};
-  const weeklyMap = {};
+  const weeklyMap = {}; // keyed by the Monday (YYYY-MM-DD) of the listing's week
+  const monthlyMap = {}; // keyed by YYYY-MM of the listing date
   const transitionMap = {};
   const statesSet = new Set(['VA', 'MD', 'DC', 'WV']);
   const countiesSet = new Set();
@@ -824,12 +828,20 @@ function computeLeadsAnalytics(leads) {
       countyPriceMap[county].count += 1;
     }
 
-    // Weekly listing trend
-    const dateStr = l.listedDate || l.scrapedAt || l.migratedAt;
-    if (dateStr) {
-      const d = new Date(dateStr);
-      if (!isNaN(d.getTime())) {
-        const weekKey = `${d.getFullYear()}-W${String(Math.ceil((d.getDate() + (d.getDay() || 7)) / 7)).padStart(2, '0')}`;
+    // Monthly + weekly listing trend, by the date the home was LISTED (not when we ingested it —
+    // the old version used the ingest date and a week-of-month formula, which mixed up weeks from
+    // different months into meaningless "W01..W06" buckets).
+    const dayStr = String(l.listedDate || l.scrapedAt || '').slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dayStr)) {
+      const monthKey = dayStr.slice(0, 7);
+      if (!monthlyMap[monthKey]) monthlyMap[monthKey] = { for_sale: 0, under_contract: 0, pending: 0, closed: 0, total: 0 };
+      monthlyMap[monthKey][st] = (monthlyMap[monthKey][st] || 0) + 1;
+      monthlyMap[monthKey].total += 1;
+
+      const dt = new Date(`${dayStr}T00:00:00Z`);
+      if (!isNaN(dt.getTime())) {
+        dt.setUTCDate(dt.getUTCDate() - ((dt.getUTCDay() + 6) % 7)); // back to Monday
+        const weekKey = dt.toISOString().slice(0, 10);
         if (!weeklyMap[weekKey]) weeklyMap[weekKey] = { for_sale: 0, under_contract: 0, pending: 0, closed: 0, total: 0 };
         weeklyMap[weekKey][st] = (weeklyMap[weekKey][st] || 0) + 1;
         weeklyMap[weekKey].total += 1;
@@ -893,10 +905,16 @@ function computeLeadsAnalytics(leads) {
     .sort((a, b) => b.listings - a.listings)
     .slice(0, 30);
 
+  // Last 12 weeks (week = Monday date) and every month on record (max 24), oldest first.
   const weeklyTrend = Object.entries(weeklyMap)
     .map(([week, counts]) => ({ week, ...counts }))
     .sort((a, b) => a.week.localeCompare(b.week))
-    .slice(-8);
+    .slice(-12);
+
+  const monthlyTrend = Object.entries(monthlyMap)
+    .map(([month, counts]) => ({ month, ...counts }))
+    .sort((a, b) => a.month.localeCompare(b.month))
+    .slice(-24);
 
   const statusTransitions = Object.entries(transitionMap)
     .map(([transition, count]) => ({ transition, count }))
@@ -960,6 +978,7 @@ function computeLeadsAnalytics(leads) {
     topCountyAvgPrices,
     topRealtors,
     weeklyTrend,
+    monthlyTrend,
     statusTransitions,
     countyStatusMatrix: countyStatusMap,
     cityStats,
@@ -1006,7 +1025,8 @@ async function readStoredAnalytics() {
 async function getLeadsAnalytics({ refresh = false } = {}) {
   if (!refresh) {
     const stored = await readStoredAnalytics();
-    if (stored && Date.now() - Date.parse(stored.computedAt) < ANALYTICS_TTL_MS) return stored.result;
+    // A stored summary from before monthlyTrend existed is treated as stale so the new charts fill in.
+    if (stored && stored.result && stored.result.monthlyTrend && Date.now() - Date.parse(stored.computedAt) < ANALYTICS_TTL_MS) return stored.result;
   }
   return refreshLeadsAnalytics();
 }

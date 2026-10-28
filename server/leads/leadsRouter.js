@@ -202,6 +202,8 @@ async function handleLeadsRequest(req, res, url, currentUser) {
       const search = url.searchParams.get('search') || undefined;
       const minPrice = url.searchParams.get('minPrice') || undefined;
       const maxPrice = url.searchParams.get('maxPrice') || undefined;
+      const monthParam = url.searchParams.get('month') || undefined;
+      const month = monthParam && /^\d{4}-\d{2}$/.test(monthParam) ? monthParam : undefined;
       const limit = Number(url.searchParams.get('limit')) || 200;
       const offset = Number(url.searchParams.get('offset')) || 0;
       const after = url.searchParams.get('after') || undefined; // previous page's endCursor (cheap paging)
@@ -213,6 +215,7 @@ async function handleLeadsRequest(req, res, url, currentUser) {
         search,
         minPrice,
         maxPrice,
+        month,
         limit,
         offset,
         after,

@@ -25,7 +25,7 @@ export async function sendOutreach(backendUrl, matchId, payload) {
   return apiCall(backendUrl, 'POST', `/api/leads/matches/${encodeURIComponent(matchId)}/send-outreach`, payload);
 }
 
-export async function fetchListings(backendUrl, { status, state, county, search, minPrice, maxPrice, limit = 100, offset = 0, after } = {}) {
+export async function fetchListings(backendUrl, { status, state, county, search, minPrice, maxPrice, month, limit = 100, offset = 0, after } = {}) {
   const params = new URLSearchParams();
   if (status && status !== 'all') params.set('status', status);
   if (state && state !== 'all') params.set('state', state);
@@ -33,6 +33,7 @@ export async function fetchListings(backendUrl, { status, state, county, search,
   if (search) params.set('search', search);
   if (minPrice) params.set('minPrice', String(minPrice));
   if (maxPrice) params.set('maxPrice', String(maxPrice));
+  if (month && month !== 'all') params.set('month', month);
   params.set('limit', String(limit));
   params.set('offset', String(offset));
   // `after` = the previous page's endCursor: lets the server fetch just this page instead of skipping `offset` documents.

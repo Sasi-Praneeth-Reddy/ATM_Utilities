@@ -204,6 +204,150 @@ function resolveLeadCoords(lead) {
   ];
 }
 
+
+// ---- Listing-volume charts (Market Visualizations tab) ----
+const STATUS_STACK = [
+  { key: 'for_sale', label: 'Active for sale', color: '#10b981' },
+  { key: 'under_contract', label: 'Under contract', color: '#f97316' },
+  { key: 'pending', label: 'Pending / contingent', color: '#3b82f6' },
+  { key: 'closed', label: 'Closed / sold', color: '#94a3b8' },
+];
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function monthLabel(key, withYear = true) {
+  const [y, m] = String(key).split('-');
+  const name = MONTH_NAMES[Number(m) - 1] || key;
+  return withYear ? `${name} ${y}` : name;
+}
+
+function weekLabel(mondayKey) {
+  const [, m, d] = String(mondayKey).split('-');
+  return `${MONTH_NAMES[Number(m) - 1] || ''} ${Number(d)}`;
+}
+
+function niceMax(v) {
+  if (v <= 10) return 10;
+  const pow = 10 ** Math.floor(Math.log10(v));
+  const n = v / pow;
+  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * pow;
+}
+
+/** Stacked column chart. `rows`: [{ key, label, sub?, total, for_sale, ... }]; click a column to
+    drill in (onSelect(key)). Plain HTML/CSS so it stays responsive without a chart library. */
+function StackedColumns({ rows, selectedKey, onSelect, height = 200 }) {
+  const max = niceMax(Math.max(...rows.map((r) => r.total), 1));
+  const ticks = [1, 0.75, 0.5, 0.25, 0];
+  return (
+    <div style={{ display: 'flex', gap: '8px' }}>
+      <div style={{ position: 'relative', width: '38px', height: `${height}px`, flex: 'none' }}>
+        {ticks.map((t) => (
+          <span key={t} style={{ position: 'absolute', right: 0, top: `${(1 - t) * 100}%`, transform: 'translateY(-50%)', fontSize: '10px', color: '#718096' }}>
+            {Math.round(max * t).toLocaleString()}
+          </span>
+        ))}
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ position: 'relative', height: `${height}px`, display: 'flex', alignItems: 'flex-end', gap: '6px', borderBottom: '1px solid #cbd5e0' }}>
+          {ticks.slice(0, 4).map((t) => (
+            <div key={t} style={{ position: 'absolute', left: 0, right: 0, top: `${(1 - t) * 100}%`, borderTop: '1px dashed #e2e8f0', pointerEvents: 'none' }} />
+          ))}
+          {rows.map((r) => {
+            const known = STATUS_STACK.reduce((s, x) => s + (r[x.key] || 0), 0);
+            const segs = STATUS_STACK.map((x) => ({ ...x, n: r[x.key] || 0 }));
+            if (r.total > known) segs.push({ key: 'other', label: 'Other', color: '#cbd5e0', n: r.total - known });
+            const selected = selectedKey === r.key;
+            const tip = `${r.label}${r.sub ? ' ' + r.sub : ''}: ${r.total.toLocaleString()} listings\n` + segs.filter((s) => s.n).map((s) => `${s.label}: ${s.n.toLocaleString()}`).join('\n');
+            return (
+              <button
+                key={r.key}
+                type="button"
+                title={tip}
+                onClick={() => onSelect && onSelect(r.key)}
+                style={{
+                  position: 'relative', flex: 1, minWidth: 0, height: '100%', padding: 0, border: 'none', background: 'none',
+                  display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', cursor: onSelect ? 'pointer' : 'default',
+                  opacity: selectedKey && !selected ? 0.45 : 1,
+                }}
+              >
+                <span style={{ fontSize: '10px', fontWeight: 700, color: '#2d3748', textAlign: 'center', marginBottom: '2px', whiteSpace: 'nowrap' }}>
+                  {r.total.toLocaleString()}
+                </span>
+                <div style={{ display: 'flex', flexDirection: 'column-reverse', height: `${(r.total / max) * 100}%`, minHeight: '2px', borderRadius: '4px 4px 0 0', overflow: 'hidden', outline: selected ? '2px solid #2b6cb0' : 'none' }}>
+                  {segs.map((s) => (s.n ? <div key={s.key} style={{ height: `${(s.n / r.total) * 100}%`, backgroundColor: s.color }} /> : null))}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
+          {rows.map((r) => (
+            <div key={r.key} style={{ flex: 1, minWidth: 0, textAlign: 'center', fontSize: '11px', color: '#4a5568', lineHeight: 1.2 }}>
+              <div style={{ fontWeight: selectedKey === r.key ? 800 : 600 }}>{r.label}</div>
+              {r.sub && <div style={{ fontSize: '10px', color: '#718096' }}>{r.sub}</div>}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StatusLegend() {
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', margin: '10px 0 0 46px', fontSize: '11px', color: '#4a5568' }}>
+      {STATUS_STACK.map((s) => (
+        <span key={s.key} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+          <span style={{ width: '10px', height: '10px', borderRadius: '2px', backgroundColor: s.color }} />{s.label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function ListingVolumeCharts({ monthly, weekly, selectedMonth, onSelectMonth }) {
+  const card = { backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, #e2e8f0)', borderRadius: '8px', padding: '20px' };
+  if (!monthly.length) {
+    return (
+      <div style={card}>
+        <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: 700 }}>📈 Listings by month</h3>
+        <p style={{ margin: 0, fontSize: '12px', color: '#718096' }}>No listing dates on record yet. An admin can refresh analytics to rebuild this chart.</p>
+      </div>
+    );
+  }
+  const peak = monthly.reduce((a, b) => (b.total > a.total ? b : a), monthly[0]);
+  const latest = monthly[monthly.length - 1];
+  const monthRows = monthly.map((m, i) => ({
+    ...m,
+    key: m.month,
+    label: monthLabel(m.month, false),
+    sub: i === 0 || m.month.endsWith('-01') ? m.month.slice(0, 4) : '',
+  }));
+  const weekRows = weekly.map((w) => ({ ...w, key: w.week, label: weekLabel(w.week) }));
+  const lastWeek = weekly[weekly.length - 1];
+  return (
+    <>
+      <div style={card}>
+        <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: 700 }}>📈 Listings by month</h3>
+        <p style={{ margin: '0 0 14px 0', fontSize: '12px', color: '#718096' }}>
+          Homes by the month they were listed, split by current status. Busiest month: <strong>{monthLabel(peak.month)}</strong> ({peak.total.toLocaleString()}).
+          {' '}Latest: <strong>{monthLabel(latest.month)}</strong> ({latest.total.toLocaleString()}). Click a month to filter the listings to it.
+        </p>
+        <StackedColumns rows={monthRows} selectedKey={selectedMonth !== 'all' ? selectedMonth : null} onSelect={onSelectMonth} height={220} />
+        <StatusLegend />
+      </div>
+      {weekRows.length > 0 && (
+        <div style={card}>
+          <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: 700 }}>🗓️ Last {weekRows.length} weeks</h3>
+          <p style={{ margin: '0 0 14px 0', fontSize: '12px', color: '#718096' }}>
+            New listings per week (weeks start Monday).{lastWeek ? ` The latest week, starting ${weekLabel(lastWeek.week)}, may still be filling in.` : ''}
+          </p>
+          <StackedColumns rows={weekRows} height={150} />
+        </div>
+      )}
+    </>
+  );
+}
+
 export default function LeadsTab({ backendUrl, role }) {
   // Importing legacy customers and sweeping for matches touch lots of data, so the server only allows admins.
   const isAdmin = role === 'admin';
@@ -242,6 +386,7 @@ export default function LeadsTab({ backendUrl, role }) {
     cityStats: [],
     topRealtors: [],
     weeklyTrend: [],
+    monthlyTrend: [],
     statusTransitions: [],
     availableStates: ['VA', 'MD', 'DC', 'WV'],
     availableCounties: ['Fairfax County', 'Loudoun County', 'Prince William County', 'Arlington County', 'Montgomery County'],
@@ -253,6 +398,7 @@ export default function LeadsTab({ backendUrl, role }) {
   const [selectedCounty, setSelectedCounty] = useState('all');
   const [priceTier, setPriceTier] = useState('all'); // 'all' | 'under500' | '500to800' | '800to1200' | '1200plus'
   const [listingSearch, setListingSearch] = useState('');
+  const [selectedMonth, setSelectedMonth] = useState('all'); // 'all' | 'YYYY-MM' (by listing date)
 
   // Pagination State (User configurable: 20, 50, 100)
   const [pageSize, setPageSize] = useState(50);
@@ -392,7 +538,7 @@ export default function LeadsTab({ backendUrl, role }) {
   // Reset to page 1 whenever filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [selectedStatus, selectedState, selectedCounty, priceTier, listingSearch, pageSize]);
+  }, [selectedStatus, selectedState, selectedCounty, priceTier, listingSearch, selectedMonth, pageSize]);
 
   // Fetch Listings based on active filters and pagination
   useEffect(() => {
@@ -401,13 +547,14 @@ export default function LeadsTab({ backendUrl, role }) {
       setLoadingListings(true);
       try {
         const offset = (currentPage - 1) * pageSize;
-        const cursorSig = [selectedStatus, selectedState, selectedCounty, listingSearch, priceBounds.minPrice, priceBounds.maxPrice, pageSize].join('|');
+        const cursorSig = [selectedStatus, selectedState, selectedCounty, listingSearch, selectedMonth, priceBounds.minPrice, priceBounds.maxPrice, pageSize].join('|');
         const after = currentPage > 1 ? pageCursorsRef.current[`${cursorSig}:${currentPage - 1}`] : undefined;
         const res = await fetchListings(backendUrl, {
           status: selectedStatus,
           state: selectedState,
           county: selectedCounty,
           search: listingSearch,
+          month: selectedMonth,
           minPrice: priceBounds.minPrice,
           maxPrice: priceBounds.maxPrice,
           limit: pageSize,
@@ -434,7 +581,7 @@ export default function LeadsTab({ backendUrl, role }) {
       active = false;
       clearTimeout(timer);
     };
-  }, [backendUrl, selectedStatus, selectedState, selectedCounty, listingSearch, priceBounds, currentPage, pageSize]);
+  }, [backendUrl, selectedStatus, selectedState, selectedCounty, listingSearch, selectedMonth, priceBounds, currentPage, pageSize]);
 
   // Active City Clusters with accurate listing volumes
   const activeCityClusters = useMemo(() => {
@@ -1178,6 +1325,21 @@ export default function LeadsTab({ backendUrl, role }) {
             </select>
           </div>
 
+          {/* Month Filter (by listing date) */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ fontSize: '11px', fontWeight: 700, color: '#4a5568', textTransform: 'uppercase' }}>Month:</span>
+            <select
+              value={selectedMonth}
+              onChange={(e) => setSelectedMonth(e.target.value)}
+              style={{ padding: '6px 10px', borderRadius: '4px', border: '1px solid #cbd5e0', fontSize: '12px', cursor: 'pointer' }}
+            >
+              <option value="all">All Months</option>
+              {[...(analytics.monthlyTrend || [])].reverse().map((m) => (
+                <option key={m.month} value={m.month}>{monthLabel(m.month)} ({m.total.toLocaleString()})</option>
+              ))}
+            </select>
+          </div>
+
           {/* Search Box */}
           <div style={{ flex: 1, minWidth: '220px' }}>
             <input
@@ -1574,43 +1736,13 @@ export default function LeadsTab({ backendUrl, role }) {
               </div>
             </div>
 
-            {/* Weekly Velocity Trend */}
-            <div style={{
-              backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, #e2e8f0)',
-              borderRadius: '8px', padding: '20px'
-            }}>
-              <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: 700 }}>
-                📈 Weekly Pre-Mover Intake Velocity
-              </h3>
-              <p style={{ margin: '0 0 16px 0', fontSize: '12px', color: '#718096' }}>
-                New listings ingested per week across the Northern Virginia MLS market
-              </p>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {(analytics.weeklyTrend?.length ? analytics.weeklyTrend : [
-                  { week: 'W1', total: 640, for_sale: 480, under_contract: 160 },
-                  { week: 'W2', total: 720, for_sale: 530, under_contract: 190 },
-                  { week: 'W3', total: 810, for_sale: 590, under_contract: 220 },
-                  { week: 'W4', total: 950, for_sale: 690, under_contract: 260 },
-                  { week: 'W5', total: 1120, for_sale: 820, under_contract: 300 },
-                  { week: 'W6', total: 1280, for_sale: 940, under_contract: 340 },
-                ]).map((w) => {
-                  const maxW = 1400;
-                  const pct = Math.min(100, Math.max(15, Math.round((w.total / maxW) * 100)));
-                  return (
-                    <div key={w.week}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '2px' }}>
-                        <span style={{ fontWeight: 600 }}>Week {w.week}</span>
-                        <span style={{ fontWeight: 700, color: '#2b6cb0' }}>+{w.total} new leads</span>
-                      </div>
-                      <div style={{ width: '100%', height: '10px', backgroundColor: '#edf2f7', borderRadius: '5px', overflow: 'hidden' }}>
-                        <div style={{ width: `${pct}%`, height: '100%', backgroundColor: '#3182ce', borderRadius: '5px' }} />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+            {/* Listing volume by month / week */}
+            <ListingVolumeCharts
+              monthly={analytics.monthlyTrend || []}
+              weekly={analytics.weeklyTrend || []}
+              selectedMonth={selectedMonth}
+              onSelectMonth={(m) => { setSelectedMonth(m); setActiveSubTab('explorer'); }}
+            />
           </div>
         </div>
       )}
