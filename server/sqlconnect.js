@@ -43,8 +43,9 @@ async function write(query, variables) {
  *   opts.where    - extra where fragment WITHOUT braces, e.g. 'status: {eq: $status}'
  *   opts.varDefs  - extra variable definitions, e.g. ', $status: String!'
  *   opts.vars     - values for those variables
+ *   opts.onPage   - if given, each page is passed to it and NOT collected (keeps memory flat on big tables)
  */
-async function pageAll(field, pk, selection, { where = '', varDefs = '', vars = {}, pageSize = 2000 } = {}) {
+async function pageAll(field, pk, selection, { where = '', varDefs = '', vars = {}, pageSize = 2000, onPage = null } = {}) {
   const out = [];
   let after = null;
   for (;;) {
@@ -55,7 +56,7 @@ async function pageAll(field, pk, selection, { where = '', varDefs = '', vars = 
     const q = `query Page($after: String${varDefs}) { ${field}(limit: ${pageSize}, orderBy: {${pk}: ASC}${w}) { ${selection} } }`;
     const data = await read(q, after !== null ? { ...vars, after } : { ...vars });
     const rows = data[field] || [];
-    out.push(...rows);
+    if (onPage) onPage(rows); else out.push(...rows);
     if (rows.length < pageSize) break;
     after = rows[rows.length - 1][pk];
   }

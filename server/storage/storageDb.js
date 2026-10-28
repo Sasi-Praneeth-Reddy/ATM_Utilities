@@ -184,47 +184,54 @@ async function computeStorageSummary() {
   const newest = await sql.read('query N { storagePricings(limit: 1, orderBy: {scrapedAt: DESC}) { scrapedAt } }');
   const newestAt = newest.storagePricings && newest.storagePricings[0] ? newest.storagePricings[0].scrapedAt : null;
   const since = new Date((newestAt ? Date.parse(newestAt) : Date.now()) - SUMMARY_WINDOW_DAYS * 86400000).toISOString();
-  const [facilities, prices] = await Promise.all([
-    sql.pageAll('storageFacilities', 'facilityId', 'facilityId'),
-    sql.pageAll('storagePricings', 'priceId', 'facility { facilityId } unitSize unitType availability streetRate webRate scrapedAt source', {
-      where: 'scrapedAt: {ge: $since}', varDefs: ', $since: Timestamp!', vars: { since },
-    }),
-  ]);
+  const facilities = await sql.pageAll('storageFacilities', 'facilityId', 'facilityId');
 
-  // "Latest" = each facility's most recent scrape day.
-  const latestDay = new Map();
+  // Stream the price rows page by page and keep only a running aggregate per facility + unit size
+  // (its most recent scrape day), so memory stays small however much history has piled up.
+  let activeSnapshots = 0;
   let lastScraped = '';
-  for (const r of prices) {
-    const at = String(r.scrapedAt || '');
-    const day = at.slice(0, 10);
-    const fid = String(r.facility.facilityId);
-    if (day > (latestDay.get(fid) || '')) latestDay.set(fid, day);
-    if (at > lastScraped) lastScraped = at;
-  }
+  const agg = new Map(); // `${facilityId}|${unitSize}` -> { day, sum, count, best }
+  await sql.pageAll('storagePricings', 'priceId', 'facility { facilityId } unitSize unitType availability streetRate webRate scrapedAt source', {
+    where: 'scrapedAt: {ge: $since}', varDefs: ', $since: Timestamp!', vars: { since },
+    onPage: (rows) => {
+      for (const r of rows) {
+        activeSnapshots += 1;
+        const at = String(r.scrapedAt || '');
+        if (at > lastScraped) lastScraped = at;
+        if (!r.webRate || !r.facility) continue;
+        const day = at.slice(0, 10);
+        const fid = String(r.facility.facilityId);
+        const key = `${fid}|${r.unitSize}`;
+        let a = agg.get(key);
+        if (!a || day > a.day) { a = { day, sum: 0, count: 0, best: null }; agg.set(key, a); }
+        if (day < a.day) continue;
+        a.sum += r.webRate;
+        a.count += 1;
+        if (!a.best || r.webRate < a.best.webRate) {
+          a.best = {
+            id: key.replace('|', '_'),
+            facilityId: fid,
+            unitSize: r.unitSize,
+            unitType: r.unitType || '',
+            availability: r.availability || '',
+            streetRate: r.streetRate ?? null,
+            webRate: r.webRate,
+            scrapedAt: at,
+            source: r.source || '',
+          };
+        }
+      }
+    },
+  });
 
   const sums = {};
-  const best = new Map(); // `${facilityId}|${unitSize}` -> cheapest row of the latest scrape
-  for (const r of prices) {
-    const fid = String(r.facility.facilityId);
-    if (String(r.scrapedAt || '').slice(0, 10) !== latestDay.get(fid) || !r.webRate) continue;
-    const acc = (sums[r.unitSize] ||= { sum: 0, count: 0 });
-    acc.sum += r.webRate;
-    acc.count += 1;
-    const key = `${fid}|${r.unitSize}`;
-    const cur = best.get(key);
-    if (!cur || r.webRate < cur.webRate) {
-      best.set(key, {
-        id: key.replace('|', '_'),
-        facilityId: fid,
-        unitSize: r.unitSize,
-        unitType: r.unitType || '',
-        availability: r.availability || '',
-        streetRate: r.streetRate ?? null,
-        webRate: r.webRate,
-        scrapedAt: r.scrapedAt || '',
-        source: r.source || '',
-      });
-    }
+  const best = [];
+  for (const [key, a] of agg) {
+    const sz = key.slice(key.indexOf('|') + 1);
+    const acc = (sums[sz] ||= { sum: 0, count: 0 });
+    acc.sum += a.sum;
+    acc.count += a.count;
+    best.push(a.best);
   }
 
   const avgRates = {};
@@ -236,10 +243,10 @@ async function computeStorageSummary() {
     computedAt: new Date().toISOString(),
     dirty: false,
     totalFacilities: facilities.length,
-    activeSnapshots: prices.length,
+    activeSnapshots,
     avgRates,
     lastScraped,
-    latestPricing: [...best.values()],
+    latestPricing: best,
   };
 }
 
