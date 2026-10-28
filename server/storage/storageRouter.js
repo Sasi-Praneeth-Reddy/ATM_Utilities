@@ -145,6 +145,21 @@ async function handleStorageRequest(req, res, url, currentUser) {
       return true;
     }
 
+    // POST /api/storage/scrape/run - the "Update prices" button: starts the GitHub Actions storage scraper (admin only)
+    if (p === '/api/storage/scrape/run' && req.method === 'POST') {
+      const { startStorageScrape } = require('./scraperTrigger');
+      sendJson(req, res, 200, await startStorageScrape());
+      return true;
+    }
+
+    // GET /api/storage/scrape/status - latest manual scraper run (for the button's progress text)
+    if (p === '/api/storage/scrape/status' && req.method === 'GET') {
+      const { latestRun } = require('./scraperTrigger');
+      res.removeHeader('Cache-Control');
+      sendJson(req, res, 200, { run: await latestRun() });
+      return true;
+    }
+
     // POST /api/storage/summary/refresh  (scraper calls this after uploading prices)
     if (p === '/api/storage/summary/refresh' && req.method === 'POST') {
       const sum = await storageDb.refreshStorageSummary();
@@ -166,7 +181,7 @@ async function handleStorageRequest(req, res, url, currentUser) {
   } catch (err) {
     console.error(`[storageRouter] Error handling ${p}:`, err);
     res.removeHeader('Cache-Control'); // never let the browser cache an error
-    sendJson(req, res, 500, { error: err.message || 'Internal server error' });
+    sendJson(req, res, err.status && err.status >= 400 && err.status < 600 ? err.status : 500, { error: err.message || 'Internal server error' });
     return true;
   }
 }

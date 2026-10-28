@@ -315,7 +315,7 @@ export default function App() {
         )}
 
         {!soonModule && activeTab === 'storage' && (role === 'admin' || role === 'dispatcher') && (
-          <StorageTab backendUrl={backendUrl} />
+          <StorageTab backendUrl={backendUrl} role={role} />
         )}
 
         {!soonModule && activeTab === 'benchmarks' && (role === 'admin' || role === 'dispatcher') && (

@@ -72,6 +72,7 @@ const WEBHOOK_SECRET = defineSecret('WEBHOOK_SECRET');
 // API key for the daily Leads/Storage scrapers (GitHub Actions) - see server/scraperAuth.js. Set via:
 //   firebase functions:secrets:set SCRAPER_API_KEY   (use the same value as the GitHub repo secret)
 const SCRAPER_API_KEY = defineSecret('SCRAPER_API_KEY');
+const GITHUB_DISPATCH_TOKEN = defineSecret('GITHUB_DISPATCH_TOKEN'); // lets the Storage tab's "Update prices" button start the scraper
 // Per-user SmartMoving iCal feed URL (Profile menu -> Calendar Syncing -> iCal Calendar sync ->
 // Copy) — see server/icalClient.js. Same sensitivity as an API key, so it's a Secret Manager secret
 // like the others, not a plain .env value. Set via: firebase functions:secrets:set SMARTMOVING_ICAL_URL
@@ -85,7 +86,7 @@ const GMAIL_OAUTH_CLIENT_ID = defineSecret('GMAIL_OAUTH_CLIENT_ID');
 const GMAIL_OAUTH_CLIENT_SECRET = defineSecret('GMAIL_OAUTH_CLIENT_SECRET');
 const GMAIL_OAUTH_REFRESH_TOKEN = defineSecret('GMAIL_OAUTH_REFRESH_TOKEN');
 const ALL_SECRETS = [
-  SESSION_SECRET, SMTP_PASS, SMARTMOVING_API_KEY, WEBHOOK_SECRET, SCRAPER_API_KEY, SMARTMOVING_ICAL_URL,
+  SESSION_SECRET, SMTP_PASS, SMARTMOVING_API_KEY, WEBHOOK_SECRET, SCRAPER_API_KEY, GITHUB_DISPATCH_TOKEN, SMARTMOVING_ICAL_URL,
   GMAIL_OAUTH_CLIENT_ID, GMAIL_OAUTH_CLIENT_SECRET, GMAIL_OAUTH_REFRESH_TOKEN,
 ];
 

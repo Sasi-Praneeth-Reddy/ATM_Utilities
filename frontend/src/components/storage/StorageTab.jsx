@@ -37,7 +37,57 @@ const INPUT = {
   backgroundColor: 'var(--bg-card, #ffffff)', color: 'var(--text-main, #2d3748)', boxSizing: 'border-box',
 };
 
-export default function StorageTab({ backendUrl }) {
+/** Admin-only button: starts the storage-price scraper (GitHub Actions) and shows its progress. */
+function UpdatePricesButton({ backendUrl }) {
+  const [run, setRun] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const running = run && run.status !== 'completed';
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      try {
+        const res = await apiCall(backendUrl, 'GET', '/api/storage/scrape/status');
+        if (active) setRun(res.run || null);
+      } catch (e) { /* status is optional - the button still works */ }
+    };
+    load();
+    if (!running) return () => { active = false; };
+    const t = setInterval(load, 20000);
+    return () => { active = false; clearInterval(t); };
+  }, [backendUrl, running]);
+
+  async function start() {
+    setBusy(true); setMsg('');
+    try {
+      await apiCall(backendUrl, 'POST', '/api/storage/scrape/run', {});
+      setRun({ status: 'queued', createdAt: new Date().toISOString() });
+      setMsg('Started - this takes about 10 minutes.');
+    } catch (e) {
+      setMsg(e.message.replace(/^Backend returned \d+ — /, ''));
+    } finally { setBusy(false); }
+  }
+
+  const done = run && run.status === 'completed';
+  const ok = done && run.conclusion === 'success';
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+      <button onClick={start} disabled={busy || running} style={{
+        padding: '7px 14px', borderRadius: '6px', border: '1px solid #2b6cb0', fontSize: '12px', fontWeight: 700,
+        cursor: busy || running ? 'default' : 'pointer', backgroundColor: busy || running ? '#e2e8f0' : '#3182ce', color: busy || running ? '#4a5568' : '#fff',
+      }}>{running ? '⏳ Updating prices…' : '🔄 Update prices'}</button>
+      <span style={{ fontSize: '12px', color: '#718096' }}>
+        {msg || (running && 'Scraping competitor prices - about 10 minutes.')}
+        {!msg && !running && done && (ok
+          ? <>Last update {new Date(run.updatedAt).toLocaleString()} ✓ <a href="#" onClick={(e) => { e.preventDefault(); window.location.reload(); }}>Reload data</a></>
+          : <>Last run {run.conclusion || 'ended'} - <a href={run.url} target="_blank" rel="noreferrer">view log</a></>)}
+      </span>
+    </div>
+  );
+}
+
+export default function StorageTab({ backendUrl, role }) {
   const [unitSize, setUnitSize] = useState('10x10');
   const [selectedBrands, setSelectedBrands] = useState([]); // empty = all brands
   const [city, setCity] = useState('all');
@@ -308,6 +358,7 @@ export default function StorageTab({ backendUrl }) {
           <p style={{ margin: 0, color: '#718096', fontSize: '13px' }}>
             Competitor pricing, market share, and facility locations across Northern Virginia, DC, and Maryland.
           </p>
+          {role === 'admin' && <div style={{ marginTop: '10px' }}><UpdatePricesButton backendUrl={backendUrl} /></div>}
         </div>
         <div style={{ display: 'flex', gap: '6px', backgroundColor: 'var(--bg-subtle, #edf2f7)', padding: '3px', borderRadius: '6px' }}>
           {[['dashboard', '📊 Map & Analytics'], ['table', `📋 Facility Directory (${rows.length})`]].map(([id, label]) => (
