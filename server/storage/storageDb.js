@@ -15,7 +15,6 @@ const sql = require('../sqlconnect');
  * pricing is ingested) and stored in the AppState table.
  * ------------------------------------------------------------------------------------------- */
 const MEMO_TTL_MS = 10 * 60 * 1000;
-const SUMMARY_TTL_MS = 24 * 60 * 60 * 1000;
 const memo = new Map();
 async function memoized(key, fn) {
   const hit = memo.get(key);
@@ -252,22 +251,25 @@ async function computeStorageSummary() {
 
 let summaryInflight = null;
 let summaryCache = { computedAt: null, value: null };
+
+/** Recompute the summary and store it. Slow (scans the recent price rows) - called by the scraper after
+ * its upload (POST /api/storage/summary/refresh) and only on a page load if nothing has ever been stored. */
+async function refreshStorageSummary() {
+  if (!summaryInflight) {
+    summaryInflight = (async () => {
+      const fresh = await computeStorageSummary();
+      await sql.setState('storageSummary', fresh);
+      return fresh;
+    })().finally(() => { summaryInflight = null; });
+  }
+  return summaryInflight;
+}
+
 async function getStorageSummary() {
-  let data = null;
-  const stored = await sql.getState('storageSummary');
-  if (stored && stored.computedAt && !stored.dirty && Date.now() - Date.parse(stored.computedAt) < SUMMARY_TTL_MS) {
-    data = stored;
-  }
-  if (!data) {
-    if (!summaryInflight) {
-      summaryInflight = (async () => {
-        const fresh = await computeStorageSummary();
-        await sql.setState('storageSummary', fresh);
-        return fresh;
-      })().finally(() => { summaryInflight = null; });
-    }
-    data = await summaryInflight;
-  }
+  // Page loads read the stored summary even if it is a little stale ("dirty"): a fast answer now beats a
+  // 30-second scan. Fresh data arrives when the scraper triggers a refresh.
+  let data = await sql.getState('storageSummary');
+  if (!data || !data.computedAt) data = await refreshStorageSummary();
   if (summaryCache.computedAt !== data.computedAt) summaryCache = { computedAt: data.computedAt, value: data };
   return { ...summaryCache.value, latestPricing: [...(summaryCache.value.latestPricing || [])] };
 }
@@ -368,6 +370,7 @@ module.exports = {
   getPricingHistory,
   insertPricingSnapshots: insertPricingSnapshotsW,
   getStorageKpis,
+  refreshStorageSummary,
   getMarketShare,
   getMlsBenchmarks,
   upsertMlsBenchmarks: upsertMlsBenchmarksW,

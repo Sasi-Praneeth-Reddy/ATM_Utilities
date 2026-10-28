@@ -54,7 +54,7 @@ async function handleStorageRequest(req, res, url, currentUser) {
 
   // The daily scraper (GitHub Actions) may push data with the x-api-key header; it can only use the
   // bulk write endpoints below, never read anything.
-  const isScraperWrite = req.method === 'POST' && p.endsWith('/bulk') && hasValidScraperKey(req);
+  const isScraperWrite = req.method === 'POST' && (p.endsWith('/bulk') || p === '/api/storage/summary/refresh') && hasValidScraperKey(req);
 
   // Auth requirement: storage tracking data visible to admin and dispatcher
   if (!isScraperWrite && (!currentUser || !['admin', 'dispatcher'].includes(currentUser.role))) {
@@ -67,6 +67,9 @@ async function handleStorageRequest(req, res, url, currentUser) {
     sendJson(req, res, 403, { error: 'Forbidden: changing storage data requires admin access' });
     return true;
   }
+
+  // Browsers may reuse read responses for 2 minutes (data changes once a day), so tab switches and reloads are instant.
+  if (req.method === 'GET') res.setHeader('Cache-Control', 'private, max-age=120');
 
   try {
     // GET /api/storage/facilities
@@ -142,6 +145,13 @@ async function handleStorageRequest(req, res, url, currentUser) {
       return true;
     }
 
+    // POST /api/storage/summary/refresh  (scraper calls this after uploading prices)
+    if (p === '/api/storage/summary/refresh' && req.method === 'POST') {
+      const sum = await storageDb.refreshStorageSummary();
+      sendJson(req, res, 200, { ok: true, computedAt: sum.computedAt, activeSnapshots: sum.activeSnapshots, facilities: sum.totalFacilities });
+      return true;
+    }
+
     // POST /api/storage/benchmarks/bulk
     if (p === '/api/storage/benchmarks/bulk' && req.method === 'POST') {
       const body = await readJsonBody(req);
@@ -155,6 +165,7 @@ async function handleStorageRequest(req, res, url, currentUser) {
     return true;
   } catch (err) {
     console.error(`[storageRouter] Error handling ${p}:`, err);
+    res.removeHeader('Cache-Control'); // never let the browser cache an error
     sendJson(req, res, 500, { error: err.message || 'Internal server error' });
     return true;
   }
