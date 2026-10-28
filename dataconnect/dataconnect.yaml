@@ -1,0 +1,11 @@
+specVersion: "v1"
+serviceId: "atm-scheduler-service"
+location: "us-east4"
+schema:
+  source: "./schema"
+  datasource:
+    postgresql:
+      database: "atm-scheduler-database"
+      cloudSql:
+        instanceId: "atm-scheduler-instance"
+connectorDirs: ["./connector"]

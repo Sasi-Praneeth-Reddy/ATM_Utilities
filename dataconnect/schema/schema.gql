@@ -1,0 +1,140 @@
+# Leads + Storage Market data (moved out of Firestore, 2026-10-28). Scheduler data (trucks, drivers,
+# jobs, users) stays in Firestore.
+
+# ---------- Pre-mover leads ----------
+type Lead @table(key: "leadId") @index(fields: ["status"]) @index(fields: ["county"]) @index(fields: ["listedDate"]) @index(fields: ["state", "county"]) {
+  leadId: String!
+  address: String!
+  city: String
+  state: String
+  zipCode: String
+  county: String
+  status: String!
+  listPrice: Int
+  bedrooms: Int
+  bathrooms: Float
+  sqft: Int
+  isVacant: Boolean!
+  listedDate: Date
+  scrapedAt: String
+  firstName: String
+  lastName: String
+  ownerFullName: String
+  phone: String
+  email: String
+  realtorName: String
+  realtorPhone: String
+  realtorEmail: String
+  brokerName: String
+  source: String
+  previousStatus: String
+  createdAt: Timestamp! @default(expr: "request.time")
+}
+
+# A past customer (from a booked job or an imported legacy record) whose old address is now a listing.
+type MatchedLead @table(key: "matchId") @index(fields: ["status"]) {
+  matchId: String!
+  lead: Lead!
+  customerName: String!
+  customerEmail: String
+  customerPhone: String
+  matchedAddress: String
+  matchedType: String
+  sourceType: String
+  confidence: Int
+  matchReason: String
+  previousMoveDate: String
+  previousMoveDetails: String
+  listingStatus: String
+  listingPrice: Int
+  listedDate: Date
+  realtorName: String
+  realtorPhone: String
+  realtorEmail: String
+  status: String!
+  notes: String
+  outreachHistory: Any
+  detectedAt: Timestamp
+  lastChecked: Timestamp
+}
+
+type LegacyCustomer @table(key: "customerId") {
+  customerId: String!
+  name: String!
+  email: String
+  phone: String
+  originAddress: String
+  destinationAddress: String
+  city: String
+  state: String
+  zipCode: String
+  moveDate: String
+  notes: String
+  importedAt: Timestamp
+}
+
+# ---------- Self-storage market ----------
+type StorageFacility @table(key: "facilityId") @index(fields: ["brand"]) {
+  facilityId: String!
+  name: String!
+  brand: String
+  address: String
+  city: String
+  state: String
+  zipCode: String
+  lat: Float
+  lon: Float
+  phone: String
+  website: String
+}
+
+type StoragePricing @table(key: "priceId") @index(fields: ["facility", "unitSize"]) @index(fields: ["scrapedAt"]) {
+  priceId: String!
+  facility: StorageFacility!
+  unitSize: String!
+  unitType: String
+  streetRate: Int
+  webRate: Int
+  availability: String
+  source: String
+  scrapedAt: Timestamp!
+}
+
+type MlsBenchmark @table(key: "benchmarkId") @index(fields: ["region", "periodDate"]) {
+  benchmarkId: String!
+  region: String!
+  source: String
+  periodType: String
+  periodDate: Date!
+  year: Int
+  month: Int
+  activeListings: Int
+  newListings: Int
+  closedSales: Int
+  pendingSales: Int
+  avgClosePrice: Int
+  medianClosePrice: Int
+  medianDaysOnMarket: Int
+  closeToListRatio: Float
+}
+
+# ---------- Run history from the old storage tracker (only copy lived in storage_tracker_aws.db) ----------
+type ScrapeRun @table(key: "runId") @index(fields: ["runAt"]) {
+  runId: String!
+  source: String!
+  status: String!
+  recordsWritten: Int
+  errorMessage: String
+  durationSec: Float
+  runAt: Timestamp!
+}
+
+type EmailNotice @table(key: "noticeId") @index(fields: ["sentAt"]) {
+  noticeId: String!
+  recipients: String!
+  subject: String
+  status: String
+  errorMessage: String
+  messageId: String
+  sentAt: Timestamp!
+}

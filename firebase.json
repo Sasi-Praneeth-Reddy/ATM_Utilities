@@ -32,5 +32,8 @@
       "local.secrets",
       "*.db"
     ]
+  },
+  "dataconnect": {
+    "source": "dataconnect"
   }
 }

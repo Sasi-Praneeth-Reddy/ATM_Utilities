@@ -1,0 +1,12 @@
+# The backend talks to SQL Connect through the Admin SDK (executeGraphql), which can use the schema's
+# generated operations directly, so no custom operations are needed yet. One is kept so the
+# connector directory is valid; staff-facing access is always via the Cloud Function, never the client.
+query FacilityByPlaceId($facilityId: String!) @auth(level: NO_ACCESS) {
+  storageFacility(key: { facilityId: $facilityId }) {
+    facilityId
+    name
+    brand
+    city
+    state
+  }
+}
