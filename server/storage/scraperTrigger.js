@@ -19,11 +19,13 @@ function headers() {
   return { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'atm-scheduler' };
 }
 
+/** Latest manual run that scrapes storage prices. Runs are titled "Scraper (<target>)" by the workflow, so lead-only
+ * runs (target real_estate) and the daily scheduled leads run are ignored; older untitled runs are ignored too. */
 async function latestRun() {
-  const r = await fetch(`https://api.github.com/repos/${REPO()}/actions/workflows/${WORKFLOW()}/runs?per_page=5&event=workflow_dispatch`, { headers: headers() });
+  const r = await fetch(`https://api.github.com/repos/${REPO()}/actions/workflows/${WORKFLOW()}/runs?per_page=30&event=workflow_dispatch`, { headers: headers() });
   if (!r.ok) { const e = new Error(`GitHub returned ${r.status} while reading scraper runs`); e.status = 502; throw e; }
   const data = await r.json();
-  const run = (data.workflow_runs || [])[0];
+  const run = (data.workflow_runs || []).find((x) => /^Scraper \((storage|all)\)/.test(x.display_title || x.name || ''));
   return run ? { id: run.id, status: run.status, conclusion: run.conclusion, createdAt: run.created_at, updatedAt: run.updated_at, url: run.html_url } : null;
 }
 
