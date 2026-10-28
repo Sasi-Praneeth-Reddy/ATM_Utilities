@@ -1,4 +1,3 @@
-import { useRef } from 'react';
 import { visibleModules } from './modules';
 
 const P = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.75, strokeLinecap: 'round', strokeLinejoin: 'round' };
@@ -25,25 +24,7 @@ export function Icon({ name, size = 20 }) {
   );
 }
 
-const SECRET_CLICK_COUNT = 5;
-const SECRET_CLICK_WINDOW_MS = 2000;
-
-export default function Sidebar({ role, activeModuleId, onSelectModule, collapsed, onToggle, onOpenDeletedJobs, alertModules = {} }) {
-  const clicksRef = useRef([]);
-  // Admin-only hidden trigger for the Deleted Jobs archive (5 quick clicks on the logo) — moved here
-  // from the old header when the shell replaced it.
-  function handleLogoClick() {
-    if (role !== 'admin' || !onOpenDeletedJobs) return;
-    const now = Date.now();
-    const recent = clicksRef.current.filter((t) => now - t < SECRET_CLICK_WINDOW_MS);
-    recent.push(now);
-    clicksRef.current = recent;
-    if (recent.length >= SECRET_CLICK_COUNT) {
-      clicksRef.current = [];
-      onOpenDeletedJobs();
-    }
-  }
-
+export default function Sidebar({ role, activeModuleId, onSelectModule, collapsed, onToggle, alertModules = {} }) {
   const mods = visibleModules(role);
 
   return (
@@ -51,7 +32,7 @@ export default function Sidebar({ role, activeModuleId, onSelectModule, collapse
       {!collapsed && <div className="shell-backdrop" onClick={onToggle} aria-hidden="true" />}
       <aside className={`shell-sidebar${collapsed ? ' collapsed' : ''}`} aria-label="Modules">
         <div className="shell-brand">
-          <div className="shell-logo" onClick={handleLogoClick}>ATM</div>
+          <div className="shell-logo">ATM</div>
           <div className="shell-brand-text">
             <div className="shell-brand-name">Around Town Movers</div>
             <div className="shell-brand-sub">Operations</div>

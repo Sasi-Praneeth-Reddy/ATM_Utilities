@@ -134,8 +134,8 @@ export default function App() {
   // tab switches (isAuthenticated stays true the whole session) — only a fresh login shows it again.
   const [showRoleHint, setShowRoleHint] = useState(true);
 
-  // Deleted Jobs archive panel (added 2026-09-24) — opened only via Header.jsx's hidden 5-click
-  // logo trigger (admin-only, see that component). Lives up here rather than inside Header itself
+  // Deleted Jobs archive panel (added 2026-09-24) — opened from the "Deleted jobs" button on the
+  // admin-only Job Assignments tab (was a hidden 5-click logo trigger until 2026-10-28). Lives up here rather than inside Header itself
   // so it can sit as a true top-level overlay sibling of everything else, same reasoning as every
   // other modal in this app (JobEditModal, JobConflictChooser, etc. all render from their nearest
   // sensible ancestor, not buried inside the element that merely triggers them).
@@ -198,7 +198,6 @@ export default function App() {
         onSelectModule={handleSelectModule}
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed((c) => !c)}
-        onOpenDeletedJobs={role === 'admin' ? () => setShowDeletedJobs(true) : undefined}
         alertModules={role === 'admin' && isGmailAuthAlert(data.gmailAuthStatus)
           ? { dispatch: 'Gmail authorization is expiring or expired — see Job Assignments' } : {}}
       />
@@ -296,6 +295,7 @@ export default function App() {
             calendarSyncStatus={data.calendarSyncStatus} onSyncCalendarNow={data.syncCalendarNow}
             smartInsightsSyncStatus={data.smartInsightsSyncStatus} onSyncSmartInsightsNow={data.syncSmartInsightsNow}
             gmailAuthStatus={data.gmailAuthStatus}
+            onOpenDeletedJobs={() => setShowDeletedJobs(true)}
           />
         )}
 

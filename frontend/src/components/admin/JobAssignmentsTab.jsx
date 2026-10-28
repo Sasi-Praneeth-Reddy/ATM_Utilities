@@ -45,6 +45,7 @@ export default function JobAssignmentsTab({
   syncStatus, onSyncNow, lastSyncedAt,
   calendarSyncStatus, onSyncCalendarNow,
   smartInsightsSyncStatus, onSyncSmartInsightsNow, gmailAuthStatus,
+  onOpenDeletedJobs,
 }) {
   const [query, setQuery] = useState('');
   // Pagination (added 2026-09-30) — rendering every job at once (each row with truck + driver
@@ -145,6 +146,11 @@ export default function JobAssignmentsTab({
       <div className="toolbar">
         <h2 className="section-title">Job Assignments — assign a truck &amp; driver to each job</h2>
         <div className="list-filter">
+          {onOpenDeletedJobs && (
+            <button type="button" className="btn secondary" onClick={onOpenDeletedJobs} title="View and restore deleted jobs">
+              Deleted jobs
+            </button>
+          )}
           <input
             type="text"
             className="job-search-input"

@@ -1446,7 +1446,7 @@ col.pt-col-truck{width:calc(150px * var(--pt-scale, 1));}
 .shell-sidebar{position:sticky;top:0;align-self:flex-start;height:100vh;width:var(--sidebar-w);flex:none;box-sizing:border-box;background:var(--card);border-right:1px solid var(--border);display:flex;flex-direction:column;gap:20px;padding:16px 12px;overflow-y:auto;overflow-x:hidden;z-index:1001;transition:width .18s ease;}
 .shell-sidebar.collapsed{width:var(--sidebar-w-collapsed);}
 .shell-brand{display:flex;align-items:center;gap:12px;padding:4px 6px;min-height:36px;}
-.shell-logo{width:36px;height:36px;border-radius:10px;background:var(--accent);color:#fff;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;flex:none;cursor:pointer;user-select:none;}
+.shell-logo{width:36px;height:36px;border-radius:10px;background:var(--accent);color:#fff;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;flex:none;user-select:none;}
 .shell-brand-name{font-size:14px;font-weight:600;color:var(--heading);line-height:1.25;white-space:nowrap;}
 .shell-brand-sub{font-size:12px;color:var(--muted);}
 .shell-modules{display:flex;flex-direction:column;gap:4px;}
