@@ -1029,6 +1029,17 @@ async function readStoredAnalytics() {
 }
 
 /** Returns the stored analytics when fresh (< 24h); otherwise recomputes over all listings. */
+/** True when any listing was written after the stored analytics were computed (e.g. an upload whose chart refresh never ran). */
+async function leadsChangedSince(computedAt) {
+  try {
+    const d = await sql.read('query N { leads(limit: 1, orderBy: {updatedAt: DESC}) { updatedAt } }');
+    const newest = d.leads && d.leads[0] ? d.leads[0].updatedAt : null;
+    return Boolean(newest && computedAt && Date.parse(newest) > Date.parse(computedAt));
+  } catch (e) {
+    return false;
+  }
+}
+
 const filteredAnalyticsCache = new Map(); // JSON(filters) -> { at, result }
 async function getLeadsAnalytics({ refresh = false, filters = null } = {}) {
   // Any filter -> compute over just the matching listings (2-minute memo; the snapshot is already in memory).
@@ -1044,6 +1055,7 @@ async function getLeadsAnalytics({ refresh = false, filters = null } = {}) {
   }
   if (!refresh) {
     const stored = await readStoredAnalytics();
+    if (stored && !stored.stale && (await leadsChangedSince(stored.computedAt))) stored.stale = true;
     // A stored summary from before monthlyTrend existed is treated as stale so the new charts fill in.
     if (stored && stored.result && !stored.stale && stored.result.monthlyTrend && stored.result.priceHistogram && Date.now() - Date.parse(stored.computedAt) < ANALYTICS_TTL_MS) return stored.result;
   }

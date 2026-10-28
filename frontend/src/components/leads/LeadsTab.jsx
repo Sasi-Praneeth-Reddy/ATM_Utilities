@@ -1190,8 +1190,8 @@ export default function LeadsTab({ backendUrl, role }) {
         </button>
       </div>
 
-      {/* FILTER TOOLBAR (Status, State, County, Price, Search) */}
-      {activeSubTab === 'explorer' && (
+      {/* FILTER TOOLBAR (Status, State, County, Price, Search) - shared by the Explorer and the Visualizations */}
+      {(activeSubTab === 'explorer' || activeSubTab === 'analytics') && (
         <div style={{
           display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap',
           backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, #e2e8f0)',
@@ -1267,8 +1267,8 @@ export default function LeadsTab({ backendUrl, role }) {
             </select>
           </div>
 
-          {/* Month Filter (by listing date) */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {/* Month Filter (by listing date) - Explorer only; the Visualizations have their own monthly chart */}
+          {activeSubTab === 'explorer' && <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <span style={{ fontSize: '11px', fontWeight: 700, color: '#4a5568', textTransform: 'uppercase' }}>Month:</span>
             <select
               value={selectedMonth}
@@ -1280,7 +1280,7 @@ export default function LeadsTab({ backendUrl, role }) {
                 <option key={m.month} value={m.month}>{monthLabel(m.month)}{m.total ? ` (${m.total.toLocaleString()})` : ''}</option>
               ))}
             </select>
-          </div>
+          </div>}
 
           {/* Search Box */}
           <div style={{ flex: 1, minWidth: '220px' }}>
