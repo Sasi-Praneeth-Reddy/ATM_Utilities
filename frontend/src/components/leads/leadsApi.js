@@ -49,6 +49,19 @@ export async function triggerReconcile(backendUrl) {
   return apiCall(backendUrl, 'POST', '/api/leads/reconcile', {});
 }
 
+/** KPI numbers for the given filters (same filter params as fetchListings). */
+export async function fetchFilteredStats(backendUrl, { status, state, county, search, minPrice, maxPrice, month } = {}) {
+  const params = new URLSearchParams();
+  if (status && status !== 'all') params.set('status', status);
+  if (state && state !== 'all') params.set('state', state);
+  if (county && county !== 'all') params.set('county', county);
+  if (search) params.set('search', search);
+  if (minPrice) params.set('minPrice', String(minPrice));
+  if (maxPrice) params.set('maxPrice', String(maxPrice));
+  if (month && month !== 'all') params.set('month', month);
+  return apiCall(backendUrl, 'GET', `/api/leads/stats?${params.toString()}`);
+}
+
 export async function fetchLegacyCustomers(backendUrl, limit = 5000) {
   return apiCall(backendUrl, 'GET', `/api/leads/legacy-customers?limit=${limit}`);
 }

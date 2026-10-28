@@ -5,6 +5,7 @@ import {
   fetchMatchedLeads,
   updateMatchStatus,
   fetchListings,
+  fetchFilteredStats,
   triggerReconcile,
 } from './leadsApi';
 import OutreachModal from './OutreachModal';
@@ -373,6 +374,28 @@ export default function LeadsTab({ backendUrl, role }) {
     if (priceTier === '1200plus') return { minPrice: 1200000, maxPrice: 10000000 };
     return { minPrice: undefined, maxPrice: undefined };
   }, [priceTier]);
+
+  // KPI cards follow the filters: with any filter on, the headline numbers come from the server's
+  // filtered stats; with none, they use the overall summary (no extra work).
+  const filtersActive = selectedStatus !== 'all' || selectedState !== 'all' || selectedCounty !== 'all'
+    || priceTier !== 'all' || selectedMonth !== 'all' || Boolean(listingSearch.trim());
+  const [filteredStats, setFilteredStats] = useState(null);
+  useEffect(() => {
+    if (!filtersActive) { setFilteredStats(null); return undefined; }
+    let alive = true;
+    const t = setTimeout(() => {
+      fetchFilteredStats(backendUrl, {
+        status: selectedStatus, state: selectedState, county: selectedCounty, search: listingSearch,
+        month: selectedMonth, minPrice: priceBounds.minPrice, maxPrice: priceBounds.maxPrice,
+      }).then((r) => { if (alive) setFilteredStats(r); }).catch(() => { if (alive) setFilteredStats(null); });
+    }, 300);
+    return () => { alive = false; clearTimeout(t); };
+  }, [backendUrl, filtersActive, selectedStatus, selectedState, selectedCounty, listingSearch, selectedMonth, priceBounds]);
+
+  function clearAllFilters() {
+    setSelectedStatus('all'); setSelectedState('all'); setSelectedCounty('all');
+    setPriceTier('all'); setSelectedMonth('all'); setListingSearch('');
+  }
 
   // Dynamic Counties List filtered by Selected State
   const availableCountiesForState = useMemo(() => {
@@ -834,8 +857,14 @@ export default function LeadsTab({ backendUrl, role }) {
     }
   }
 
-  const underContractCount = analytics.statusCounts?.under_contract || 6120;
-  const activeCount = analytics.statusCounts?.for_sale || 18450;
+  const fs = filtersActive ? filteredStats : null; // null while loading or when no filter is on
+  const underContractCount = fs ? fs.underContract : (analytics.statusCounts?.under_contract || 6120);
+  const activeCount = fs ? fs.forSale : (analytics.statusCounts?.for_sale || 18450);
+  const kpiTotal = fs ? fs.total : (summary.totalListings || 27221);
+  const kpiAvg = fs ? fs.avgPrice : (analytics.avgListPrice || 748000);
+  const kpiMedian = fs ? fs.medianPrice : (analytics.medianListPrice || 725000);
+  const kpiMatches = fs ? fs.matches.total : (summary.totalMatches || 0);
+  const kpiPending = fs ? fs.matches.pending : (summary.pendingMatches || 0);
 
   // Pagination Controller Component
   const renderPaginationControls = () => (
@@ -988,6 +1017,13 @@ export default function LeadsTab({ backendUrl, role }) {
         )}
       </div>
 
+      {filtersActive && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px', fontSize: '12px', color: '#2c5282', backgroundColor: '#ebf8ff', border: '1px solid #bee3f8', borderRadius: '6px', padding: '6px 12px' }}>
+          <span>🔎 These numbers reflect your current filters{filteredStats ? '' : ' (updating…)'}.</span>
+          <button type="button" onClick={clearAllFilters} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: '#2b6cb0', fontWeight: 700, cursor: 'pointer', fontSize: '12px', textDecoration: 'underline' }}>Clear filters</button>
+        </div>
+      )}
+
       {/* KPI Cards Row (matching Streamlit 5-card layout) */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '14px', marginBottom: '22px' }}>
         {/* Total Pre-Movers */}
@@ -999,7 +1035,7 @@ export default function LeadsTab({ backendUrl, role }) {
             Total Pre-Mover Leads
           </div>
           <div style={{ fontSize: '28px', fontWeight: 700, color: '#2b6cb0', marginTop: '4px' }}>
-            {(summary.totalListings || 27221).toLocaleString()}
+            {kpiTotal.toLocaleString()}
           </div>
           <div style={{ fontSize: '12px', color: '#718096', marginTop: '2px' }}>
             {activeCount.toLocaleString()} active for sale
@@ -1031,10 +1067,10 @@ export default function LeadsTab({ backendUrl, role }) {
             Avg List Price
           </div>
           <div style={{ fontSize: '28px', fontWeight: 700, color: '#2d3748', marginTop: '4px' }}>
-            ${(analytics.avgListPrice || 748000).toLocaleString()}
+            ${kpiAvg.toLocaleString()}
           </div>
           <div style={{ fontSize: '12px', color: '#718096', marginTop: '2px' }}>
-            Median: ${(analytics.medianListPrice || 725000).toLocaleString()}
+            Median: ${kpiMedian.toLocaleString()}
           </div>
         </div>
 
@@ -1046,11 +1082,11 @@ export default function LeadsTab({ backendUrl, role }) {
           <div style={{ fontSize: '11px', fontWeight: 700, color: '#718096', textTransform: 'uppercase' }}>
             VIP Customer Matches
           </div>
-          <div style={{ fontSize: '28px', fontWeight: 700, color: summary.pendingMatches > 0 ? '#e53e3e' : '#38a169', marginTop: '4px' }}>
-            {summary.totalMatches || 0}
+          <div style={{ fontSize: '28px', fontWeight: 700, color: kpiPending > 0 ? '#e53e3e' : '#38a169', marginTop: '4px' }}>
+            {kpiMatches}
           </div>
-          <div style={{ fontSize: '12px', color: summary.pendingMatches > 0 ? '#e53e3e' : '#718096', marginTop: '2px' }}>
-            {summary.pendingMatches > 0 ? `⚠️ ${summary.pendingMatches} pending review!` : 'Past customers detected'}
+          <div style={{ fontSize: '12px', color: kpiPending > 0 ? '#e53e3e' : '#718096', marginTop: '2px' }}>
+            {kpiPending > 0 ? `⚠️ ${kpiPending} pending review!` : 'Past customers detected'}
           </div>
         </div>
       </div>

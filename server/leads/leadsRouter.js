@@ -225,6 +225,24 @@ async function handleLeadsRequest(req, res, url, currentUser) {
     }
 
     // -------------------------------------------------------------
+    // GET /api/leads/stats — KPI numbers for the current filters (same params as /listings)
+    // -------------------------------------------------------------
+    if (p === '/api/leads/stats' && req.method === 'GET') {
+      const monthParam = url.searchParams.get('month') || undefined;
+      const stats = await leadsDb.getFilteredStats({
+        status: url.searchParams.get('status') || undefined,
+        state: url.searchParams.get('state') || undefined,
+        county: url.searchParams.get('county') || undefined,
+        search: url.searchParams.get('search') || undefined,
+        minPrice: url.searchParams.get('minPrice') || undefined,
+        maxPrice: url.searchParams.get('maxPrice') || undefined,
+        month: monthParam && /^\d{4}-\d{2}$/.test(monthParam) ? monthParam : undefined,
+      });
+      sendJson(req, res, 200, stats);
+      return true;
+    }
+
+    // -------------------------------------------------------------
     // GET /api/leads/export.csv — all listings matching the same filters as /listings, as CSV
     // -------------------------------------------------------------
     if (p === '/api/leads/export.csv' && req.method === 'GET') {

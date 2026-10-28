@@ -1071,6 +1071,51 @@ async function refreshLeadsAnalyticsIfStale() {
   return true;
 }
 
+/**
+ * Headline numbers for whatever filters are applied (the KPI cards): totals by status, average and
+ * median price, and how many VIP customer matches belong to those listings. Served from the cached
+ * in-memory snapshot, same as the other filtered views.
+ */
+async function getFilteredStats(filters = {}) {
+  const all = await getLeadsSnapshot();
+  const rows = all.filter((r) => listingMatchesFilters(r.d, filters));
+  const byStatus = {};
+  const prices = [];
+  const addresses = new Set();
+  for (const r of rows) {
+    const st = r.d.status || 'for_sale';
+    byStatus[st] = (byStatus[st] || 0) + 1;
+    const p = Number(r.d.listPrice);
+    if (p > 0) prices.push(p);
+    if (r.d.address) addresses.add(String(r.d.address).toLowerCase());
+  }
+  prices.sort((a, b) => a - b);
+  const avgPrice = prices.length ? Math.round(prices.reduce((s, p) => s + p, 0) / prices.length) : 0;
+  const medianPrice = prices.length ? prices[Math.floor(prices.length / 2)] : 0;
+
+  const matchSnap = await matchedLeadsCol.get();
+  let matchTotal = 0;
+  let matchPending = 0;
+  matchSnap.docs.forEach((d) => {
+    const m = d.data();
+    if (addresses.has(String(m.matchedAddress || '').toLowerCase())) {
+      matchTotal += 1;
+      if (m.status === 'pending') matchPending += 1;
+    }
+  });
+
+  return {
+    total: rows.length,
+    forSale: byStatus.for_sale || 0,
+    underContract: byStatus.under_contract || 0,
+    pending: byStatus.pending || 0,
+    closed: byStatus.closed || 0,
+    avgPrice,
+    medianPrice,
+    matches: { total: matchTotal, pending: matchPending },
+  };
+}
+
 const CSV_COLUMNS = [
   ['id', 'Lead ID'], ['status', 'Status'], ['listedDate', 'Listed date'], ['address', 'Address'], ['city', 'City'],
   ['state', 'State'], ['zipCode', 'ZIP'], ['county', 'County'], ['listPrice', 'List price'], ['bedrooms', 'Beds'],
@@ -1096,6 +1141,7 @@ async function exportListingsCsv(filters = {}) {
 }
 
 module.exports = {
+  getFilteredStats,
   exportListingsCsv,
   upsertPreMoverLeads,
   listPreMoverLeads,
