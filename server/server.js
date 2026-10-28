@@ -365,6 +365,8 @@ async function getCurrentUser(req) {
   return { id: row.id, email: row.email, role: row.role };
 }
 
+const { hasValidScraperKey } = require('./scraperAuth');
+
 async function requireAuth(req) {
   const user = await getCurrentUser(req);
   if (!user) { const err = new Error('Not logged in'); err.status = 401; throw err; }
@@ -1158,6 +1160,21 @@ async function handleRequest(req, res) {
       if (!user) { sendJson(req, res, 401, { error: 'Not logged in' }); return; }
       sendJson(req, res, 200, user);
       return;
+    }
+
+    /* ---- Daily scraper (GitHub Actions) - authenticated by its x-api-key, not a login session ----
+     * Must sit BEFORE requireAuth(): otherwise the session check rejects the scraper with "Not logged in"
+     * before the leads/storage routers ever see the key. Only these write endpoints are reachable this way;
+     * each router re-checks the key itself. */
+    if (req.method === 'POST' && hasValidScraperKey(req)) {
+      if (p === '/api/leads/ingest') {
+        const { handleLeadsRequest } = require('./leads/leadsRouter');
+        if (await handleLeadsRequest(req, res, url, null)) return;
+      }
+      if (p.startsWith('/api/storage/') && (p.endsWith('/bulk') || p === '/api/storage/summary/refresh')) {
+        const { handleStorageRequest } = require('./storage/storageRouter');
+        if (await handleStorageRequest(req, res, url, null)) return;
+      }
     }
 
     /* ---- Everything below here requires a logged-in user ---- */
