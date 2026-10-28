@@ -117,7 +117,8 @@ exports.api = onRequest(
     // cold starts turn out to be annoying during the live team test — set this back to 1.
     minInstances: 0,
     cpu: 1,
-    memory: '1GiB',
+    memory: '2GiB',
+    timeoutSeconds: 120,
   },
   async (req, res) => {
     await ensureInit();
