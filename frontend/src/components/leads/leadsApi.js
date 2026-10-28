@@ -4,8 +4,16 @@ export async function fetchLeadsSummary(backendUrl) {
   return apiCall(backendUrl, 'GET', '/api/leads/summary');
 }
 
-export async function fetchLeadsAnalytics(backendUrl) {
-  return apiCall(backendUrl, 'GET', '/api/leads/analytics');
+export async function fetchLeadsAnalytics(backendUrl, { status, state, county, search, minPrice, maxPrice } = {}) {
+  const params = new URLSearchParams();
+  if (status && status !== 'all') params.set('status', status);
+  if (state && state !== 'all') params.set('state', state);
+  if (county && county !== 'all') params.set('county', county);
+  if (search) params.set('search', search);
+  if (minPrice) params.set('minPrice', String(minPrice));
+  if (maxPrice) params.set('maxPrice', String(maxPrice));
+  const qs = params.toString();
+  return apiCall(backendUrl, 'GET', `/api/leads/analytics${qs ? `?${qs}` : ''}`);
 }
 
 export async function fetchMatchedLeads(backendUrl, status = 'all') {

@@ -392,6 +392,26 @@ export default function LeadsTab({ backendUrl, role }) {
     return () => { alive = false; clearTimeout(t); };
   }, [backendUrl, filtersActive, selectedStatus, selectedState, selectedCounty, listingSearch, selectedMonth, priceBounds]);
 
+  // The Market visualizations follow the same filters (month is left out so the time charts keep their full range).
+  const chartFiltersActive = selectedStatus !== 'all' || selectedState !== 'all' || selectedCounty !== 'all'
+    || priceTier !== 'all' || Boolean(listingSearch.trim());
+  const [filteredAnalytics, setFilteredAnalytics] = useState(null);
+  const [filteredLoading, setFilteredLoading] = useState(false);
+  useEffect(() => {
+    if (!chartFiltersActive) { setFilteredAnalytics(null); setFilteredLoading(false); return undefined; }
+    let alive = true;
+    setFilteredLoading(true);
+    const t = setTimeout(() => {
+      fetchLeadsAnalytics(backendUrl, {
+        status: selectedStatus, state: selectedState, county: selectedCounty, search: listingSearch,
+        minPrice: priceBounds.minPrice, maxPrice: priceBounds.maxPrice,
+      }).then((r) => { if (alive) setFilteredAnalytics(r); }).catch(() => { if (alive) setFilteredAnalytics(null); })
+        .finally(() => { if (alive) setFilteredLoading(false); });
+    }, 300);
+    return () => { alive = false; clearTimeout(t); };
+  }, [backendUrl, chartFiltersActive, selectedStatus, selectedState, selectedCounty, listingSearch, priceBounds]);
+  const vis = chartFiltersActive && filteredAnalytics ? { ...analytics, ...filteredAnalytics } : analytics;
+
   function clearAllFilters() {
     setSelectedStatus('all'); setSelectedState('all'); setSelectedCounty('all');
     setPriceTier('all'); setSelectedMonth('all'); setListingSearch('');
@@ -1545,33 +1565,42 @@ export default function LeadsTab({ backendUrl, role }) {
       {/* VIEW 2: MARKET VISUALIZATIONS */}
       {activeSubTab === 'analytics' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          {(!analytics.priceHistogram || !analytics.monthlyTrend?.length) && (
+          {(!vis.priceHistogram || !vis.monthlyTrend?.length) && (
             <div style={{ backgroundColor: '#fffaf0', border: '1px solid #fbd38d', color: '#7b341e', borderRadius: '8px', padding: '12px 16px', fontSize: '13px' }}>
               These charts need the latest analytics. {isAdmin ? 'Restart the backend (or deploy it), then reload this page — the summary rebuilds itself on the first request.' : 'Ask an admin to refresh the analytics.'}
             </div>
           )}
+          {chartFiltersActive && (
+            <div style={{ backgroundColor: '#ebf8ff', border: '1px solid #bee3f8', color: '#2c5282', borderRadius: '8px', padding: '9px 14px', fontSize: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+              <span>
+                🔎 Charts are filtered{filteredAnalytics ? <> to <b>{Number(filteredAnalytics.matchingListings || 0).toLocaleString()}</b> matching listings</> : ''}
+                {filteredLoading ? ' - updating…' : ''}. The monthly chart keeps every month so you can still see the trend.
+              </span>
+              <button onClick={clearAllFilters} style={{ padding: '4px 10px', borderRadius: '4px', border: '1px solid #90cdf4', backgroundColor: '#fff', color: '#2b6cb0', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>Clear filters</button>
+            </div>
+          )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: '20px' }}>
             <Card title="🍩 Where the listings stand" subtitle="Share of all homes by their current listing status">
-              <StatusDonut counts={analytics.statusCounts} />
+              <StatusDonut counts={vis.statusCounts} />
             </Card>
-            {analytics.priceHistogram && (
+            {vis.priceHistogram && (
               <Card title="💵 How homes are priced" subtitle="Number of listings in each price band">
-                <PriceHistogram bins={analytics.priceHistogram} median={analytics.medianListPrice} />
+                <PriceHistogram bins={vis.priceHistogram} median={vis.medianListPrice} />
               </Card>
             )}
           </div>
-          {analytics.dailyTrend && (
+          {vis.dailyTrend && (
             <Card title="🗓️ When homes hit the market" subtitle="Each square is one day, over the last 22 weeks. Darker means more homes listed that day.">
-              <ActivityHeatmap daily={analytics.dailyTrend} />
+              <ActivityHeatmap daily={vis.dailyTrend} />
             </Card>
           )}
           <MonthlyPanel
-            monthly={analytics.monthlyTrend || []}
+            monthly={vis.monthlyTrend || []}
             selectedMonth={selectedMonth}
             onSelectMonth={(m) => { setSelectedMonth(m); setActiveSubTab('explorer'); }}
           />
           <Card title="🫧 Where volume meets value" subtitle="Each bubble is a county: further right means more listings, higher up means pricier homes. Hover for details.">
-            <CountyBubbles counties={analytics.countyValue || analytics.topCountyAvgPrices || []} />
+            <CountyBubbles counties={vis.countyValue || vis.topCountyAvgPrices || []} />
           </Card>
         </div>
       )}

@@ -131,6 +131,7 @@ async function upsertPreMoverLeads(leads = []) {
   const rows = [...byId.values()];
   await sql.upsertMany('Lead', 'lead_upsertMany', rows);
   invalidateLeadsCache();
+  filteredAnalyticsCache.clear();
 
   // Match detection for ONLY the listings just ingested. Awaited, not fire-and-forget: a serverless
   // runtime may stop running the moment the response is sent, which would silently drop a background promise.
@@ -142,11 +143,12 @@ async function upsertPreMoverLeads(leads = []) {
   } catch (err) {
     console.error('[leadsDb] Match reconciliation after ingest failed:', err);
   }
-  // Keep the dashboard numbers fresh without recomputing on every ingest chunk.
+  // Analytics are NOT recomputed per chunk (the scraper sends ~40 chunks); it calls
+  // POST /api/leads/analytics/refresh once at the end. Just mark the stored copy as stale here.
   try {
-    await refreshLeadsAnalyticsIfStale();
+    await sql.mergeState('leadsAnalytics', { stale: true });
   } catch (err) {
-    console.error('[leadsDb] Analytics refresh after ingest failed:', err);
+    console.error('[leadsDb] Could not flag analytics as stale:', err.message);
   }
 
   return { total: rows.length, newMatches };
@@ -1006,13 +1008,15 @@ function computeLeadsAnalytics(leads) {
 
 // ---- Analytics: computed over ALL listings at most once a day, stored in the AppState table ----
 let analyticsRefreshing = null;
-async function refreshLeadsAnalytics() {
+async function refreshLeadsAnalytics({ reload = false } = {}) {
   if (analyticsRefreshing) return analyticsRefreshing;
+  if (reload) invalidateLeadsCache(); // pick up rows another instance just ingested
   analyticsRefreshing = (async () => {
     const leads = (await getLeadsSnapshot()).map((r) => r.d);
     const result = computeLeadsAnalytics(leads);
     const computedAt = new Date().toISOString();
     await sql.setState('leadsAnalytics', { computedAt, totalListings: leads.length, result });
+    filteredAnalyticsCache.clear();
     return { ...result, computedAt };
   })().finally(() => { analyticsRefreshing = null; });
   return analyticsRefreshing;
@@ -1021,15 +1025,27 @@ async function refreshLeadsAnalytics() {
 async function readStoredAnalytics() {
   const stored = await sql.getState('leadsAnalytics');
   if (!stored || !stored.result) return null;
-  return { computedAt: stored.computedAt, result: { ...stored.result, computedAt: stored.computedAt } };
+  return { computedAt: stored.computedAt, stale: Boolean(stored.stale), result: { ...stored.result, computedAt: stored.computedAt } };
 }
 
 /** Returns the stored analytics when fresh (< 24h); otherwise recomputes over all listings. */
-async function getLeadsAnalytics({ refresh = false } = {}) {
+const filteredAnalyticsCache = new Map(); // JSON(filters) -> { at, result }
+async function getLeadsAnalytics({ refresh = false, filters = null } = {}) {
+  // Any filter -> compute over just the matching listings (2-minute memo; the snapshot is already in memory).
+  if (filters && Object.values(filters).some((v) => v !== undefined && v !== '' && v !== 'all')) {
+    const key = JSON.stringify(filters);
+    const hit = filteredAnalyticsCache.get(key);
+    if (hit && Date.now() - hit.at < 2 * 60 * 1000) return hit.result;
+    const rows = (await getLeadsSnapshot()).filter((r) => listingMatchesFilters(r.d, filters)).map((r) => r.d);
+    const result = { ...computeLeadsAnalytics(rows), filtered: true, matchingListings: rows.length };
+    if (filteredAnalyticsCache.size > 50) filteredAnalyticsCache.clear();
+    filteredAnalyticsCache.set(key, { at: Date.now(), result });
+    return result;
+  }
   if (!refresh) {
     const stored = await readStoredAnalytics();
     // A stored summary from before monthlyTrend existed is treated as stale so the new charts fill in.
-    if (stored && stored.result && stored.result.monthlyTrend && stored.result.priceHistogram && Date.now() - Date.parse(stored.computedAt) < ANALYTICS_TTL_MS) return stored.result;
+    if (stored && stored.result && !stored.stale && stored.result.monthlyTrend && stored.result.priceHistogram && Date.now() - Date.parse(stored.computedAt) < ANALYTICS_TTL_MS) return stored.result;
   }
   return refreshLeadsAnalytics();
 }

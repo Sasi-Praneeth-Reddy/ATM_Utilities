@@ -1167,7 +1167,7 @@ async function handleRequest(req, res) {
      * before the leads/storage routers ever see the key. Only these write endpoints are reachable this way;
      * each router re-checks the key itself. */
     if (req.method === 'POST' && hasValidScraperKey(req)) {
-      if (p === '/api/leads/ingest') {
+      if (p === '/api/leads/ingest' || p === '/api/leads/analytics/refresh') {
         const { handleLeadsRequest } = require('./leads/leadsRouter');
         if (await handleLeadsRequest(req, res, url, null)) return;
       }

@@ -73,7 +73,7 @@ async function handleLeadsRequest(req, res, url, currentUser) {
   const isAuthorizedUser = Boolean(currentUser && ['admin', 'dispatcher'].includes(currentUser.role));
   const isAdmin = Boolean(currentUser && currentUser.role === 'admin');
 
-  if (p === '/api/leads/ingest') {
+  if (p === '/api/leads/ingest' || p === '/api/leads/analytics/refresh') {
     if (!hasValidApiKey && !isAuthorizedUser) {
       sendJson(req, res, 401, { error: 'Unauthorized: valid x-api-key header or dispatcher session required' });
       return true;
@@ -104,8 +104,26 @@ async function handleLeadsRequest(req, res, url, currentUser) {
         sendJson(req, res, 403, { error: 'Forbidden: only admins can force an analytics refresh' });
         return true;
       }
-      const analytics = await leadsDb.getLeadsAnalytics({ refresh: wantsRefresh });
+      // Same filter params as /listings and /stats: the charts then cover only the matching listings.
+      const monthParam = url.searchParams.get('month') || undefined;
+      const filters = {
+        status: url.searchParams.get('status') || undefined,
+        state: url.searchParams.get('state') || undefined,
+        county: url.searchParams.get('county') || undefined,
+        search: url.searchParams.get('search') || undefined,
+        minPrice: url.searchParams.get('minPrice') || undefined,
+        maxPrice: url.searchParams.get('maxPrice') || undefined,
+        month: monthParam && /^\d{4}-\d{2}$/.test(monthParam) ? monthParam : undefined,
+      };
+      const analytics = await leadsDb.getLeadsAnalytics({ refresh: wantsRefresh, filters });
       sendJson(req, res, 200, analytics);
+      return true;
+    }
+
+    // POST /api/leads/analytics/refresh - the scraper calls this once after its last upload batch
+    if (p === '/api/leads/analytics/refresh' && req.method === 'POST') {
+      const fresh = await leadsDb.refreshLeadsAnalytics({ reload: true });
+      sendJson(req, res, 200, { ok: true, computedAt: fresh.computedAt, totalListings: fresh.totalListings });
       return true;
     }
 
