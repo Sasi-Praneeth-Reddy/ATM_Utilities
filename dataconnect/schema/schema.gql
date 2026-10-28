@@ -88,7 +88,7 @@ type StorageFacility @table(key: "facilityId") @index(fields: ["brand"]) {
   website: String
 }
 
-type StoragePricing @table(key: "priceId") @index(fields: ["facility", "unitSize"]) @index(fields: ["scrapedAt"]) {
+type StoragePricing @table(key: "priceId") @index(fields: ["unitSize"]) @index(fields: ["scrapedAt"]) {
   priceId: String!
   facility: StorageFacility!
   unitSize: String!
