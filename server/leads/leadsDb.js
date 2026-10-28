@@ -136,12 +136,16 @@ async function upsertPreMoverLeads(leads = []) {
   for (let i = 0; i < rows.length; i += 500) {
     const ids = rows.slice(i, i + 500).map((r) => r.leadId);
     const data = await sql.read(
-      'query E($ids: [String!]!) { leads(where: {leadId: {in: $ids}}) { leadId listedDate scrapedAt } }', { ids });
+      'query E($ids: [String!]!) { leads(where: {leadId: {in: $ids}}) { leadId listedDate scrapedAt status previousStatus } }', { ids });
     for (const e of data.leads || []) existing.set(e.leadId, e);
   }
   for (const r of rows) {
     const prev = existing.get(r.leadId);
     if (prev) {
+      // Status change history: when the portal now reports a different status, remember the old one.
+      // Otherwise keep whatever was stored (a blank upload value must not wipe it).
+      if (prev.status && r.status && prev.status !== r.status) r.previousStatus = prev.status;
+      else r.previousStatus = r.previousStatus || prev.previousStatus || '';
       if (prev.listedDate) r.listedDate = prev.listedDate; else if (!r.listedDate) r.listedDate = (prev.scrapedAt || '').slice(0, 10) || now.slice(0, 10);
       // scrapedAt is not written for existing leads, so the original value stays
     } else {
