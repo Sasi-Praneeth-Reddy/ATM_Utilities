@@ -143,6 +143,11 @@ async function main() {
     process.stdout.write('\n');
   }
 
+  await dc.executeGraphql('mutation S($d: AppState_Data!) { appState_upsert(data: $d) }', {
+    variables: { d: { stateKey: 'facilityIdMap', value: idMap, updatedAt: new Date().toISOString() } },
+  });
+  console.log('  AppState facilityIdMap stored.');
+
   console.log('\nVerifying row counts in SQL...');
   const names = { Lead: 'leads', StorageFacility: 'storageFacilities', StoragePricing: 'storagePricings', MlsBenchmark: 'mlsBenchmarks', MatchedLead: 'matchedLeads', ScrapeRun: 'scrapeRuns', EmailNotice: 'emailNotices' };
   let ok = true;

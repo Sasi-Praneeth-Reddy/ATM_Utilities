@@ -1,43 +1,53 @@
 /**
  * server/leads/leadsDb.js
  *
- * Dedicated Firestore access layer for Pre-Mover Leads and Address Matching.
+ * Data access layer for Pre-Mover Leads and Address Matching, backed by Firebase SQL Connect
+ * (Cloud SQL for PostgreSQL) since 2026-10-28. Previously Firestore.
  *
- * Collections:
- *  - `preMoverLeads`: Stores USA Home Listings data
- *  - `legacyCustomers`: Stores imported historical customer records
- *  - `matchedLeads`: Stores matched previous customers whose homes are on the market
+ * Tables (see /dataconnect/schema/schema.gql): Lead, MatchedLead, LegacyCustomer, AppState.
  *
- * NOTE: Reads from the existing `jobs` collection strictly in READ-ONLY mode.
+ * NOTE: Reads from the existing Firestore `jobs` collection strictly in READ-ONLY mode.
  * Does not mutate or modify any existing scheduler job, truck, or driver records.
  */
 
 const { db: fs } = require('../firestore');
+const sql = require('../sqlconnect');
 const { findMatchesForListing, buildAddressKeys } = require('./addressMatcher');
 const zipcodes = require('zipcodes');
-const { FieldPath } = require('firebase-admin/firestore');
 
-const leadsCol = fs.collection('preMoverLeads');
-const legacyCustomersCol = fs.collection('legacyCustomers');
-const matchedLeadsCol = fs.collection('matchedLeads');
-const jobsCol = fs.collection('jobs'); // READ-ONLY reference
-const systemCol = fs.collection('system');
+const jobsCol = fs.collection('jobs'); // READ-ONLY reference (scheduler data stays in Firestore)
 
 /* ---------------------------------------------------------------------------------------------
- * Cost controls (added 2026-10-27). There are ~27K listings, so a naive "read everything" on every
- * request or ingest would burn tens of thousands of Firestore reads each time. Instead:
- *  - Browsing uses cursor paging (a page costs ~50 reads) while the in-memory snapshot is cold.
- *  - Search / price filters (which Firestore can't do natively) load a compact snapshot of ALL
- *    listings into this instance's memory once (cached LEADS_CACHE_TTL_MS), so filtering, exact
- *    totals and page jumps cost 0 reads while it's warm.
- *  - Ingest/reconcile only ever look at the listings that were just ingested or changed.
- *  - Analytics are computed over ALL listings at most once a day and stored in one document.
+ * Caching. Listings (~27K rows) are loaded from SQL into memory once (LEADS_CACHE_TTL_MS) and
+ * filtering / search / stats / export run against that snapshot, so every request after the first
+ * is instant. Ingest invalidates it. Analytics are computed from the snapshot and stored in the
+ * AppState table (daily).
  * ------------------------------------------------------------------------------------------- */
-const LEADS_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
+const LEADS_CACHE_TTL_MS = 30 * 60 * 1000;
 const PAST_MOVES_CACHE_TTL_MS = 5 * 60 * 1000;
 const ANALYTICS_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYTICS_INGEST_REFRESH_MS = 12 * 60 * 60 * 1000;
 const RECONCILE_COOLDOWN_MS = 5 * 60 * 1000;
+
+const LEAD_FIELDS = [
+  'leadId', 'address', 'city', 'state', 'zipCode', 'county', 'status', 'listPrice', 'bedrooms', 'bathrooms', 'sqft',
+  'isVacant', 'listedDate', 'scrapedAt', 'firstName', 'lastName', 'ownerFullName', 'phone', 'email', 'realtorName',
+  'realtorPhone', 'realtorEmail', 'brokerName', 'source', 'previousStatus',
+];
+const LEAD_SELECTION = LEAD_FIELDS.join(' ');
+// Text columns come back as null from SQL; the rest of the app (and the UI) expects '' like before.
+const LEAD_TEXT_FIELDS = new Set([
+  'address', 'city', 'state', 'zipCode', 'county', 'status', 'firstName', 'lastName', 'ownerFullName', 'phone', 'email',
+  'realtorName', 'realtorPhone', 'realtorEmail', 'brokerName', 'source', 'previousStatus', 'scrapedAt', 'listedDate',
+]);
+function rowToLead(r) {
+  const d = { id: r.leadId };
+  for (const k of LEAD_FIELDS) {
+    if (k === 'leadId') continue;
+    d[k] = LEAD_TEXT_FIELDS.has(k) ? (r[k] ?? '') : r[k];
+  }
+  return d;
+}
 
 let leadsSnapshot = { rows: null, loadedAt: 0, loading: null };
 function leadsCacheWarm() {
@@ -46,14 +56,13 @@ function leadsCacheWarm() {
 function invalidateLeadsCache() {
   leadsSnapshot = { rows: null, loadedAt: 0, loading: null };
 }
-/** All listings as [{ id, d }] sorted by document id (same order Firestore uses). */
+/** All listings as [{ id, d }] sorted by lead id. */
 async function getLeadsSnapshot() {
   if (leadsCacheWarm()) return leadsSnapshot.rows;
   if (leadsSnapshot.loading) return leadsSnapshot.loading;
   const loading = (async () => {
-    const snap = await leadsCol.get();
-    const rows = snap.docs.map((doc) => ({ id: doc.id, d: doc.data() }));
-    rows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const raw = await sql.pageAll('leads', 'leadId', LEAD_SELECTION);
+    const rows = raw.map((r) => ({ id: r.leadId, d: rowToLead(r) }));
     leadsSnapshot = { rows, loadedAt: Date.now(), loading: null };
     return rows;
   })().catch((err) => {
@@ -77,72 +86,55 @@ function toDocId(prefix, text) {
 // ================================================================
 
 /**
- * Bulk upsert USA Home Listings into Firestore.
- * Automatically dedupes by address + zip code.
+ * Bulk upsert USA Home Listings. Automatically dedupes by address + zip code (same lead id as before).
+ * Only the columns the scraper supplies are written, so owner/contact fields added later are kept.
  */
 async function upsertPreMoverLeads(leads = []) {
   if (!Array.isArray(leads) || leads.length === 0) return { inserted: 0, updated: 0 };
 
-  let inserted = 0;
-  let updated = 0;
-  const ingested = [];
   const now = new Date().toISOString();
+  const byId = new Map();
 
-  // Firestore allows up to 500 writes per batch
-  const batchSize = 400;
-  for (let i = 0; i < leads.length; i += batchSize) {
-    const chunk = leads.slice(i, i + batchSize);
-    const batch = fs.batch();
-
-    for (const lead of chunk) {
-      if (!lead.address) continue;
-      const addrKeys = buildAddressKeys({
-        street: lead.address,
-        zip: lead.zipCode || lead.zip_code || lead.zip,
-        city: lead.city,
-        state: lead.state,
-      });
-
-      const docId = toDocId('lead', addrKeys.primaryKey || `${lead.address}_${lead.zip_code || ''}`);
-      const docRef = leadsCol.doc(docId);
-
-      const data = {
-        id: docId,
-        address: lead.address,
-        city: lead.city || '',
-        state: lead.state || '',
-        zipCode: addrKeys.zip5 || lead.zip_code || lead.zip || '',
-        county: lead.county || '',
-        status: lead.status || 'for_sale',
-        previousStatus: lead.previous_status || lead.previousStatus || '',
-        listPrice: Number(lead.list_price || lead.listPrice || 0) || null,
-        bedrooms: Number(lead.bedrooms || 0) || null,
-        bathrooms: Number(lead.bathrooms || 0) || null,
-        sqft: Number(lead.sqft || 0) || null,
-        isVacant: Boolean(lead.is_vacant || lead.isVacant),
-        listedDate: lead.listed_date || lead.listedDate || now.slice(0, 10),
-        realtorName: lead.realtor_name || lead.realtorName || '',
-        realtorEmail: lead.realtor_email || lead.realtorEmail || '',
-        realtorPhone: lead.realtor_phone || lead.realtorPhone || '',
-        realtorAddress: lead.realtor_address || lead.realtorAddress || '',
-        brokerName: lead.broker_name || lead.brokerName || '',
-        source: 'usahomelistings',
-        lastUpdated: now,
-      };
-
-      batch.set(docRef, data, { merge: true });
-      ingested.push(data);
-      inserted++;
-    }
-
-    await batch.commit();
+  for (const lead of leads) {
+    if (!lead.address) continue;
+    const addrKeys = buildAddressKeys({
+      street: lead.address,
+      zip: lead.zipCode || lead.zip_code || lead.zip,
+      city: lead.city,
+      state: lead.state,
+    });
+    const leadId = toDocId('lead', addrKeys.primaryKey || `${lead.address}_${lead.zip_code || ''}`);
+    byId.set(leadId, {
+      leadId,
+      address: String(lead.address),
+      city: lead.city || '',
+      state: lead.state || '',
+      zipCode: addrKeys.zip5 || lead.zip_code || lead.zip || '',
+      county: lead.county || '',
+      status: lead.status || 'for_sale',
+      previousStatus: lead.previous_status || lead.previousStatus || '',
+      listPrice: Math.round(Number(lead.list_price || lead.listPrice || 0)) || null,
+      bedrooms: Math.round(Number(lead.bedrooms || 0)) || null,
+      bathrooms: Number(lead.bathrooms || 0) || null,
+      sqft: Math.round(Number(lead.sqft || 0)) || null,
+      isVacant: Boolean(lead.is_vacant || lead.isVacant),
+      listedDate: sql.dateOnly(lead.listed_date || lead.listedDate) || now.slice(0, 10),
+      realtorName: lead.realtor_name || lead.realtorName || '',
+      realtorEmail: lead.realtor_email || lead.realtorEmail || '',
+      realtorPhone: lead.realtor_phone || lead.realtorPhone || '',
+      brokerName: lead.broker_name || lead.brokerName || '',
+      source: 'usahomelistings',
+      updatedAt: now,
+    });
   }
 
+  const rows = [...byId.values()];
+  await sql.upsertMany('Lead', 'lead_upsertMany', rows);
   invalidateLeadsCache();
 
-  // Match detection for ONLY the listings just ingested (previously this re-read all ~27K listings
-  // after every ingest call). Awaited, not fire-and-forget: a Cloud Function may stop running the
-  // moment the response is sent, which would silently drop a background promise.
+  // Match detection for ONLY the listings just ingested. Awaited, not fire-and-forget: a serverless
+  // runtime may stop running the moment the response is sent, which would silently drop a background promise.
+  const ingested = rows.map((r) => ({ ...r, id: r.leadId }));
   let newMatches = 0;
   try {
     const result = await reconcileMatches({ listings: ingested });
@@ -157,7 +149,7 @@ async function upsertPreMoverLeads(leads = []) {
     console.error('[leadsDb] Analytics refresh after ingest failed:', err);
   }
 
-  return { total: inserted, newMatches };
+  return { total: rows.length, newMatches };
 }
 
 // Comprehensive Northern Virginia, DC, and Maryland Geographic Coordinates
@@ -358,12 +350,7 @@ function listingMatchesFilters(d, { status, state, county, search, minPrice, max
 
 /**
  * Paged listing search. Returns { total, leads, offset, limit, endCursor, source }.
- *  - Search / price filters, or a warm in-memory snapshot: served from memory (0 reads, exact total).
- *  - Otherwise Firestore with equality filters ordered by document id. `after` (the previous page's
- *    `endCursor`) makes a page cost ~`limit` reads. Without it, `offset` is used only while it is
- *    cheap (first 2,000 results, or a result set under 6,000); a deeper jump loads the in-memory
- *    snapshot once (cached for 2 hours) instead of paying Firestore for every skipped document.
- *    (No descending order is used, so no extra Firestore index is required.)
+ * Served from the in-memory snapshot (exact totals, instant page jumps, any filter combination).
  */
 async function listPreMoverLeads({
   status,
@@ -375,64 +362,46 @@ async function listPreMoverLeads({
   month,
   limit = 50,
   offset = 0,
-  after,
 } = {}) {
   const fetchLimit = Math.min(Math.max(Number(limit) || 50, 10), 200);
   const fetchOffset = Math.max(Number(offset) || 0, 0);
   const filters = { status, state, county, search, minPrice, maxPrice, month };
 
-  async function fromSnapshot() {
-    const all = await getLeadsSnapshot();
-    const filtered = all.filter((r) => listingMatchesFilters(r.d, filters));
-    const page = filtered.slice(fetchOffset, fetchOffset + fetchLimit);
-    return {
-      total: filtered.length,
-      leads: page.map((r) => toLeadRow(r.d)),
-      offset: fetchOffset,
-      limit: fetchLimit,
-      endCursor: page.length ? page[page.length - 1].id : null,
-      source: 'cache',
-    };
-  }
-
-  // The month filter is served from the in-memory snapshot too (a date-range query would need its own index).
-  if (search || minPrice || maxPrice || (month && month !== 'all') || leadsCacheWarm()) return fromSnapshot();
-
-  let query = leadsCol;
-  if (status && status !== 'all') query = query.where('status', '==', status);
-  if (state && state !== 'all') query = query.where('state', '==', state);
-  if (county && county !== 'all') query = query.where('county', '==', county);
-
-  let total = null;
-  try {
-    total = (await query.count().get()).data().count;
-  } catch (e) {
-    console.warn('[leadsDb] count() failed:', e.message);
-  }
-
-  const cheapOffset = fetchOffset <= 2000 || (total !== null && total <= 6000);
-  if (!after && !cheapOffset) return fromSnapshot();
-
-  const byId = FieldPath.documentId();
-  const ordered = query.orderBy(byId);
-  const docs = (after
-    ? await ordered.startAfter(String(after)).limit(fetchLimit).get()
-    : await ordered.offset(fetchOffset).limit(fetchLimit).get()
-  ).docs;
-
+  const all = await getLeadsSnapshot();
+  const filtered = all.filter((r) => listingMatchesFilters(r.d, filters));
+  const page = filtered.slice(fetchOffset, fetchOffset + fetchLimit);
   return {
-    total: total === null ? docs.length : total,
-    leads: docs.map((d) => toLeadRow(d.data())),
+    total: filtered.length,
+    leads: page.map((r) => toLeadRow(r.d)),
     offset: fetchOffset,
     limit: fetchLimit,
-    endCursor: docs.length ? docs[docs.length - 1].id : null,
-    source: 'firestore',
+    endCursor: page.length ? page[page.length - 1].id : null,
+    source: 'sql',
   };
 }
 
 // ================================================================
 // LEGACY CUSTOMERS
 // ================================================================
+
+const LEGACY_SELECTION = 'customerId name email phone originAddress destinationAddress city state zipCode moveDate notes importedAt';
+function rowToLegacy(r) {
+  return {
+    id: r.customerId,
+    name: r.name || '',
+    email: r.email || '',
+    phone: r.phone || '',
+    originAddress: r.originAddress || '',
+    destinationAddress: r.destinationAddress || '',
+    city: r.city || '',
+    state: r.state || '',
+    zip: r.zipCode || '',
+    zipCode: r.zipCode || '',
+    moveDate: r.moveDate || '',
+    notes: r.notes || '',
+    importedAt: r.importedAt || null,
+  };
+}
 
 /**
  * Import historical legacy customer records from CSV/Excel parsing.
@@ -441,53 +410,43 @@ async function importLegacyCustomers(customers = []) {
   if (!Array.isArray(customers) || customers.length === 0) return { imported: 0 };
 
   const now = new Date().toISOString();
-  let count = 0;
-  const batchSize = 400;
-
-  for (let i = 0; i < customers.length; i += batchSize) {
-    const chunk = customers.slice(i, i + batchSize);
-    const batch = fs.batch();
-
-    for (const c of chunk) {
-      if (!c.name && !c.address && !c.destinationAddress) continue;
-
-      const docId = toDocId('leg', `${c.name || ''}_${c.destinationAddress || c.address || ''}_${count}`);
-      const docRef = legacyCustomersCol.doc(docId);
-
-      const record = {
-        id: docId,
-        name: c.name || c.customerName || 'Customer',
-        email: c.email || '',
-        phone: c.phone || c.phoneNumber || '',
-        originAddress: c.originAddress || c.movingFrom || c.from || '',
-        destinationAddress: c.destinationAddress || c.movingTo || c.address || c.to || '',
-        city: c.city || '',
-        state: c.state || '',
-        zip: c.zip || c.zipCode || '',
-        moveDate: c.moveDate || c.serviceDate || c.date || '',
-        notes: c.notes || '',
-        importedAt: now,
-      };
-
-      batch.set(docRef, record, { merge: true });
-      count++;
-    }
-
-    await batch.commit();
+  const byId = new Map();
+  let seq = 0;
+  for (const c of customers) {
+    if (!c.name && !c.address && !c.destinationAddress) continue;
+    const customerId = toDocId('leg', `${c.name || ''}_${c.destinationAddress || c.address || ''}_${seq++}`);
+    byId.set(customerId, {
+      customerId,
+      name: c.name || c.customerName || 'Customer',
+      email: c.email || '',
+      phone: c.phone || c.phoneNumber || '',
+      originAddress: c.originAddress || c.movingFrom || c.from || '',
+      destinationAddress: c.destinationAddress || c.movingTo || c.address || c.to || '',
+      city: c.city || '',
+      state: c.state || '',
+      zipCode: c.zip || c.zipCode || '',
+      moveDate: c.moveDate || c.serviceDate || c.date || '',
+      notes: c.notes || '',
+      importedAt: now,
+    });
   }
+  const rows = [...byId.values()];
+  await sql.upsertMany('LegacyCustomer', 'legacyCustomer_upsertMany', rows);
+  pastMovesCache = { index: null, loadedAt: 0 };
 
   // Run matching after import
   await reconcileMatches();
 
-  return { imported: count };
+  return { imported: rows.length };
 }
 
 /**
  * List imported legacy customers.
  */
 async function listLegacyCustomers(limit = 100) {
-  const snap = await legacyCustomersCol.limit(limit).get();
-  return snap.docs.map((d) => d.data());
+  const n = Math.min(Math.max(Number(limit) || 100, 1), 5000);
+  const data = await sql.read(`query L { legacyCustomers(limit: ${n}, orderBy: {customerId: ASC}) { ${LEGACY_SELECTION} } }`);
+  return (data.legacyCustomers || []).map(rowToLegacy);
 }
 
 // ================================================================
@@ -502,9 +461,12 @@ async function getPastMoveIndex() {
   if (pastMovesCache.index && Date.now() - pastMovesCache.loadedAt < PAST_MOVES_CACHE_TTL_MS) {
     return pastMovesCache.index;
   }
-  const [jobsSnap, legacySnap] = await Promise.all([jobsCol.get(), legacyCustomersCol.get()]);
+  const [jobsSnap, legacyRows] = await Promise.all([
+    jobsCol.get(),
+    sql.pageAll('legacyCustomers', 'customerId', LEGACY_SELECTION),
+  ]);
   const jobs = jobsSnap.docs.map((d) => d.data()).filter((j) => j && (j.origin || j.destination));
-  const legacyCustomers = legacySnap.docs.map((d) => d.data());
+  const legacyCustomers = legacyRows.map(rowToLegacy);
 
   const index = new Map();
   function indexRecord(street, zip, record, type) {
@@ -527,35 +489,57 @@ async function getPastMoveIndex() {
   return index;
 }
 
+const MATCH_FIELDS = [
+  'matchId', 'customerName', 'customerEmail', 'customerPhone', 'matchedAddress', 'matchedType', 'sourceType', 'sourceId',
+  'confidence', 'matchReason', 'previousMoveDate', 'previousMoveDetails', 'listingStatus', 'listingPrice', 'listedDate',
+  'realtorName', 'realtorPhone', 'realtorEmail', 'status', 'notes', 'outreachHistory', 'detectedAt', 'lastChecked',
+  'updatedAt', 'lastOutreachAt',
+];
+const MATCH_SELECTION = `${MATCH_FIELDS.join(' ')} lead { leadId }`;
+function rowToMatch(r) {
+  const m = { id: r.matchId, leadId: r.lead ? r.lead.leadId : null };
+  for (const k of MATCH_FIELDS) {
+    if (k === 'matchId') continue;
+    m[k] = r[k];
+  }
+  m.outreachHistory = Array.isArray(r.outreachHistory) ? r.outreachHistory : [];
+  m.notes = r.notes || '';
+  return m;
+}
+
 /**
  * Matches listings against past customers (booked jobs + legacy customers) and saves matches.
- *  - { listings }: check just those listings (used by ingest; no listing reads at all).
- *  - no args: "incremental" — only listings added/changed since the last manual run
- *    (system/leadsReconcile.lastRunAt); the very first run, or { full: true }, checks all listings.
+ *  - { listings }: check just those listings (used by ingest).
+ *  - no args: "incremental" - only listings added/changed since the last manual run; the very first run,
+ *    or { full: true }, checks all listings.
  *  - { dryRun: true }: compute and return counts without writing anything.
  * Existing matches keep their status/notes/outreach history.
  */
 async function reconcileMatches({ listings: given, full = false, dryRun = false } = {}) {
   const startedAt = new Date().toISOString();
-  const stateRef = systemCol.doc('leadsReconcile');
   let listings = given;
   let mode = 'ingest';
 
   if (!listings) {
-    const stateSnap = await stateRef.get();
-    const lastRunAt = stateSnap.exists ? stateSnap.data().lastRunAt : null;
+    const state = (await sql.getState('leadsReconcile')) || {};
+    const lastRunAt = state.lastRunAt || null;
     if (full || !lastRunAt) {
       mode = 'full';
-      listings = (await leadsCol.get()).docs.map((d) => ({ id: d.id, ...d.data() }));
+      listings = (await getLeadsSnapshot()).map((r) => r.d);
     } else {
       mode = 'incremental';
-      listings = (await leadsCol.where('lastUpdated', '>', lastRunAt).get()).docs.map((d) => ({ id: d.id, ...d.data() }));
+      const raw = await sql.pageAll('leads', 'leadId', LEAD_SELECTION, {
+        where: 'updatedAt: {gt: $since}',
+        varDefs: ', $since: Timestamp!',
+        vars: { since: lastRunAt },
+      });
+      listings = raw.map(rowToLead);
     }
   }
 
   if (!listings.length) {
     if (mode !== 'ingest' && !dryRun) {
-      await stateRef.set({ lastRunAt: startedAt, lastMode: mode, listingsChecked: 0 }, { merge: true });
+      await sql.mergeState('leadsReconcile', { lastRunAt: startedAt, lastMode: mode, listingsChecked: 0 });
     }
     return { newMatchesCount: 0, listingsChecked: 0, mode };
   }
@@ -585,27 +569,29 @@ async function reconcileMatches({ listings: given, full = false, dryRun = false 
   // Pass 2: load only the candidate matches that already exist (keeps staff-set status/notes)
   const existingMap = new Map();
   const uniqueIds = [...new Set(candidates.map((c) => c.matchDocId))];
-  for (let i = 0; i < uniqueIds.length; i += 300) {
-    const refs = uniqueIds.slice(i, i + 300).map((id) => matchedLeadsCol.doc(id));
-    const snaps = await fs.getAll(...refs);
-    snaps.forEach((snap) => { if (snap.exists) existingMap.set(snap.id, snap.data()); });
+  for (let i = 0; i < uniqueIds.length; i += 200) {
+    const ids = uniqueIds.slice(i, i + 200);
+    const data = await sql.read(
+      `query E($ids: [String!]!) { matchedLeads(limit: 1000, where: {matchId: {in: $ids}}) { ${MATCH_SELECTION} } }`,
+      { ids }
+    );
+    (data.matchedLeads || []).forEach((r) => existingMap.set(r.matchId, rowToMatch(r)));
   }
 
   // Pass 3: write
   let newMatchesCount = 0;
-  let batch = fs.batch();
-  let batchOps = 0;
+  const toWrite = new Map();
   for (const { listing, job, type, comp, matchDocId } of candidates) {
     const isLegacy = type === 'legacy';
     const existing = existingMap.get(matchDocId);
-    const matchData = {
-      id: matchDocId,
-      leadId: listing.id,
+    const row = {
+      matchId: matchDocId,
+      leadLeadId: listing.id,
       sourceType: isLegacy ? 'legacy_customer' : 'smartmoving_job',
-      sourceId: job.id,
+      sourceId: job.id ? String(job.id) : null,
       customerName: isLegacy ? (job.name || 'Legacy Customer') : (job.customer || 'Customer'),
-      customerEmail: job.email || (existing ? existing.customerEmail : null),
-      customerPhone: job.phone || (existing ? existing.customerPhone : null),
+      customerEmail: job.email || (existing ? existing.customerEmail : null) || null,
+      customerPhone: job.phone || (existing ? existing.customerPhone : null) || null,
       matchedAddress: listing.address,
       matchedType: type,
       previousMoveDate: isLegacy ? (job.moveDate || job.date || null) : (job.date || null),
@@ -614,14 +600,14 @@ async function reconcileMatches({ listings: given, full = false, dryRun = false 
         : type === 'moved_to'
           ? `Moved into this property on ${job.date || 'past move'}. Origin: ${job.origin || 'N/A'}`
           : `Moved from this property on ${job.date || 'past move'}. Destination: ${job.destination || 'N/A'}`,
-      confidence: comp.confidence,
+      confidence: Math.round(comp.confidence),
       matchReason: comp.matchReason,
       listingStatus: listing.status,
-      listingPrice: listing.listPrice,
-      listedDate: listing.listedDate,
-      realtorName: listing.realtorName,
-      realtorPhone: listing.realtorPhone,
-      realtorEmail: listing.realtorEmail,
+      listingPrice: listing.listPrice ? Math.round(listing.listPrice) : null,
+      listedDate: sql.dateOnly(listing.listedDate),
+      realtorName: listing.realtorName || '',
+      realtorPhone: listing.realtorPhone || '',
+      realtorEmail: listing.realtorEmail || '',
       // Status tracking: default to 'pending' unless already updated by staff
       status: existing ? existing.status : 'pending',
       notes: existing ? existing.notes || '' : '',
@@ -629,25 +615,15 @@ async function reconcileMatches({ listings: given, full = false, dryRun = false 
       lastChecked: startedAt,
     };
     if (!existing) {
-      matchData.detectedAt = startedAt;
-      newMatchesCount++;
+      row.detectedAt = startedAt;
+      if (!toWrite.has(matchDocId)) newMatchesCount++;
     }
-    if (dryRun) continue;
-    batch.set(matchedLeadsCol.doc(matchDocId), matchData, { merge: true });
-    batchOps++;
-    if (batchOps >= 400) {
-      await batch.commit();
-      batch = fs.batch();
-      batchOps = 0;
-    }
+    toWrite.set(matchDocId, row);
   }
-  if (batchOps > 0) await batch.commit();
+  if (!dryRun && toWrite.size) await sql.upsertMany('MatchedLead', 'matchedLead_upsertMany', [...toWrite.values()]);
 
   if (mode !== 'ingest' && !dryRun) {
-    await stateRef.set(
-      { lastRunAt: startedAt, lastMode: mode, listingsChecked: listings.length, newMatchesCount },
-      { merge: true }
-    );
+    await sql.mergeState('leadsReconcile', { lastRunAt: startedAt, lastMode: mode, listingsChecked: listings.length, newMatchesCount });
   }
   console.log(`[leadsDb] Reconcile (${mode}${dryRun ? ', dry run' : ''}): ${listings.length} listings checked, ${candidates.length} candidates, ${newMatchesCount} new matches.`);
   return { newMatchesCount, listingsChecked: listings.length, candidates: candidates.length, mode };
@@ -655,26 +631,24 @@ async function reconcileMatches({ listings: given, full = false, dryRun = false 
 
 /** Manual reconcile throttle: ms until another manual run is allowed (0 = allowed now). */
 async function getReconcileCooldownMs() {
-  const snap = await systemCol.doc('leadsReconcile').get();
-  const last = snap.exists ? Date.parse(snap.data().lastManualAt || '') : NaN;
+  const state = (await sql.getState('leadsReconcile')) || {};
+  const last = Date.parse(state.lastManualAt || '');
   if (Number.isNaN(last)) return 0;
   return Math.max(0, last + RECONCILE_COOLDOWN_MS - Date.now());
 }
 async function markManualReconcile() {
-  await systemCol.doc('leadsReconcile').set({ lastManualAt: new Date().toISOString() }, { merge: true });
+  await sql.mergeState('leadsReconcile', { lastManualAt: new Date().toISOString() });
 }
 
 /**
  * List matched leads with status filter.
  */
 async function listMatchedLeads(statusFilter) {
-  let query = matchedLeadsCol;
-  if (statusFilter && statusFilter !== 'all') {
-    query = query.where('status', '==', statusFilter);
-  }
-
-  const snap = await query.get();
-  const matches = snap.docs.map((d) => d.data());
+  const filtered = statusFilter && statusFilter !== 'all';
+  const rows = await sql.pageAll('matchedLeads', 'matchId', MATCH_SELECTION, filtered
+    ? { where: 'status: {eq: $status}', varDefs: ', $status: String!', vars: { status: statusFilter } }
+    : {});
+  const matches = rows.map(rowToMatch);
 
   // Sort pending first, then by listedDate descending
   matches.sort((a, b) => {
@@ -686,13 +660,17 @@ async function listMatchedLeads(statusFilter) {
   return matches;
 }
 
+async function getMatch(matchId) {
+  const data = await sql.read(`query M($id: String!) { matchedLead(key: {matchId: $id}) { ${MATCH_SELECTION} } }`, { id: matchId });
+  return data.matchedLead ? rowToMatch(data.matchedLead) : null;
+}
+
 /**
  * Update the review status of a matched lead ('pending' | 'contacted' | 'dismissed' | 'booked').
  */
 async function updateMatchedLeadStatus(matchId, status, notes = '') {
-  const docRef = matchedLeadsCol.doc(matchId);
-  const snap = await docRef.get();
-  if (!snap.exists) {
+  const current = await getMatch(matchId);
+  if (!current) {
     throw new Error(`Match not found: ${matchId}`);
   }
 
@@ -702,7 +680,10 @@ async function updateMatchedLeadStatus(matchId, status, notes = '') {
   };
   if (notes) updates.notes = notes;
 
-  await docRef.update(updates);
+  await sql.write('mutation U($id: String!, $d: MatchedLead_Data!) { matchedLead_update(key: {matchId: $id}, data: $d) }', {
+    id: matchId,
+    d: updates,
+  });
   return { id: matchId, status, ...updates };
 }
 
@@ -710,48 +691,49 @@ async function updateMatchedLeadStatus(matchId, status, notes = '') {
  * Record an outreach action (email sent) on a matched lead.
  */
 async function recordOutreach(matchId, outreachRecord) {
-  const docRef = matchedLeadsCol.doc(matchId);
-  const snap = await docRef.get();
-  if (!snap.exists) {
+  const current = await getMatch(matchId);
+  if (!current) {
     throw new Error(`Match not found: ${matchId}`);
   }
 
-  const current = snap.data();
-  const history = current.outreachHistory || [];
+  const history = [...(current.outreachHistory || [])];
   history.push({
     ...outreachRecord,
     sentAt: new Date().toISOString(),
   });
 
-  await docRef.update({
-    status: 'contacted',
-    outreachHistory: history,
-    lastOutreachAt: new Date().toISOString(),
+  const now = new Date().toISOString();
+  await sql.write('mutation O($id: String!, $d: MatchedLead_Data!) { matchedLead_update(key: {matchId: $id}, data: $d) }', {
+    id: matchId,
+    d: { status: 'contacted', outreachHistory: history, lastOutreachAt: now },
   });
 
   return { id: matchId, status: 'contacted', outreachHistory: history };
+}
+
+let listingCountMemo = { n: 0, at: 0 };
+async function countListings() {
+  if (leadsCacheWarm()) return leadsSnapshot.rows.length;
+  if (Date.now() - listingCountMemo.at < 5 * 60 * 1000) return listingCountMemo.n;
+  const keys = await sql.pageAll('leads', 'leadId', 'leadId', { pageSize: 5000 });
+  listingCountMemo = { n: keys.length, at: Date.now() };
+  return keys.length;
 }
 
 /**
  * Get summary KPI metrics for the Leads tab.
  */
 async function getLeadsSummary() {
-  let totalListings = 27221;
-  try {
-    const countSnap = await leadsCol.count().get();
-    totalListings = countSnap.data().count;
-  } catch (err) {
-    console.warn('[leadsDb] count() fallback:', err.message);
-  }
-
-  const matchesSnap = await matchedLeadsCol.get();
-  const matches = matchesSnap.docs.map((d) => d.data());
-  const pendingCount = matches.filter((m) => m.status === 'pending').length;
-  const contactedCount = matches.filter((m) => m.status === 'contacted').length;
+  const [totalListings, matchRows] = await Promise.all([
+    countListings(),
+    sql.pageAll('matchedLeads', 'matchId', 'matchId status', { pageSize: 5000 }),
+  ]);
+  const pendingCount = matchRows.filter((m) => m.status === 'pending').length;
+  const contactedCount = matchRows.filter((m) => m.status === 'contacted').length;
 
   return {
     totalListings,
-    totalMatches: matches.length,
+    totalMatches: matchRows.length,
     pendingMatches: pendingCount,
     contactedMatches: contactedCount,
   };
@@ -1021,40 +1003,28 @@ function computeLeadsAnalytics(leads) {
   };
 }
 
-// ---- Analytics: computed over ALL listings at most once a day, stored in one document ----
+
+// ---- Analytics: computed over ALL listings at most once a day, stored in the AppState table ----
 let analyticsRefreshing = null;
 async function refreshLeadsAnalytics() {
   if (analyticsRefreshing) return analyticsRefreshing;
   analyticsRefreshing = (async () => {
-    const leads = leadsCacheWarm()
-      ? leadsSnapshot.rows.map((r) => r.d)
-      : (await leadsCol.get()).docs.map((d) => d.data());
+    const leads = (await getLeadsSnapshot()).map((r) => r.d);
     const result = computeLeadsAnalytics(leads);
-    // Firestore documents cap at 1 MiB — keep the stored payload comfortably under it.
-    let payload = JSON.stringify(result);
-    if (payload.length > 900000) {
-      result.cityStats = result.cityStats.slice(0, 400);
-      payload = JSON.stringify(result);
-    }
     const computedAt = new Date().toISOString();
-    await systemCol.doc('leadsAnalytics').set({ computedAt, totalListings: leads.length, payload });
+    await sql.setState('leadsAnalytics', { computedAt, totalListings: leads.length, result });
     return { ...result, computedAt };
   })().finally(() => { analyticsRefreshing = null; });
   return analyticsRefreshing;
 }
 
 async function readStoredAnalytics() {
-  const snap = await systemCol.doc('leadsAnalytics').get();
-  if (!snap.exists) return null;
-  const { computedAt, payload } = snap.data();
-  try {
-    return { computedAt, result: { ...JSON.parse(payload), computedAt } };
-  } catch (e) {
-    return null;
-  }
+  const stored = await sql.getState('leadsAnalytics');
+  if (!stored || !stored.result) return null;
+  return { computedAt: stored.computedAt, result: { ...stored.result, computedAt: stored.computedAt } };
 }
 
-/** 1 read when the stored analytics are fresh (< 24h); otherwise recomputes over all listings. */
+/** Returns the stored analytics when fresh (< 24h); otherwise recomputes over all listings. */
 async function getLeadsAnalytics({ refresh = false } = {}) {
   if (!refresh) {
     const stored = await readStoredAnalytics();
@@ -1073,8 +1043,7 @@ async function refreshLeadsAnalyticsIfStale() {
 
 /**
  * Headline numbers for whatever filters are applied (the KPI cards): totals by status, average and
- * median price, and how many VIP customer matches belong to those listings. Served from the cached
- * in-memory snapshot, same as the other filtered views.
+ * median price, and how many VIP customer matches belong to those listings.
  */
 async function getFilteredStats(filters = {}) {
   const all = await getLeadsSnapshot();
@@ -1093,11 +1062,10 @@ async function getFilteredStats(filters = {}) {
   const avgPrice = prices.length ? Math.round(prices.reduce((s, p) => s + p, 0) / prices.length) : 0;
   const medianPrice = prices.length ? prices[Math.floor(prices.length / 2)] : 0;
 
-  const matchSnap = await matchedLeadsCol.get();
+  const matchRows = await sql.pageAll('matchedLeads', 'matchId', 'matchId matchedAddress status', { pageSize: 5000 });
   let matchTotal = 0;
   let matchPending = 0;
-  matchSnap.docs.forEach((d) => {
-    const m = d.data();
+  matchRows.forEach((m) => {
     if (addresses.has(String(m.matchedAddress || '').toLowerCase())) {
       matchTotal += 1;
       if (m.status === 'pending') matchPending += 1;

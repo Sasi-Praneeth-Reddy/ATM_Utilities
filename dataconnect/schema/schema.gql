@@ -28,6 +28,7 @@ type Lead @table(key: "leadId") @index(fields: ["status"]) @index(fields: ["coun
   brokerName: String
   source: String
   previousStatus: String
+  updatedAt: Timestamp
   createdAt: Timestamp! @default(expr: "request.time")
 }
 
@@ -41,6 +42,7 @@ type MatchedLead @table(key: "matchId") @index(fields: ["status"]) {
   matchedAddress: String
   matchedType: String
   sourceType: String
+  sourceId: String
   confidence: Int
   matchReason: String
   previousMoveDate: String
@@ -56,6 +58,8 @@ type MatchedLead @table(key: "matchId") @index(fields: ["status"]) {
   outreachHistory: Any
   detectedAt: Timestamp
   lastChecked: Timestamp
+  updatedAt: Timestamp
+  lastOutreachAt: Timestamp
 }
 
 type LegacyCustomer @table(key: "customerId") {
@@ -137,4 +141,12 @@ type EmailNotice @table(key: "noticeId") @index(fields: ["sentAt"]) {
   errorMessage: String
   messageId: String
   sentAt: Timestamp!
+}
+
+# ---------- Small key/value store (cached analytics, reconcile state, storage summary, id maps) ----------
+# Replaces the Firestore `system/*` cache documents for Leads/Storage.
+type AppState @table(key: "stateKey") {
+  stateKey: String!
+  value: Any
+  updatedAt: Timestamp
 }
