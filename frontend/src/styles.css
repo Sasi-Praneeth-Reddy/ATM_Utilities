@@ -119,20 +119,16 @@ nav{display:flex;gap:4px;background:var(--navy2);padding:0 16px;overflow-x:auto;
 .leaflet-bottom {
   z-index: 5 !important;
 }
-.city-bubble-badge {
-  background: rgba(30, 58, 102, 0.9);
-  color: #ffffff;
-  border: 1.5px solid rgba(255, 255, 255, 0.95);
-  border-radius: 12px;
-  padding: 2px 7px;
-  font-size: 11px;
-  font-weight: 700;
-  text-align: center;
-  white-space: nowrap;
-  box-shadow: 0 2px 5px rgba(0,0,0,0.35);
-  pointer-events: none;
-  transform: translate(-50%, -50%);
-}
+/* City labels on the Leads density map: no box, just text with a white halo so it reads on any
+   tile colour. Serif-leaning stack on purpose, to stand apart from the sans-serif map tiles. */
+.city-label{position:absolute;transform:translate(-50%,-50%);width:max-content;text-align:center;line-height:1.15;pointer-events:none;
+  font-family:Georgia,"Palatino Linotype",Palatino,"Book Antiqua",serif;
+  -webkit-text-stroke:3px rgba(255,255,255,.92);paint-order:stroke fill;
+  text-shadow:0 0 3px #fff,0 0 3px #fff;}
+.city-label .cl-name{display:block;font-size:13px;font-weight:700;font-style:italic;color:#14284b;}
+.city-label .cl-count{display:block;font-size:11px;font-weight:700;color:#9a3412;letter-spacing:.2px;}
+.leaflet-container[data-zoom-tier="far"] .city-label:not(.rank-top){display:none;}
+.leaflet-container[data-zoom-tier="mid"] .city-label.rank-low{display:none;}
 nav button{background:transparent;border:none;color:#c6d2e8;padding:12px 14px;font-size:13px;cursor:pointer;border-bottom:3px solid transparent;white-space:nowrap;font-weight:600;transition:color .15s ease,border-color .15s ease;}
 nav button:hover:not(:disabled){color:#fff;}
 nav button.active{color:#fff;border-bottom-color:var(--orange);}

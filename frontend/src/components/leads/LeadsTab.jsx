@@ -524,6 +524,15 @@ export default function LeadsTab({ backendUrl, role }) {
 
       markersLayerRef.current = window.L.layerGroup().addTo(map);
       mapInstanceRef.current = map;
+
+      // Label declutter: zoomed out, only the biggest cities get a name label; zooming in reveals
+      // the rest (see .city-label rules in styles.css, keyed off this data attribute).
+      const applyZoomTier = () => {
+        const z = map.getZoom();
+        map.getContainer().dataset.zoomTier = z <= 9 ? 'far' : z === 10 ? 'mid' : 'near';
+      };
+      applyZoomTier();
+      map.on('zoomend', applyZoomTier);
     }
 
     const map = mapInstanceRef.current;
@@ -538,6 +547,8 @@ export default function LeadsTab({ backendUrl, role }) {
         // MODE 1: Scalable City Density Circles (Accurate official city centers)
         const cityList = activeCityClusters;
         const maxCount = Math.max(...cityList.map((c) => c.count), 1);
+        const rankByCity = {};
+        [...cityList].sort((a, b) => b.count - a.count).forEach((c, i) => { rankByCity[c.city] = i; });
 
         cityList.forEach((c) => {
           const coords = CITY_COORDINATES[c.city] || CITY_COORDINATES[c.city.replace(' ', '')];
@@ -609,9 +620,9 @@ export default function LeadsTab({ backendUrl, role }) {
           const badgeIcon = window.L.divIcon({
             className: 'city-bubble-badge-icon',
             html: `
-              <div class="city-bubble-badge">
-                ${c.city}<br/>
-                <span style="font-size: 10px; font-weight: 800; color: #90cdf4;">${c.count.toLocaleString()} leads</span>
+              <div class="city-label ${rankByCity[c.city] < 12 ? 'rank-top' : rankByCity[c.city] < 45 ? 'rank-mid' : 'rank-low'}">
+                <span class="cl-name">${c.city}</span>
+                <span class="cl-count">${c.count.toLocaleString()} moves</span>
               </div>
             `,
             iconSize: [0, 0],
