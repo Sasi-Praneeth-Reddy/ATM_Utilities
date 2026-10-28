@@ -1503,3 +1503,17 @@ nav.tabstrip .nav-alert-dot{box-shadow:0 0 0 2px var(--card);}
 .admin-scroll{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;align-content:start;}
 .admin-scroll > .admin-card{margin-bottom:0;}
 @media (max-width:720px){ main{padding:14px 12px;} }
+
+/* Sidebar toggle lives in the sidebar's title row (2026-10-28). The top-bar burger is only for
+   phones, where the sidebar is off-canvas when closed and so has no title row to click. */
+.shell-toggle{margin-left:auto;width:32px;height:32px;flex:none;border:none;border-radius:8px;background:transparent;color:var(--muted);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;}
+.shell-toggle:hover{background:var(--card-alt);color:var(--text);}
+.shell-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+.shell-sidebar.collapsed .shell-brand{flex-direction:column;gap:10px;}
+.shell-sidebar.collapsed .shell-toggle{margin-left:0;}
+header.topbar .topbar-icon-btn{display:none;}
+@media (max-width:720px){
+  header.topbar .topbar-icon-btn{display:inline-flex;}
+  .shell-sidebar.collapsed .shell-brand{flex-direction:row;gap:12px;}
+  .shell-sidebar.collapsed .shell-toggle{margin-left:auto;}
+}

@@ -37,6 +37,11 @@ export default function Sidebar({ role, activeModuleId, onSelectModule, collapse
             <div className="shell-brand-name">Around Town Movers</div>
             <div className="shell-brand-sub">Operations</div>
           </div>
+          <button type="button" className="shell-toggle" onClick={onToggle} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
+            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" {...P}>
+              <rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" />
+            </svg>
+          </button>
         </div>
         <div className="shell-modules" role="navigation" aria-label="Main modules">
           {mods.map((m) => {
