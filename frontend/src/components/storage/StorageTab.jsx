@@ -408,8 +408,8 @@ export default function StorageTab({ backendUrl }) {
         {stats.avgDiscount !== null
           ? <Stat accent="#ffc107" label="Avg web discount" valueColor="#805ad5" value={`${Math.round(stats.avgDiscount)}%`} sub="web rate vs. street rate" />
           : <Stat accent="#ffc107" label="Rate spread" valueColor="#805ad5" value={stats.cheapest ? money(stats.priciest.web - stats.cheapest.web) : '—'} sub="highest minus lowest rate" />}
-        <Stat accent="#4caf50" label="Pricing records" valueColor="#4a5568" value={(kpis?.activeSnapshots || 0).toLocaleString()}
-          sub={lastScraped ? `last collected ${lastScraped.toLocaleDateString()}` : 'in database'} />
+        <Stat accent="#4caf50" label="Recent price records" valueColor="#4a5568" value={(kpis?.activeSnapshots || 0).toLocaleString()}
+          sub={lastScraped ? `last 30 days · collected ${lastScraped.toLocaleDateString()}` : 'last 30 days'} />
       </div>
 
       {viewMode === 'dashboard' && (

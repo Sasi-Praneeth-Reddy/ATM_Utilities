@@ -152,7 +152,8 @@ async function insertPricingSnapshots(snapshots = []) {
     if (!facilityId) { skipped++; continue; }
     const unitSize = s.unitSize || s.unit_size || '10x10';
     rows.push({
-      priceId: `price_${facilityId}_${unitSize}_${Date.now()}_${n++}`,
+      // A scraper-supplied snapshotKey makes re-running the same day's job idempotent (same key = same row).
+      priceId: s.snapshotKey ? `price_${facilityId}_${s.snapshotKey}` : `price_${facilityId}_${unitSize}_${Date.now()}_${n++}`,
       facilityFacilityId: facilityId,
       unitSize,
       unitType: s.unitType || s.unit_type || 'Standard',
@@ -175,11 +176,19 @@ async function insertPricingSnapshots(snapshots = []) {
 const KPI_UNIT_SIZES = ['5x5', '10x10', '10x15', '10x20'];
 const KPI_DEFAULT_RATES = { '5x5': 78, '10x10': 152, '10x15': 218, '10x20': 289 };
 
-/** Full pass over every pricing snapshot - only run from getStorageSummary(). */
+const SUMMARY_WINDOW_DAYS = 30;
+
+/** Pass over the most recent 30 days of pricing snapshots (history keeps growing daily, so we never
+ * read all of it) - only run from getStorageSummary(). */
 async function computeStorageSummary() {
+  const newest = await sql.read('query N { storagePricings(limit: 1, orderBy: {scrapedAt: DESC}) { scrapedAt } }');
+  const newestAt = newest.storagePricings && newest.storagePricings[0] ? newest.storagePricings[0].scrapedAt : null;
+  const since = new Date((newestAt ? Date.parse(newestAt) : Date.now()) - SUMMARY_WINDOW_DAYS * 86400000).toISOString();
   const [facilities, prices] = await Promise.all([
     sql.pageAll('storageFacilities', 'facilityId', 'facilityId'),
-    sql.pageAll('storagePricings', 'priceId', 'facility { facilityId } unitSize unitType availability streetRate webRate scrapedAt source'),
+    sql.pageAll('storagePricings', 'priceId', 'facility { facilityId } unitSize unitType availability streetRate webRate scrapedAt source', {
+      where: 'scrapedAt: {ge: $since}', varDefs: ', $since: Timestamp!', vars: { since },
+    }),
   ]);
 
   // "Latest" = each facility's most recent scrape day.
