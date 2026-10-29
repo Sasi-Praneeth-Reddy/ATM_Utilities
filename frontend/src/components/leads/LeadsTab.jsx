@@ -13,6 +13,9 @@ import LegacyUploadModal from './LegacyUploadModal';
 import LeadsSheet from './LeadsSheet';
 import { Card, StatusDonut, PriceHistogram, ActivityHeatmap, CountyBubbles, MonthlyPanel, monthLabel } from './LeadsCharts';
 
+// Daily uploads switched to exact one-day portal files on this date (see Storage-Tracker-Server collectors/portal_exporter.py).
+const EXACT_DATES_FROM_LABEL = 'Oct 30, 2026';
+
 const STATUS_COLORS = {
   for_sale: '#10b981',        // Emerald Green (Active)
   under_contract: '#f97316',  // Vivid Orange (High priority pre-mover)
@@ -1592,6 +1595,11 @@ export default function LeadsTab({ backendUrl, role }) {
           {vis.dailyTrend && (
             <Card title="🗓️ When homes hit the market" subtitle="Each square is one day, over the last 22 weeks. Darker means more homes listed that day.">
               <ActivityHeatmap daily={vis.dailyTrend} />
+              <div style={{ marginTop: '10px', backgroundColor: '#fffaf0', border: '1px solid #fbd38d', color: '#744210', borderRadius: '8px', padding: '9px 14px', fontSize: '12px', lineHeight: 1.5 }}>
+                <b>How to read these dates.</b> The listings portal does not give a listing date, so before <b>{EXACT_DATES_FROM_LABEL}</b> each lead is dated by the day we
+                first captured it (older leads by the day-range of the file they came in). Some days are catch-up batches, e.g. Oct 28. From {EXACT_DATES_FROM_LABEL} onward every
+                new lead is dated to its exact day. Compare recent days against each other; treat earlier days as approximate.
+              </div>
             </Card>
           )}
           <MonthlyPanel
