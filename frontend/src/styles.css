@@ -1647,3 +1647,10 @@ header.topbar::before{content:"";position:absolute;left:0;right:0;top:0;height:3
   .login-side-inner > *:nth-child(2){animation-delay:.08s;} .login-side-inner > *:nth-child(3){animation-delay:.16s;} .login-side-inner > *:nth-child(4){animation-delay:.24s;}
   .login-side::before{content:"";position:absolute;width:420px;height:420px;border-radius:50%;left:-120px;top:-100px;background:radial-gradient(circle,rgba(59,175,41,.35),transparent 65%);animation:atm-drift-a 14s ease-in-out infinite;pointer-events:none;}
 }
+
+/* County map */
+.county-shape{transition:fill .25s ease,stroke-width .15s ease,filter .15s ease;}
+.county-shape:hover{filter:brightness(1.08) drop-shadow(0 2px 4px rgba(15,23,42,.35));}
+@media (prefers-reduced-motion:no-preference){
+  .county-map svg{animation:atm-pop .9s cubic-bezier(.2,.8,.2,1) backwards;}
+}

@@ -11,6 +11,7 @@ import {
 import OutreachModal from './OutreachModal';
 import LegacyUploadModal from './LegacyUploadModal';
 import LeadsSheet from './LeadsSheet';
+import CountyMap from './CountyMap';
 import { readRoute, writeRoute } from '../../utils/route';
 import { Card, StatusDonut, PriceHistogram, ActivityHeatmap, CountyBubbles, MonthlyPanel, monthLabel, CountUp } from './LeadsCharts';
 
@@ -271,7 +272,7 @@ export default function LeadsTab({ backendUrl, role }) {
   useEffect(() => { writeRoute('leads', activeSubTab); }, [activeSubTab]);
 
   // Map Display Mode: 'bubbles' (Scalable City Density Circles) | 'pins' (Property Pins)
-  const [mapViewMode, setMapViewMode] = useState('bubbles');
+  const [mapViewMode, setMapViewMode] = useState('counties'); // 'counties' | 'bubbles' | 'pins'
 
   // Summary & Analytics
   const [summary, setSummary] = useState({
@@ -943,6 +944,20 @@ export default function LeadsTab({ backendUrl, role }) {
   const kpiMatches = fs ? fs.matches.total : (summary.totalMatches || 0);
   const kpiPending = fs ? fs.matches.pending : (summary.pendingMatches || 0);
   const visibleMatches = filterAndSortMatches(matches, matchFilters);
+  // County map data: real per-county stats when the server sends them, else rebuilt from the city rollup.
+  const countyMapStats = (() => {
+    if (Array.isArray(analytics.countyStats) && analytics.countyStats.length) return analytics.countyStats;
+    const acc = {};
+    for (const c of analytics.cityStats || []) {
+      if (!c.county) continue;
+      const k = `${c.state}|${c.county}`;
+      const a = acc[k] || (acc[k] = { state: c.state, county: c.county, count: 0, for_sale: 0, under_contract: 0, priceSum: 0 });
+      a.count += c.count || 0; a.for_sale += c.for_sale || 0; a.under_contract += c.under_contract || 0;
+      if (c.avgPrice) a.priceSum += c.avgPrice * (c.count || 1);
+    }
+    return Object.values(acc).map((a) => ({ ...a, avgPrice: a.count ? Math.round(a.priceSum / a.count) : null }));
+  })();
+  const countyMapCollected = Object.entries(analytics.stateCounties || {}).flatMap(([state, list]) => (list || []).map((county) => ({ state, county })));
   const matchListingStatuses = [...new Set(matches.map((m) => m.listingStatus || 'for_sale'))].sort();
 
   // Pagination Controller Component
@@ -1371,18 +1386,31 @@ export default function LeadsTab({ backendUrl, role }) {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', flexWrap: 'wrap', gap: '8px' }}>
                 <div>
                   <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 700 }}>
-                    {mapViewMode === 'bubbles' ? '🏙️ City Pre-Mover Market Density' : '📍 Property Pins View'}
+                    {mapViewMode === 'counties' ? '🗺️ Counties we collect from' : mapViewMode === 'bubbles' ? '🏙️ City Pre-Mover Market Density' : '📍 Property Pins View'}
                   </h3>
                   <span style={{ fontSize: '12px', color: '#718096' }}>
-                    {mapViewMode === 'bubbles'
-                      ? `Displaying ${activeCityClusters.length} cities with scalable density bubbles`
-                      : `Displaying individual pins for current page (${listings.length} properties)`}
+                    {mapViewMode === 'counties'
+                      ? 'Each county is shaded by its number of listings. Click a county to see its listings.'
+                      : mapViewMode === 'bubbles'
+                        ? `Displaying ${activeCityClusters.length} cities with scalable density bubbles`
+                        : `Displaying individual pins for current page (${listings.length} properties)`}
                   </span>
                 </div>
 
                 {/* Map Display Mode Switcher */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <div style={{ display: 'flex', backgroundColor: '#edf2f7', padding: '2px', borderRadius: '6px' }}>
+                    <button
+                      onClick={() => setMapViewMode('counties')}
+                      style={{
+                        padding: '4px 10px', borderRadius: '4px', border: 'none', fontSize: '11px', fontWeight: 700,
+                        backgroundColor: mapViewMode === 'counties' ? '#2b6cb0' : 'transparent',
+                        color: mapViewMode === 'counties' ? '#ffffff' : '#4a5568',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      🗺️ County Map
+                    </button>
                     <button
                       onClick={() => setMapViewMode('bubbles')}
                       style={{
@@ -1409,6 +1437,14 @@ export default function LeadsTab({ backendUrl, role }) {
                 </div>
               </div>
 
+              {mapViewMode === 'counties' ? (
+                <CountyMap
+                  stats={countyMapStats}
+                  collected={countyMapCollected}
+                  selected={selectedCounty !== 'all' ? { state: selectedState, county: selectedCounty } : null}
+                  onSelect={(st, county) => { setSelectedState(st); setSelectedCounty(county); setCurrentPage(1); }}
+                />
+              ) : (
               <div
                 ref={mapContainerRef}
                 style={{
@@ -1417,6 +1453,7 @@ export default function LeadsTab({ backendUrl, role }) {
                   position: 'relative', zIndex: 1, isolation: 'isolate'
                 }}
               />
+              )}
             </div>
 
             {/* Quick Market Breakdown Column */}

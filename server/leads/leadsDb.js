@@ -773,6 +773,7 @@ function computeLeadsAnalytics(leads) {
   const countyMap = {};
   const countyPriceMap = {};
   const countyStatusMap = {};
+  const countyStatsMap = {}; // keyed by state|county (same county name exists in two states, e.g. Frederick)
   const statusMap = { for_sale: 0, under_contract: 0, pending: 0, closed: 0 };
   const realtorMap = {};
   const weeklyMap = {}; // keyed by the Monday (YYYY-MM-DD) of the listing's week
@@ -820,6 +821,12 @@ function computeLeadsAnalytics(leads) {
 
     const st = l.status || 'for_sale';
     statusMap[st] = (statusMap[st] || 0) + 1;
+
+    const csKey = `${l.state || ''}|${county}`;
+    const cs = countyStatsMap[csKey] || (countyStatsMap[csKey] = { state: l.state || '', county, count: 0, for_sale: 0, under_contract: 0, pending: 0, closed: 0, priceSum: 0, priceCount: 0 });
+    cs.count += 1;
+    cs[st] = (cs[st] || 0) + 1;
+    if (l.listPrice && Number(l.listPrice) > 0) { cs.priceSum += Number(l.listPrice); cs.priceCount += 1; }
 
     if (!countyStatusMap[county]) {
       countyStatusMap[county] = { for_sale: 0, under_contract: 0, pending: 0, closed: 0 };
@@ -1001,6 +1008,11 @@ function computeLeadsAnalytics(leads) {
     avgPrice: c.priceCount > 0 ? Math.round(c.totalPrice / c.priceCount) : null,
   })).sort((a, b) => b.count - a.count);
 
+  const countyStats = Object.values(countyStatsMap).map((c) => ({
+    state: c.state, county: c.county, count: c.count, for_sale: c.for_sale, under_contract: c.under_contract,
+    pending: c.pending, closed: c.closed, avgPrice: c.priceCount ? Math.round(c.priceSum / c.priceCount) : null,
+  }));
+
   const stateCounties = {};
   for (const [st, set] of Object.entries(stateCountyMap)) {
     stateCounties[st] = Array.from(set).sort();
@@ -1015,6 +1027,7 @@ function computeLeadsAnalytics(leads) {
     topCounties,
     topCountyAvgPrices,
     countyValue,
+    countyStats,
     topRealtors,
     weeklyTrend,
     monthlyTrend,
