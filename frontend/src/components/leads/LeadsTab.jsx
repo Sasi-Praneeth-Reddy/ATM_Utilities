@@ -945,10 +945,13 @@ export default function LeadsTab({ backendUrl, role }) {
   const kpiPending = fs ? fs.matches.pending : (summary.pendingMatches || 0);
   const visibleMatches = filterAndSortMatches(matches, matchFilters);
   // County map data: real per-county stats when the server sends them, else rebuilt from the city rollup.
+  // Status / price / search filters recolour the map; picking a state or county only frames and highlights it, so the map keeps its context.
+  const mapFilterActive = selectedStatus !== 'all' || priceTier !== 'all' || Boolean(listingSearch.trim());
+  const mapSource = mapFilterActive && filteredAnalytics ? { ...analytics, ...filteredAnalytics } : analytics;
   const countyMapStats = (() => {
-    if (Array.isArray(analytics.countyStats) && analytics.countyStats.length) return analytics.countyStats;
+    if (Array.isArray(mapSource.countyStats) && mapSource.countyStats.length) return mapSource.countyStats;
     const acc = {};
-    for (const c of analytics.cityStats || []) {
+    for (const c of mapSource.cityStats || []) {
       if (!c.county) continue;
       const k = `${c.state}|${c.county}`;
       const a = acc[k] || (acc[k] = { state: c.state, county: c.county, count: 0, for_sale: 0, under_contract: 0, priceSum: 0 });
@@ -1442,6 +1445,8 @@ export default function LeadsTab({ backendUrl, role }) {
                   stats={countyMapStats}
                   collected={countyMapCollected}
                   selected={selectedCounty !== 'all' ? { state: selectedState, county: selectedCounty } : null}
+                  focusState={selectedState}
+                  filtered={mapFilterActive}
                   onSelect={(st, county) => { setSelectedState(st); setSelectedCounty(county); setCurrentPage(1); }}
                 />
               ) : (
