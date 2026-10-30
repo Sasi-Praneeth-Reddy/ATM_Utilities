@@ -189,7 +189,7 @@ export function PriceHistogram({ bins, median }) {
 }
 
 /** Calendar heat map: one square per day, weeks as columns, darker = more homes listed that day. */
-export function ActivityHeatmap({ daily, weeks = 22 }) {
+export function ActivityHeatmap({ daily, weeks = 22, exactFrom = null }) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const end = new Date(today);
@@ -211,9 +211,13 @@ export function ActivityHeatmap({ daily, weeks = 22 }) {
     }
     cols.push(col);
   }
+  // Colour scale tops out at the 90th percentile of active days, so one huge catch-up/backfill day
+  // (e.g. 1,600 listings) cannot flatten every normal day into the same pale blue.
+  const active = cols.flat().filter((c) => !c.future && c.n > 0).map((c) => c.n).sort((a, b) => a - b);
+  const cap = active.length ? Math.max(1, active[Math.min(active.length - 1, Math.floor(active.length * 0.9))]) : 1;
   const shade = (n) => {
     if (!n) return '#edf2f7';
-    const t = n / max;
+    const t = Math.min(1, n / cap);
     return t > 0.75 ? '#1e3a8a' : t > 0.5 ? '#2b6cb0' : t > 0.25 ? '#4299e1' : '#90cdf4';
   };
   const dayNames = ['Mon', '', 'Wed', '', 'Fri', '', 'Sun'];
@@ -232,8 +236,8 @@ export function ActivityHeatmap({ daily, weeks = 22 }) {
                 {showMonth ? MONTH_NAMES[Number(first.slice(5, 7)) - 1] : ''}
               </div>
               {col.map((c) => (
-                <div key={c.key} title={c.future ? '' : `${c.key}: ${c.n.toLocaleString()} listings`}
-                  style={{ height: '15px', borderRadius: '3px', backgroundColor: c.future ? 'transparent' : shade(c.n), border: c.future ? '1px dashed #e2e8f0' : 'none' }} />
+                <div key={c.key} title={c.future ? '' : `${c.key}: ${c.n.toLocaleString()} listings${exactFrom ? (c.key >= exactFrom ? ' (exact day)' : ' (approximate day)') : ''}`}
+                  style={{ height: '15px', borderRadius: '3px', backgroundColor: c.future ? 'transparent' : shade(c.n), border: c.future ? '1px dashed #e2e8f0' : 'none', boxShadow: !c.future && exactFrom && c.key >= exactFrom ? 'inset 0 0 0 2px #f97316' : 'none' }} />
               ))}
             </div>
           );
@@ -242,14 +246,19 @@ export function ActivityHeatmap({ daily, weeks = 22 }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '10px', fontSize: '11px', color: '#718096', justifyContent: 'flex-end' }}>
         Fewer
         {['#edf2f7', '#90cdf4', '#4299e1', '#2b6cb0', '#1e3a8a'].map((c) => (<span key={c} style={{ width: '14px', height: '14px', borderRadius: '3px', backgroundColor: c }} />))}
-        More (busiest day: {max.toLocaleString()})
+        More (colour scale tops out at {cap.toLocaleString()}/day; busiest day {max.toLocaleString()})
       </div>
+      {exactFrom && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px', fontSize: '11px', color: '#718096', justifyContent: 'flex-end' }}>
+          <span style={{ width: '14px', height: '14px', borderRadius: '3px', backgroundColor: '#edf2f7', boxShadow: 'inset 0 0 0 2px #f97316' }} /> Orange outline = exact listing day (from {exactFrom})
+        </div>
+      )}
     </div>
   );
 }
 
 /** Bubble chart: each county placed by listing volume (x) and average price (y); bubble size = volume. */
-export function CountyBubbles({ counties }) {
+export function CountyBubbles({ counties, onSelectCounty = null }) {
   // Side-by-side ranked bars instead of overlapping bubbles: every county gets its own row, so crowded
   // counties (same size, similar price) stay readable. Sorted by listing volume.
   const rows = counties.filter((c) => c.avgPrice > 0 && c.count > 0).slice(0, 14).sort((a, b) => b.count - a.count);
@@ -269,8 +278,9 @@ export function CountyBubbles({ counties }) {
         const pricey = r.avgPrice > medPrice;
         return (
           <div key={r.county} role="row" onMouseEnter={() => setHover(r.county)} onMouseLeave={() => setHover(null)}
-            title={`${r.county}: ${r.count.toLocaleString()} listings, avg ${money(r.avgPrice)}`}
-            style={{ display: 'contents' }}>
+            title={`${r.county}: ${r.count.toLocaleString()} listings, avg ${money(r.avgPrice)}${onSelectCounty ? ' - click to see these listings' : ''}`}
+            onClick={onSelectCounty ? () => onSelectCounty(r.county) : undefined}
+            style={{ display: 'contents', cursor: onSelectCounty ? 'pointer' : 'default' }}>
             <div style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--heading, #1a202c)', opacity: dim ? 0.4 : 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.county.replace(' County', '')}</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', opacity: dim ? 0.4 : 1 }}>
               <div style={{ height: '14px', width: `${Math.max(2, (r.count / maxCount) * 100)}%`, maxWidth: 'calc(100% - 52px)', background: '#3182ce', borderRadius: '4px' }} />
