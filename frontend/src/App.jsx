@@ -5,6 +5,7 @@ import { useSchedulerData } from './hooks/useSchedulerData';
 import { useUsers } from './hooks/useUsers';
 import { getConflicts, conflictIdsFrom, getPlaceholderDuplicates, roleLabels } from './utils/jobs';
 import { todayStr } from './utils/dates';
+import { readRoute, writeRoute } from './utils/route';
 import Header from './components/Header';
 import Nav from './components/Nav';
 import Sidebar from './components/shell/Sidebar';
@@ -113,12 +114,41 @@ export default function App() {
   // can still uncheck it for a given printout same as before.
   const [includeTransitPrint, setIncludeTransitPrint] = useState(true);
 
-  // Land on that role's default tab once we know who's logged in (or right after logging in).
-  useEffect(() => {
-    if (!role) return;
+  // Land on the page named in the URL (so a refresh keeps you where you were), else on that role's
+  // default tab, once we know who's logged in (or right after logging in).
+  function applyRoute(currentRole) {
+    const { tab } = readRoute();
+    if (tab && tab.startsWith('soon-') && currentRole === 'admin') {
+      const mod = MODULES.find((m) => m.soon && `soon-${m.id}` === tab);
+      if (mod) { setSoonModule(mod); return; }
+    }
+    if (tab && moduleOfTab(tab, currentRole)) { setSoonModule(null); setActiveTab(tab); return; }
     setSoonModule(null);
-    setActiveTab(role === 'crew' ? 'crew' : 'board');
+    setActiveTab(currentRole === 'crew' ? 'crew' : 'board');
+  }
+  // routeReady: the address bar is only rewritten AFTER the URL has been read, otherwise the default
+  // tab would overwrite "#/leads/matches" before we looked at it.
+  const [routeReady, setRouteReady] = useState(false);
+  useEffect(() => {
+    if (!role) { setRouteReady(false); return; }
+    applyRoute(role);
+    setRouteReady(true);
   }, [role]);
+
+  // Browser Back/Forward between pages.
+  useEffect(() => {
+    if (!role) return undefined;
+    const onNav = () => applyRoute(role);
+    window.addEventListener('popstate', onNav);
+    window.addEventListener('hashchange', onNav);
+    return () => { window.removeEventListener('popstate', onNav); window.removeEventListener('hashchange', onNav); };
+  }, [role]);
+
+  // Keep the address bar in step with the page being shown.
+  useEffect(() => {
+    if (!role || !routeReady) return;
+    writeRoute(soonModule ? `soon-${soonModule.id}` : activeTab);
+  }, [role, routeReady, activeTab, soonModule]);
 
   // Keep the crew truck selector pointed at a real truck once data loads.
   useEffect(() => {

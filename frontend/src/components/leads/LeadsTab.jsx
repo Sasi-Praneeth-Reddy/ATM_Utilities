@@ -11,6 +11,7 @@ import {
 import OutreachModal from './OutreachModal';
 import LegacyUploadModal from './LegacyUploadModal';
 import LeadsSheet from './LeadsSheet';
+import { readRoute, writeRoute } from '../../utils/route';
 import { Card, StatusDonut, PriceHistogram, ActivityHeatmap, CountyBubbles, MonthlyPanel, monthLabel } from './LeadsCharts';
 
 // Daily uploads switched to exact one-day portal files on this date (see Storage-Tracker-Server collectors/portal_exporter.py).
@@ -263,7 +264,11 @@ export default function LeadsTab({ backendUrl, role }) {
   // Importing legacy customers and sweeping for matches touch lots of data, so the server only allows admins.
   const isAdmin = role === 'admin';
   // Navigation Sub-tab: 'explorer' | 'matches' | 'analytics' | 'realtors'
-  const [activeSubTab, setActiveSubTab] = useState('explorer');
+  const [activeSubTab, setActiveSubTab] = useState(() => {
+    const r = readRoute();
+    return r.tab === 'leads' && ['explorer', 'matches', 'analytics', 'realtors'].includes(r.sub) ? r.sub : 'explorer';
+  });
+  useEffect(() => { writeRoute('leads', activeSubTab); }, [activeSubTab]);
 
   // Map Display Mode: 'bubbles' (Scalable City Density Circles) | 'pins' (Property Pins)
   const [mapViewMode, setMapViewMode] = useState('bubbles');

@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { apiCall } from '../../api';
+import { readRoute, writeRoute } from '../../utils/route';
 import { Card, Empty, HBars, RangeBars, Histogram, Donut, RankList, Stat, Delta, money, downloadCsv } from './MarketCharts';
 
 // Brand colours (kept from the original dashboard)
@@ -96,7 +97,11 @@ export default function StorageTab({ backendUrl, role }) {
   const [maxRate, setMaxRate] = useState('');
   const [onlyPriced, setOnlyPriced] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [viewMode, setViewMode] = useState('dashboard'); // 'dashboard' | 'table'
+  const [viewMode, setViewMode] = useState(() => {
+    const r = readRoute();
+    return r.tab === 'storage' && r.sub === 'table' ? 'table' : 'dashboard';
+  }); // 'dashboard' | 'table'
+  useEffect(() => { writeRoute('storage', viewMode === 'table' ? 'table' : null); }, [viewMode]);
   const [mapColor, setMapColor] = useState('brand'); // 'brand' | 'price'
   const [sort, setSort] = useState({ key: 'web', dir: 'asc' });
   const [visible, setVisible] = useState(100);
