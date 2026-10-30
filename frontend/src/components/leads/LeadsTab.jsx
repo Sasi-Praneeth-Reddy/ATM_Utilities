@@ -212,6 +212,53 @@ function resolveLeadCoords(lead) {
 }
 
 
+// ---- Sub-filters for the "Matched customers" table (all applied in the browser: the list is a few hundred rows) ----
+const EMPTY_MATCH_FILTERS = {
+  search: '', listing: 'all', moveType: 'all', confidence: 'all', source: 'all',
+  detected: 'all', minPrice: '', maxPrice: '', reachable: false, sort: 'default',
+};
+function matchHasActiveFilters(f) {
+  return Object.keys(EMPTY_MATCH_FILTERS).some((k) => k !== 'sort' && f[k] !== EMPTY_MATCH_FILTERS[k]);
+}
+function filterAndSortMatches(matches, f) {
+  const q = f.search.trim().toLowerCase();
+  const min = f.minPrice === '' ? null : Number(f.minPrice) * 1000;
+  const max = f.maxPrice === '' ? null : Number(f.maxPrice) * 1000;
+  const sinceDays = f.detected === 'all' ? null : Number(f.detected);
+  const since = sinceDays ? Date.now() - sinceDays * 86400000 : null;
+  const out = matches.filter((m) => {
+    if (q) {
+      const hay = `${m.customerName || ''} ${m.matchedAddress || ''} ${m.customerEmail || ''} ${m.customerPhone || ''} ${m.realtorName || ''}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    if (f.listing !== 'all' && (m.listingStatus || 'for_sale') !== f.listing) return false;
+    if (f.moveType !== 'all' && (m.matchedType || '') !== f.moveType) return false;
+    if (f.source !== 'all' && (m.sourceType || '') !== f.source) return false;
+    const c = Number(m.confidence || 0);
+    if (f.confidence === 'exact' && c < 100) return false;
+    if (f.confidence === 'high' && (c < 80 || c >= 100)) return false;
+    if (f.confidence === 'low' && c >= 80) return false;
+    const price = Number(m.listingPrice || 0);
+    if (min !== null && price < min) return false;
+    if (max !== null && (price === 0 || price > max)) return false;
+    if (f.reachable && !(m.customerEmail || m.customerPhone)) return false;
+    if (since) {
+      const t = Date.parse(m.detectedAt || m.listedDate || '') || 0;
+      if (t < since) return false;
+    }
+    return true;
+  });
+  const by = {
+    newest: (a, b) => String(b.detectedAt || b.listedDate || '').localeCompare(String(a.detectedAt || a.listedDate || '')),
+    confidence: (a, b) => Number(b.confidence || 0) - Number(a.confidence || 0),
+    price_high: (a, b) => Number(b.listingPrice || 0) - Number(a.listingPrice || 0),
+    price_low: (a, b) => (Number(a.listingPrice || 0) || Infinity) - (Number(b.listingPrice || 0) || Infinity),
+    name: (a, b) => String(a.customerName || '').localeCompare(String(b.customerName || '')),
+  }[f.sort];
+  // "Pending review" first only keeps its meaning for the default sort; an explicit sort is honoured as chosen.
+  return by ? [...out].sort(by) : out;
+}
+
 export default function LeadsTab({ backendUrl, role }) {
   // Importing legacy customers and sweeping for matches touch lots of data, so the server only allows admins.
   const isAdmin = role === 'admin';
@@ -288,6 +335,7 @@ export default function LeadsTab({ backendUrl, role }) {
   // Matches State
   const [matches, setMatches] = useState([]);
   const [matchStatusFilter, setMatchStatusFilter] = useState('all');
+  const [matchFilters, setMatchFilters] = useState(EMPTY_MATCH_FILTERS);
   const [selectedMatchForOutreach, setSelectedMatchForOutreach] = useState(null);
 
   // Listings State
@@ -889,6 +937,8 @@ export default function LeadsTab({ backendUrl, role }) {
   const kpiMedian = fs ? fs.medianPrice : (analytics.medianListPrice || 725000);
   const kpiMatches = fs ? fs.matches.total : (summary.totalMatches || 0);
   const kpiPending = fs ? fs.matches.pending : (summary.pendingMatches || 0);
+  const visibleMatches = filterAndSortMatches(matches, matchFilters);
+  const matchListingStatuses = [...new Set(matches.map((m) => m.listingStatus || 'for_sale'))].sort();
 
   // Pagination Controller Component
   const renderPaginationControls = () => (
@@ -1645,8 +1695,94 @@ export default function LeadsTab({ backendUrl, role }) {
             </div>
 
             <div style={{ fontSize: '13px', color: '#718096' }}>
-              Showing {matches.length} matched customers
+              Showing {visibleMatches.length}{visibleMatches.length !== matches.length ? ` of ${matches.length}` : ''} matched customers
             </div>
+          </div>
+
+          {/* Sub-filters */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px 14px', alignItems: 'flex-end', marginBottom: '14px', padding: '10px 12px', border: '1px solid var(--border-color, #e2e8f0)', borderRadius: '8px', backgroundColor: 'var(--bg-card, #ffffff)' }}>
+            {(() => {
+              const lab = { fontSize: '10.5px', fontWeight: 700, color: '#718096', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: '3px', display: 'block' };
+              const ctl = { padding: '6px 8px', borderRadius: '6px', border: '1px solid #cbd5e0', fontSize: '12px', fontWeight: 500, backgroundColor: 'var(--bg-card, #ffffff)', color: 'inherit' };
+              const set = (k, v) => setMatchFilters((f) => ({ ...f, [k]: v }));
+              const prettyStatus = (v) => String(v).replace(/_/g, ' ');
+              return (
+                <>
+                  <label style={{ flex: '1 1 200px', minWidth: '180px' }}>
+                    <span style={lab}>Search</span>
+                    <input type="text" value={matchFilters.search} onChange={(e) => set('search', e.target.value)} placeholder="Customer, address, email, phone, agent" style={{ ...ctl, width: '100%', boxSizing: 'border-box' }} />
+                  </label>
+                  <label>
+                    <span style={lab}>Listing status</span>
+                    <select value={matchFilters.listing} onChange={(e) => set('listing', e.target.value)} style={ctl}>
+                      <option value="all">All</option>
+                      {matchListingStatuses.map((v) => <option key={v} value={v}>{prettyStatus(v)}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    <span style={lab}>Move type</span>
+                    <select value={matchFilters.moveType} onChange={(e) => set('moveType', e.target.value)} style={ctl}>
+                      <option value="all">All</option>
+                      <option value="moved_from">Moved FROM this home</option>
+                      <option value="moved_to">Moved INTO this home</option>
+                      <option value="legacy_record">Old customer record</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span style={lab}>Match quality</span>
+                    <select value={matchFilters.confidence} onChange={(e) => set('confidence', e.target.value)} style={ctl}>
+                      <option value="all">Any</option>
+                      <option value="exact">Exact (100%)</option>
+                      <option value="high">High (80-99%)</option>
+                      <option value="low">Needs checking (&lt;80%)</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span style={lab}>Source</span>
+                    <select value={matchFilters.source} onChange={(e) => set('source', e.target.value)} style={ctl}>
+                      <option value="all">All</option>
+                      <option value="smartmoving_job">Booked job</option>
+                      <option value="legacy_customer">Imported customer</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span style={lab}>Found</span>
+                    <select value={matchFilters.detected} onChange={(e) => set('detected', e.target.value)} style={ctl}>
+                      <option value="all">Any time</option>
+                      <option value="7">Last 7 days</option>
+                      <option value="30">Last 30 days</option>
+                      <option value="90">Last 90 days</option>
+                    </select>
+                  </label>
+                  <div>
+                    <span style={lab}>Price ($ thousands)</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <input type="number" min="0" value={matchFilters.minPrice} onChange={(e) => set('minPrice', e.target.value)} placeholder="Min" style={{ ...ctl, width: '70px' }} />
+                      <span style={{ color: '#a0aec0' }}>-</span>
+                      <input type="number" min="0" value={matchFilters.maxPrice} onChange={(e) => set('maxPrice', e.target.value)} placeholder="Max" style={{ ...ctl, width: '70px' }} />
+                    </div>
+                  </div>
+                  <label>
+                    <span style={lab}>Sort by</span>
+                    <select value={matchFilters.sort} onChange={(e) => set('sort', e.target.value)} style={ctl}>
+                      <option value="default">Pending first (default)</option>
+                      <option value="newest">Newest first</option>
+                      <option value="confidence">Best match first</option>
+                      <option value="price_high">Price: high to low</option>
+                      <option value="price_low">Price: low to high</option>
+                      <option value="name">Customer name A-Z</option>
+                    </select>
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 600, color: '#4a5568', paddingBottom: '7px', cursor: 'pointer' }}>
+                    <input type="checkbox" checked={matchFilters.reachable} onChange={(e) => set('reachable', e.target.checked)} />
+                    Has email or phone
+                  </label>
+                  {matchHasActiveFilters(matchFilters) && (
+                    <button type="button" onClick={() => setMatchFilters(EMPTY_MATCH_FILTERS)} style={{ padding: '6px 10px', borderRadius: '6px', border: '1px solid #90cdf4', backgroundColor: '#ebf8ff', color: '#2b6cb0', fontSize: '12px', fontWeight: 600, cursor: 'pointer', marginBottom: '1px' }}>Clear filters</button>
+                  )}
+                </>
+              );
+            })()}
           </div>
 
           <div style={{
@@ -1664,14 +1800,16 @@ export default function LeadsTab({ backendUrl, role }) {
                 </tr>
               </thead>
               <tbody>
-                {matches.length === 0 ? (
+                {visibleMatches.length === 0 ? (
                   <tr>
                     <td colSpan={5} style={{ padding: '40px 16px', textAlign: 'center', color: '#718096' }}>
-                      No matches found in this view. Click <strong>"Sweep Customer Matches"</strong> or import more past customer records to discover leads.
+                      {matches.length > 0
+                        ? <>No matches fit these filters. <button type="button" onClick={() => setMatchFilters(EMPTY_MATCH_FILTERS)} style={{ background: 'none', border: 'none', color: '#2b6cb0', textDecoration: 'underline', cursor: 'pointer', fontSize: 'inherit', padding: 0 }}>Clear filters</button></>
+                        : <>No matches found in this view. Click <strong>"Sweep Customer Matches"</strong> or import more past customer records to discover leads.</>}
                     </td>
                   </tr>
                 ) : (
-                  matches.map((m) => {
+                  visibleMatches.map((m) => {
                     const price = m.listingPrice ? `$${Number(m.listingPrice).toLocaleString()}` : 'Price unlisted';
                     const isPending = m.status === 'pending';
                     const isContacted = m.status === 'contacted';
