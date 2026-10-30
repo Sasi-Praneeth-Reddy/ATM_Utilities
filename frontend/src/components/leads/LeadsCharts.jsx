@@ -250,36 +250,40 @@ export function ActivityHeatmap({ daily, weeks = 22 }) {
 
 /** Bubble chart: each county placed by listing volume (x) and average price (y); bubble size = volume. */
 export function CountyBubbles({ counties }) {
-  const rows = counties.filter((c) => c.avgPrice > 0 && c.count > 0).slice(0, 14);
+  // Side-by-side ranked bars instead of overlapping bubbles: every county gets its own row, so crowded
+  // counties (same size, similar price) stay readable. Sorted by listing volume.
+  const rows = counties.filter((c) => c.avgPrice > 0 && c.count > 0).slice(0, 14).sort((a, b) => b.count - a.count);
   const [hover, setHover] = useState(null);
   if (rows.length < 2) return <div style={{ fontSize: '12px', color: '#718096' }}>Not enough county data yet.</div>;
-  const W = 720, H = 300, L = 62, B = 34, T = 14, Rm = 24;
-  const xMax = Math.max(...rows.map((r) => r.count)) * 1.12;
-  const yMin = Math.min(...rows.map((r) => r.avgPrice)) * 0.85;
-  const yMax = Math.max(...rows.map((r) => r.avgPrice)) * 1.08;
-  const x = (v) => L + (v / xMax) * (W - L - Rm);
-  const y = (v) => T + (1 - (v - yMin) / (yMax - yMin)) * (H - T - B);
-  const rad = (n) => 7 + 15 * Math.sqrt(n / Math.max(...rows.map((r) => r.count)));
+  const maxCount = Math.max(...rows.map((r) => r.count));
+  const maxPrice = Math.max(...rows.map((r) => r.avgPrice));
+  const medPrice = [...rows].map((r) => r.avgPrice).sort((a, b) => a - b)[Math.floor(rows.length / 2)];
+  const head = { fontSize: '11px', fontWeight: 700, color: 'var(--muted, #718096)', textTransform: 'uppercase', letterSpacing: '.04em' };
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', maxHeight: '360px' }} role="img" aria-label="Counties by volume and average price">
-      {[0, 0.25, 0.5, 0.75, 1].map((t) => {
-        const v = yMin + (yMax - yMin) * t;
-        return (<g key={t}><line x1={L} x2={W - Rm} y1={y(v)} y2={y(v)} stroke="#e2e8f0" strokeDasharray="3 3" /><text x={L - 8} y={y(v) + 4} textAnchor="end" fontSize="10" fill="#718096">{money(v)}</text></g>);
+    <div role="table" aria-label="Counties by listing volume and average price" style={{ display: 'grid', gridTemplateColumns: 'minmax(92px, 130px) minmax(0, 1fr) minmax(0, 1fr)', columnGap: '14px', rowGap: '6px', alignItems: 'center' }}>
+      <div style={head}>County</div>
+      <div style={head}>Listings</div>
+      <div style={head}>Average price</div>
+      {rows.map((r) => {
+        const dim = hover && hover !== r.county;
+        const pricey = r.avgPrice > medPrice;
+        return (
+          <div key={r.county} role="row" onMouseEnter={() => setHover(r.county)} onMouseLeave={() => setHover(null)}
+            title={`${r.county}: ${r.count.toLocaleString()} listings, avg ${money(r.avgPrice)}`}
+            style={{ display: 'contents' }}>
+            <div style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--heading, #1a202c)', opacity: dim ? 0.4 : 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.county.replace(' County', '')}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', opacity: dim ? 0.4 : 1 }}>
+              <div style={{ height: '14px', width: `${Math.max(2, (r.count / maxCount) * 100)}%`, maxWidth: 'calc(100% - 52px)', background: '#3182ce', borderRadius: '4px' }} />
+              <span style={{ fontSize: '12px', color: 'var(--text, #2d3748)', fontVariantNumeric: 'tabular-nums' }}>{r.count.toLocaleString()}</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', opacity: dim ? 0.4 : 1 }}>
+              <div style={{ height: '14px', width: `${Math.max(2, (r.avgPrice / maxPrice) * 100)}%`, maxWidth: 'calc(100% - 56px)', background: pricey ? '#f97316' : '#f6ad79', borderRadius: '4px' }} />
+              <span style={{ fontSize: '12px', color: 'var(--text, #2d3748)', fontVariantNumeric: 'tabular-nums' }}>{money(r.avgPrice)}</span>
+            </div>
+          </div>
+        );
       })}
-      {[0, 0.25, 0.5, 0.75, 1].map((t) => (<text key={t} x={x(xMax * t / 1.12 * 1.12)} y={H - 14} textAnchor="middle" fontSize="10" fill="#718096">{Math.round(xMax * t).toLocaleString()}</text>))}
-      <text x={(L + W - Rm) / 2} y={H - 1} textAnchor="middle" fontSize="11" fill="#4a5568">Listings (volume) →</text>
-      <text transform={`rotate(-90 12 ${H / 2})`} x="12" y={H / 2} textAnchor="middle" fontSize="11" fill="#4a5568">Average price →</text>
-      {rows.map((r, i) => (
-        <g key={r.county} onMouseEnter={() => setHover(r.county)} onMouseLeave={() => setHover(null)}>
-          <circle cx={x(r.count)} cy={y(r.avgPrice)} r={rad(r.count)} fill={i % 2 ? '#f97316' : '#3182ce'} fillOpacity={hover && hover !== r.county ? 0.25 : 0.6} stroke="#fff" strokeWidth="1.5">
-            <title>{`${r.county}: ${r.count.toLocaleString()} listings, avg ${money(r.avgPrice)}`}</title>
-          </circle>
-          <text x={x(r.count)} y={i % 2 ? y(r.avgPrice) + rad(r.count) + 12 : y(r.avgPrice) - rad(r.count) - 4} textAnchor="middle" fontSize="10.5" fontWeight="700" fill="#1a202c" stroke="#fff" strokeWidth="3" paintOrder="stroke">
-            {r.county.replace(' County', '')}
-          </text>
-        </g>
-      ))}
-    </svg>
+    </div>
   );
 }
 

@@ -1607,7 +1607,7 @@ export default function LeadsTab({ backendUrl, role }) {
             selectedMonth={selectedMonth}
             onSelectMonth={(m) => { setSelectedMonth(m); setActiveSubTab('explorer'); }}
           />
-          <Card title="🫧 Where volume meets value" subtitle="Each bubble is a county: further right means more listings, higher up means pricier homes. Hover for details.">
+          <Card title="🏘️ Volume and price by county" subtitle="Counties ranked by number of listings (blue), next to their average listing price (orange; darker = above the typical county). Hover a row to focus it.">
             <CountyBubbles counties={vis.countyValue || vis.topCountyAvgPrices || []} />
           </Card>
         </div>
