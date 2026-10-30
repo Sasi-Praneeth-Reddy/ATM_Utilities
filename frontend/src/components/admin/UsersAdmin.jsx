@@ -212,7 +212,7 @@ export default function UsersAdmin({
   return (
     <div>
       <div className="toolbar">
-        <h2 className="section-title">Users — who can access the scheduler</h2>
+        <h2 className="section-title">Users — who can access ATM Hub</h2>
         <div className="list-filter">
           <input
             type="text"

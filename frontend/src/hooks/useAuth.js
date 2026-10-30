@@ -40,7 +40,7 @@ export function useAuth(backendUrl) {
       const where = backendUrl || 'this site';
       const unreachableMsg = backendUrl
         ? `Can't reach the backend at ${where}. Is it running?`
-        : "Can't connect to the scheduler server. Check your internet connection and try again.";
+        : "Can't connect to the ATM Hub server. Check your internet connection and try again.";
       setConnectionError(err.status === undefined ? unreachableMsg : '');
       return false;
     }

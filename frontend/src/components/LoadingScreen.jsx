@@ -7,7 +7,7 @@
  */
 /* `inline` (2026-09-30): transparent background, sized to a section instead of the full viewport —
  * used inside a tab (e.g. Job Assignments) while its content is getting ready. */
-export default function LoadingScreen({ message = 'Loading the scheduler', inline = false }) {
+export default function LoadingScreen({ message = 'Loading ATM Hub', inline = false }) {
   return (
     <div className={`loading-screen${inline ? ' loading-screen--inline' : ''}`} role="status" aria-live="polite">
       <div className="loading-scene" aria-hidden="true">

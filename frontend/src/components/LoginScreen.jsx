@@ -72,7 +72,7 @@ export default function LoginScreen({ onLogin, onForgotPassword, onResetPassword
   }
 
   const titles = {
-    login: ['Welcome back', 'Sign in to the scheduler to manage jobs, crews and leads.'],
+    login: ['Welcome back', 'Sign in to ATM Hub to manage jobs, crews, storage and leads.'],
     forgot: ['Reset your password', 'We will email you a 6-digit code to set a password.'],
     reset: ['Enter your code', 'Type the code from your email and choose a new password.'],
   };
