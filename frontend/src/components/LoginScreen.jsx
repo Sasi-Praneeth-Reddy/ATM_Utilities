@@ -1,21 +1,8 @@
 import { useState } from 'react';
-
-const cardStyle = { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 32, width: 360, boxShadow: '0 4px 20px rgba(20,30,60,.08)' };
-const fieldStyle = { width: '100%', boxSizing: 'border-box', marginBottom: 12 };
-const errorBoxStyle = { background: 'var(--tint-red-bg)', border: '1px solid var(--tint-red-border)', color: 'var(--tint-red-text)', padding: '8px 10px', borderRadius: 8, fontSize: 12, marginBottom: 14 };
-const infoBoxStyle = { background: 'var(--tint-blue-bg)', border: '1px solid var(--tint-blue-border)', color: 'var(--tint-blue-text)', padding: '8px 10px', borderRadius: 8, fontSize: 12, marginBottom: 14 };
-const linkStyle = { background: 'none', border: 'none', padding: 0, color: 'var(--blue)', fontSize: 12, cursor: 'pointer', textDecoration: 'underline' };
+import logo from '../assets/atm-logo.png';
 
 function Logo() {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 22 }}>
-      <div className="logo" style={{ background: 'var(--orange)', width: 34, height: 34, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 15, color: '#fff' }}>ATM</div>
-      <div>
-        <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--heading)' }}>Around Town Movers</div>
-        <div style={{ fontSize: 11, color: 'var(--muted)' }}>Scheduler login</div>
-      </div>
-    </div>
-  );
+  return <img className="login-logo" src={logo} alt="Around Town Movers - Moving & Storage" />;
 }
 
 /**
@@ -34,6 +21,7 @@ export default function LoginScreen({ onLogin, onForgotPassword, onResetPassword
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   const [busy, setBusy] = useState(false);
+  const [showPw, setShowPw] = useState(false);
 
   function switchMode(next) {
     setMode(next);
@@ -83,59 +71,83 @@ export default function LoginScreen({ onLogin, onForgotPassword, onResetPassword
     }
   }
 
-  return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)' }}>
-      <div style={cardStyle}>
-        <Logo />
+  const titles = {
+    login: ['Welcome back', 'Sign in to the scheduler to manage jobs, crews and leads.'],
+    forgot: ['Reset your password', 'We will email you a 6-digit code to set a password.'],
+    reset: ['Enter your code', 'Type the code from your email and choose a new password.'],
+  };
 
-        {connectionError && <div style={errorBoxStyle}>{connectionError}</div>}
-        {error && <div style={errorBoxStyle}>{error}</div>}
-        {info && <div style={infoBoxStyle}>{info}</div>}
+  return (
+    <div className="login-page">
+      <aside className="login-side" aria-hidden="true">
+        <div className="login-side-inner">
+          <div className="login-side-badge">Around Town Movers</div>
+          <h2>Every move,<br />perfectly scheduled.</h2>
+          <p>Jobs, trucks, crews, storage and leads in one place, built for the way our team works.</p>
+          <ul>
+            <li>Live day board for every truck</li>
+            <li>Leads that flag past customers</li>
+            <li>Storage market tracking</li>
+          </ul>
+        </div>
+      </aside>
+
+      <main className="login-main">
+      <div className="login-card">
+        <Logo />
+        <h1 className="login-title">{titles[mode][0]}</h1>
+        <p className="login-sub">{titles[mode][1]}</p>
+
+        {connectionError && <div className="login-msg error">{connectionError}</div>}
+        {error && <div className="login-msg error">{error}</div>}
+        {info && <div className="login-msg info">{info}</div>}
 
         {mode === 'login' && (
           <form onSubmit={handleLogin}>
-            <input type="email" style={fieldStyle} placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
-            <input type="password" style={fieldStyle} placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-            <button type="submit" className="btn" style={{ width: '100%', boxSizing: 'border-box' }} disabled={busy}>
+            <label className="login-label" htmlFor="login-email">Email</label>
+            <input id="login-email" type="email" className="login-field" placeholder="you@aroundtownmovers.com" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus autoComplete="username" />
+            <label className="login-label" htmlFor="login-password">Password</label>
+            <div className="login-pw">
+              <input id="login-password" type={showPw ? 'text' : 'password'} className="login-field" placeholder="Your password" value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="current-password" />
+              <button type="button" className="login-pw-toggle" onClick={() => setShowPw((v) => !v)} aria-label={showPw ? 'Hide password' : 'Show password'}>{showPw ? 'Hide' : 'Show'}</button>
+            </div>
+            <button type="submit" className="login-btn" disabled={busy}>
               {busy ? 'Signing in…' : 'Sign in'}
             </button>
-            <div style={{ marginTop: 14, textAlign: 'center' }}>
-              <button type="button" style={linkStyle} onClick={() => switchMode('forgot')}>Forgot password, or first time signing in?</button>
+            <div className="login-links center">
+              <button type="button" className="login-link" onClick={() => switchMode('forgot')}>Forgot password, or first time signing in?</button>
             </div>
           </form>
         )}
 
         {mode === 'forgot' && (
           <form onSubmit={handleForgot}>
-            <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
-              Enter your email and we'll send a 6-digit code you can use to set a password.
-            </div>
-            <input type="email" style={fieldStyle} placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
-            <button type="submit" className="btn" style={{ width: '100%', boxSizing: 'border-box' }} disabled={busy}>
+            <input type="email" className="login-field" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
+            <button type="submit" className="login-btn" disabled={busy}>
               {busy ? 'Sending…' : 'Send code'}
             </button>
-            <div style={{ marginTop: 14, display: 'flex', justifyContent: 'space-between' }}>
-              <button type="button" style={linkStyle} onClick={() => switchMode('login')}>Back to sign in</button>
-              <button type="button" style={linkStyle} onClick={() => switchMode('reset')}>I already have a code</button>
+            <div className="login-links">
+              <button type="button" className="login-link" onClick={() => switchMode('login')}>Back to sign in</button>
+              <button type="button" className="login-link" onClick={() => switchMode('reset')}>I already have a code</button>
             </div>
           </form>
         )}
 
         {mode === 'reset' && (
           <form onSubmit={handleReset}>
-            <input type="email" style={fieldStyle} placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus={!email} />
+            <input type="email" className="login-field" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus={!email} />
             <input
-              type="text" inputMode="numeric" style={fieldStyle} placeholder="6-digit code" value={otp}
+              type="text" inputMode="numeric" className="login-field" placeholder="6-digit code" value={otp}
               onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))} required
               autoFocus={Boolean(email)}
             />
-            <input type="password" style={fieldStyle} placeholder="New password (8+ characters)" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required minLength={8} />
-            <button type="submit" className="btn" style={{ width: '100%', boxSizing: 'border-box' }} disabled={busy}>
+            <input type="password" className="login-field" placeholder="New password (8+ characters)" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required minLength={8} />
+            <button type="submit" className="login-btn" disabled={busy}>
               {busy ? 'Setting password…' : 'Set password & sign in'}
             </button>
-            <div style={{ marginTop: 14, display: 'flex', justifyContent: 'space-between' }}>
-              <button type="button" style={linkStyle} onClick={() => switchMode('login')}>Back to sign in</button>
-              <button type="button" style={linkStyle} onClick={() => switchMode('forgot')}>Resend code</button>
+            <div className="login-links">
+              <button type="button" className="login-link" onClick={() => switchMode('login')}>Back to sign in</button>
+              <button type="button" className="login-link" onClick={() => switchMode('forgot')}>Resend code</button>
             </div>
           </form>
         )}
@@ -160,6 +172,7 @@ export default function LoginScreen({ onLogin, onForgotPassword, onResetPassword
           </div>
         )}
       </div>
+      </main>
     </div>
   );
 }

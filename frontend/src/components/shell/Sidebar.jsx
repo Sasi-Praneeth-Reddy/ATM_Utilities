@@ -1,4 +1,5 @@
 import { visibleModules } from './modules';
+import logo from '../../assets/atm-logo.png';
 
 const P = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.75, strokeLinecap: 'round', strokeLinejoin: 'round' };
 
@@ -33,10 +34,7 @@ export default function Sidebar({ role, activeModuleId, onSelectModule, collapse
       <aside className={`shell-sidebar${collapsed ? ' collapsed' : ''}`} aria-label="Modules">
         <div className="shell-brand">
           <div className="shell-logo">ATM</div>
-          <div className="shell-brand-text">
-            <div className="shell-brand-name">Around Town Movers</div>
-            <div className="shell-brand-sub">Operations</div>
-          </div>
+          <img className="shell-logo-img" src={logo} alt="Around Town Movers" />
         </div>
         <div className="shell-modules" role="navigation" aria-label="Main modules">
           {mods.map((m) => {
