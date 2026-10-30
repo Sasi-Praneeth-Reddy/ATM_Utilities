@@ -12,7 +12,7 @@ import OutreachModal from './OutreachModal';
 import LegacyUploadModal from './LegacyUploadModal';
 import LeadsSheet from './LeadsSheet';
 import { readRoute, writeRoute } from '../../utils/route';
-import { Card, StatusDonut, PriceHistogram, ActivityHeatmap, CountyBubbles, MonthlyPanel, monthLabel } from './LeadsCharts';
+import { Card, StatusDonut, PriceHistogram, ActivityHeatmap, CountyBubbles, MonthlyPanel, monthLabel, CountUp } from './LeadsCharts';
 
 // Daily uploads switched to exact one-day portal files on this date (see Storage-Tracker-Server collectors/portal_exporter.py).
 const EXACT_DATES_FROM_LABEL = 'Oct 30, 2026';
@@ -1114,7 +1114,7 @@ export default function LeadsTab({ backendUrl, role }) {
             Total Pre-Mover Leads
           </div>
           <div style={{ fontSize: '28px', fontWeight: 700, color: '#2b6cb0', marginTop: '4px' }}>
-            {kpiTotal.toLocaleString()}
+            <CountUp value={kpiTotal} />
           </div>
           <div style={{ fontSize: '12px', color: '#718096', marginTop: '2px' }}>
             {activeCount.toLocaleString()} active for sale
@@ -1130,7 +1130,7 @@ export default function LeadsTab({ backendUrl, role }) {
             Under Contract (Hot Leads)
           </div>
           <div style={{ fontSize: '28px', fontWeight: 700, color: '#f97316', marginTop: '4px' }}>
-            {underContractCount.toLocaleString()}
+            <CountUp value={underContractCount} />
           </div>
           <div style={{ fontSize: '12px', color: '#718096', marginTop: '2px' }}>
             Homes under contract moving soon
@@ -1162,7 +1162,7 @@ export default function LeadsTab({ backendUrl, role }) {
             VIP Customer Matches
           </div>
           <div style={{ fontSize: '28px', fontWeight: 700, color: kpiPending > 0 ? '#e53e3e' : '#38a169', marginTop: '4px' }}>
-            {kpiMatches}
+            <CountUp value={kpiMatches} />
           </div>
           <div style={{ fontSize: '12px', color: kpiPending > 0 ? '#e53e3e' : '#718096', marginTop: '2px' }}>
             {kpiPending > 0 ? `⚠️ ${kpiPending} pending review!` : 'Past customers detected'}

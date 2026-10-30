@@ -1,6 +1,6 @@
 // Visualizations for the Leads "Market Visualizations" tab. Plain HTML/SVG (no chart library) so they
 // stay light and follow the app's colours.
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 // ---- Listing-volume charts (Market Visualizations tab) ----
 export const STATUS_STACK = [
@@ -31,6 +31,25 @@ function niceMax(v) {
 
 /** Stacked column chart. `rows`: [{ key, label, sub?, total, for_sale, ... }]; click a column to
     drill in (onSelect(key)). Plain HTML/CSS so it stays responsive without a chart library. */
+/** Number that counts up from 0 when it first appears (respects reduced-motion). */
+export function CountUp({ value, duration = 800 }) {
+  const target = Number(value) || 0;
+  const [shown, setShown] = useState(0);
+  useEffect(() => {
+    if (typeof window === 'undefined' || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) { setShown(target); return undefined; }
+    let raf; const t0 = performance.now(); const from = 0;
+    const tick = (t) => {
+      const p = Math.min(1, (t - t0) / duration);
+      const eased = 1 - Math.pow(1 - p, 3);
+      setShown(Math.round(from + (target - from) * eased));
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, duration]);
+  return <>{shown.toLocaleString()}</>;
+}
+
 export function StackedColumns({ rows, selectedKey, onSelect, height = 200 }) {
   const max = niceMax(Math.max(...rows.map((r) => r.total), 1));
   const ticks = [1, 0.75, 0.5, 0.25, 0];
@@ -69,7 +88,7 @@ export function StackedColumns({ rows, selectedKey, onSelect, height = 200 }) {
                 <span style={{ fontSize: '10px', fontWeight: 700, color: '#2d3748', textAlign: 'center', marginBottom: '2px', whiteSpace: 'nowrap' }}>
                   {r.total.toLocaleString()}
                 </span>
-                <div style={{ display: 'flex', flexDirection: 'column-reverse', height: `${(r.total / max) * 100}%`, minHeight: '2px', borderRadius: '4px 4px 0 0', overflow: 'hidden', outline: selected ? '2px solid #2b6cb0' : 'none' }}>
+                <div className="grow-y" style={{ display: 'flex', flexDirection: 'column-reverse', height: `${(r.total / max) * 100}%`, minHeight: '2px', borderRadius: '4px 4px 0 0', overflow: 'hidden', outline: selected ? '2px solid #2b6cb0' : 'none' }}>
                   {segs.map((s) => (s.n ? <div key={s.key} style={{ height: `${(s.n / r.total) * 100}%`, backgroundColor: s.color }} /> : null))}
                 </div>
               </button>
@@ -129,7 +148,7 @@ export function StatusDonut({ counts }) {
   let offset = 0;
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '24px', flexWrap: 'wrap' }}>
-      <svg width="180" height="180" viewBox="0 0 180 180" role="img" aria-label="Listings by status">
+      <svg className="pop-in" width="180" height="180" viewBox="0 0 180 180" role="img" aria-label="Listings by status">
         <g transform="rotate(-90 90 90)">
           {parts.map((p) => {
             const len = (p.n / total) * C;
@@ -171,7 +190,7 @@ export function PriceHistogram({ bins, median }) {
           <div key={b.label} title={`${b.label}: ${b.count.toLocaleString()} listings`}
             style={{ flex: 1, minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
             <span style={{ fontSize: '10px', fontWeight: 700, textAlign: 'center', color: '#2d3748' }}>{b.count ? b.count.toLocaleString() : ''}</span>
-            <div style={{ height: `${(b.count / max) * 88}%`, minHeight: b.count ? '2px' : 0, backgroundColor: i === medianBin ? '#f97316' : '#4299e1', borderRadius: '3px 3px 0 0' }} />
+            <div className="grow-y" style={{ height: `${(b.count / max) * 88}%`, minHeight: b.count ? '2px' : 0, backgroundColor: i === medianBin ? '#f97316' : '#4299e1', borderRadius: '3px 3px 0 0' }} />
           </div>
         ))}
       </div>
@@ -283,11 +302,11 @@ export function CountyBubbles({ counties, onSelectCounty = null }) {
             style={{ display: 'contents', cursor: onSelectCounty ? 'pointer' : 'default' }}>
             <div style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--heading, #1a202c)', opacity: dim ? 0.4 : 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.county.replace(' County', '')}</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', opacity: dim ? 0.4 : 1 }}>
-              <div style={{ height: '14px', width: `${Math.max(2, (r.count / maxCount) * 100)}%`, maxWidth: 'calc(100% - 52px)', background: '#3182ce', borderRadius: '4px' }} />
+              <div className="grow-x" style={{ height: '14px', width: `${Math.max(2, (r.count / maxCount) * 100)}%`, maxWidth: 'calc(100% - 52px)', background: '#3182ce', borderRadius: '4px' }} />
               <span style={{ fontSize: '12px', color: 'var(--text, #2d3748)', fontVariantNumeric: 'tabular-nums' }}>{r.count.toLocaleString()}</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', opacity: dim ? 0.4 : 1 }}>
-              <div style={{ height: '14px', width: `${Math.max(2, (r.avgPrice / maxPrice) * 100)}%`, maxWidth: 'calc(100% - 56px)', background: pricey ? '#f97316' : '#f6ad79', borderRadius: '4px' }} />
+              <div className="grow-x" style={{ height: '14px', width: `${Math.max(2, (r.avgPrice / maxPrice) * 100)}%`, maxWidth: 'calc(100% - 56px)', background: pricey ? '#f97316' : '#f6ad79', borderRadius: '4px' }} />
               <span style={{ fontSize: '12px', color: 'var(--text, #2d3748)', fontVariantNumeric: 'tabular-nums' }}>{money(r.avgPrice)}</span>
             </div>
           </div>

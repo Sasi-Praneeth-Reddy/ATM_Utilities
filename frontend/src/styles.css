@@ -1598,3 +1598,52 @@ h2.section-title{font-size:16px;font-weight:650;letter-spacing:-.01em;}
   .login-side{display:none;}
   .login-main{background:linear-gradient(180deg,#10243f 0,#10243f 150px,var(--bg) 150px);align-items:flex-start;padding-top:48px;}
 }
+
+/* =====================================================================================================
+   MOTION & POLISH (2026-10-30) - part of the modern refresh; delete from here down to remove it.
+   Everything here is decoration only and switches off for people who prefer reduced motion.
+   ===================================================================================================== */
+@keyframes atm-rise{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:none;}}
+@keyframes atm-grow-y{from{transform:scaleY(0);}to{transform:scaleY(1);}}
+@keyframes atm-grow-x{from{transform:scaleX(0);}to{transform:scaleX(1);}}
+@keyframes atm-pop{from{opacity:0;transform:scale(.88) rotate(-8deg);}to{opacity:1;transform:none;}}
+@keyframes atm-drift-a{0%,100%{transform:translate(0,0) scale(1);}50%{transform:translate(40px,30px) scale(1.12);}}
+@keyframes atm-drift-b{0%,100%{transform:translate(0,0) scale(1);}50%{transform:translate(-36px,-26px) scale(1.1);}}
+@keyframes atm-sheen{from{background-position:-200% 0;}to{background-position:200% 0;}}
+
+/* Brand stripe across the very top of every page */
+header.topbar::before{content:"";position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,var(--brand-green),var(--brand-blue) 45%,var(--orange));}
+
+/* Sidebar: deep navy with a glowing active item */
+.shell-sidebar{background:linear-gradient(180deg,#10243f 0%,#152a4e 60%,#1a3560 100%);border-right:none;box-shadow:2px 0 18px rgba(10,20,45,.18);}
+.shell-sidebar .shell-item{color:#b9c7e2;}
+.shell-sidebar .shell-item:hover{background:rgba(255,255,255,.08);color:#fff;}
+.shell-sidebar .shell-item.active{background:linear-gradient(90deg,rgba(255,107,53,.30),rgba(255,107,53,.08));color:#fff;box-shadow:inset 0 0 0 1px rgba(255,140,90,.35);}
+.shell-sidebar .shell-item.active svg{color:#ffb089;filter:drop-shadow(0 0 6px rgba(255,107,53,.6));}
+.shell-sidebar .shell-item.active::before{background:linear-gradient(180deg,#ffb089,var(--orange));box-shadow:0 0 10px rgba(255,107,53,.7);}
+.shell-sidebar .shell-soon{background:rgba(255,255,255,.12);color:#d5def0;}
+.shell-sidebar .shell-collapse{border-top:1px solid rgba(255,255,255,.12);}
+.shell-sidebar .shell-logo-img{border:none;box-shadow:0 4px 14px rgba(0,0,0,.25);}
+.shell-sidebar .nav-alert-dot{box-shadow:0 0 0 2px #152a4e;}
+
+/* KPI / summary cards (the ones with a coloured top edge) and chart cards lift on hover */
+[style*="border-top: 4px"]{transition:transform .18s ease,box-shadow .18s ease;}
+[style*="border-top: 4px"]:hover{transform:translateY(-3px);box-shadow:0 10px 26px rgba(16,28,56,.14) !important;}
+.btn,.login-btn{position:relative;overflow:hidden;}
+.btn:not(.secondary):not(:disabled)::after,.login-btn:not(:disabled)::after{content:"";position:absolute;inset:0;background:linear-gradient(110deg,transparent 30%,rgba(255,255,255,.28) 50%,transparent 70%);background-size:200% 100%;background-position:-200% 0;pointer-events:none;opacity:0;}
+.btn:not(.secondary):hover::after,.login-btn:hover::after{opacity:1;animation:atm-sheen .9s ease;}
+
+@media (prefers-reduced-motion:no-preference){
+  /* Each page's blocks rise in one after another when you open it */
+  main > *{animation:atm-rise .45s cubic-bezier(.2,.7,.2,1) backwards;}
+  main > *:nth-child(2){animation-delay:.05s;} main > *:nth-child(3){animation-delay:.1s;} main > *:nth-child(4){animation-delay:.15s;}
+  main > *:nth-child(5){animation-delay:.2s;} main > *:nth-child(6){animation-delay:.25s;} main > *:nth-child(n+7){animation-delay:.3s;}
+  main.board-main > *{animation:none;} /* the day board is a dense work surface: no entrance motion */
+  .grow-y{transform-origin:bottom;animation:atm-grow-y .7s cubic-bezier(.2,.8,.2,1) backwards;}
+  .grow-x{transform-origin:left;animation:atm-grow-x .7s cubic-bezier(.2,.8,.2,1) backwards;}
+  .pop-in{animation:atm-pop .8s cubic-bezier(.2,.8,.2,1) backwards;}
+  .login-card{animation:atm-rise .6s cubic-bezier(.2,.7,.2,1) backwards;}
+  .login-side-inner > *{animation:atm-rise .7s cubic-bezier(.2,.7,.2,1) backwards;}
+  .login-side-inner > *:nth-child(2){animation-delay:.08s;} .login-side-inner > *:nth-child(3){animation-delay:.16s;} .login-side-inner > *:nth-child(4){animation-delay:.24s;}
+  .login-side::before{content:"";position:absolute;width:420px;height:420px;border-radius:50%;left:-120px;top:-100px;background:radial-gradient(circle,rgba(59,175,41,.35),transparent 65%);animation:atm-drift-a 14s ease-in-out infinite;pointer-events:none;}
+}
