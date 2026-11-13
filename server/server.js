@@ -317,7 +317,7 @@ function sendJson(req, res, status, body, extraHeaders) {
     'Access-Control-Allow-Origin': origin || '*',
     'Access-Control-Allow-Credentials': 'true',
     'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, x-webhook-secret',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-session-mode, x-webhook-secret, x-api-key',
     ...(extraHeaders || {}),
   });
   res.end(data);
@@ -359,7 +359,11 @@ async function readJsonBody(req) {
    very next request instead of waiting for their session to expire. */
 async function getCurrentUser(req) {
   const cookies = auth.parseCookies(req);
-  const token = cookies[auth.COOKIE_NAME];
+  // Same-origin hosting uses the httpOnly cookie. When the site calls the API on another origin (the AWS
+  // Lambda URL), browsers may block third-party cookies, so the page sends the same signed token as
+  // "Authorization: Bearer <token>" instead (see sessionTokenFor / frontend/src/api.js).
+  const bearer = /^Bearer\s+(.+)$/i.exec(String(req.headers.authorization || ''));
+  const token = cookies[auth.COOKIE_NAME] || (bearer && bearer[1].trim());
   if (!token) return null;
   const payload = auth.verifySessionToken(token, SESSION_SECRET);
   if (!payload) return null;
@@ -989,6 +993,12 @@ async function handleWebhook(req, res, url) {
 /** Shapes a user row for the API response — deliberately leaves out passwordHash/otpHash/
     otpExpiresAt, which should never go out over the wire. `hasPassword` lets the Users panel show
     whether an account has finished first-time setup yet without exposing the hash itself. */
+/** Cross-origin clients ask for the signed session token in the JSON body (header "x-session-mode: bearer")
+    because they cannot rely on cookies. Everyone else gets exactly the same response as before. */
+function sessionTokenFor(req, user, token) {
+  return String(req.headers['x-session-mode'] || '').toLowerCase() === 'bearer' ? { ...user, sessionToken: token } : user;
+}
+
 function publicUser(row) {
   if (!row) return null;
   return { id: row.id, email: row.email, role: row.role, createdAt: row.createdAt, hasPassword: Boolean(row.passwordHash ?? row.hasPassword) };
@@ -1107,7 +1117,7 @@ async function handleRequest(req, res) {
       }
       const token = auth.createSessionToken(row, SESSION_SECRET);
       recordEvent({ type: 'login', email });
-      sendJson(req, res, 200, publicUser(row), { 'Set-Cookie': auth.sessionCookieHeader(token, COOKIE_SECURE) });
+      sendJson(req, res, 200, sessionTokenFor(req, publicUser(row), token), { 'Set-Cookie': auth.sessionCookieHeader(token, COOKIE_SECURE) });
       return;
     }
 
@@ -1152,7 +1162,7 @@ async function handleRequest(req, res) {
       await db.setUserPassword(row.id, auth.hashPassword(newPassword));
       const token = auth.createSessionToken(row, SESSION_SECRET);
       recordEvent({ type: 'password-reset', email });
-      sendJson(req, res, 200, publicUser(await db.getUserById(row.id)), { 'Set-Cookie': auth.sessionCookieHeader(token, COOKIE_SECURE) });
+      sendJson(req, res, 200, sessionTokenFor(req, publicUser(await db.getUserById(row.id)), token), { 'Set-Cookie': auth.sessionCookieHeader(token, COOKIE_SECURE) });
       return;
     }
 

@@ -42,3 +42,11 @@ backups/
 
 # Scratch exports from assistant sessions (may contain customer data)
 Claude outputs/
+
+# Lambda bundle built by server/scripts/build-lambda.js
+build/
+
+payload.json
+out.json
+storage_tracker_aws.db-*
+.fuse_hidden*

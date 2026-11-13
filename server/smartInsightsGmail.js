@@ -28,7 +28,7 @@
  *    link. No download URL to find in the body at all. Needs the Gmail attachments.get API instead
  *    of a plain fetch().
  */
-const { google } = require('googleapis');
+const { gmail: googleGmail, auth: googleAuth } = require('@googleapis/gmail'); // small per-API package instead of the 115 MB `googleapis` (keeps the AWS Lambda bundle small)
 
 // gmail.readonly covers search/read. Applying our "processed" label to a message (messages.modify)
 // needs the broader gmail.modify scope — gmail.labels only covers managing label objects
@@ -108,7 +108,7 @@ function getOAuth2Client() {
   // redirect_uri only matters during the one-time local setup flow (gmail-oauth-setup.js) — a
   // loopback address, since Google deprecated the old out-of-band ("copy this code") flow for
   // installed apps. Ordinary scheduled syncing never redirects anywhere.
-  return new google.auth.OAuth2(clientId, clientSecret, 'http://localhost:53682/oauth2callback');
+  return new googleAuth.OAuth2(clientId, clientSecret, 'http://localhost:53682/oauth2callback');
 }
 
 /** For unattended scheduled syncing — assumes gmail-oauth-setup.js has already produced a refresh
@@ -222,7 +222,7 @@ async function fetchAndSortByDate(gmail, messageIds) {
  */
 async function findUnprocessedBookedOpportunityFiles() {
   const auth = getAuthenticatedClient();
-  const gmail = google.gmail({ version: 'v1', auth });
+  const gmail = googleGmail({ version: 'v1', auth });
 
   const { data: listData } = await gmail.users.messages.list({
     userId: 'me',
@@ -262,7 +262,7 @@ async function findUnprocessedBookedOpportunityFiles() {
  */
 async function findUnprocessedAllJobsFiles() {
   const auth = getAuthenticatedClient();
-  const gmail = google.gmail({ version: 'v1', auth });
+  const gmail = googleGmail({ version: 'v1', auth });
 
   const { data: listData } = await gmail.users.messages.list({
     userId: 'me',
@@ -306,7 +306,7 @@ async function findUnprocessedAllJobsFiles() {
  */
 async function findUnprocessedMaterialsFiles() {
   const auth = getAuthenticatedClient();
-  const gmail = google.gmail({ version: 'v1', auth });
+  const gmail = googleGmail({ version: 'v1', auth });
   const { data: listData } = await gmail.users.messages.list({
     userId: 'me',
     q: `${SEARCH_QUERY_MATERIALS} -label:${LABEL_NAME.replace('/', '-')}`,
@@ -356,7 +356,7 @@ async function findUnprocessedMaterialsFiles() {
  * never double-processed. */
 async function markMessageProcessed(messageId) {
   const auth = getAuthenticatedClient();
-  const gmail = google.gmail({ version: 'v1', auth });
+  const gmail = googleGmail({ version: 'v1', auth });
   const labelId = await getOrCreateLabelId(gmail);
   await gmail.users.messages.modify({ userId: 'me', id: messageId, requestBody: { addLabelIds: [labelId] } });
   await gmail.users.messages.trash({ userId: 'me', id: messageId });

@@ -126,3 +126,7 @@ actual dispatch.
 ## License
 
 Internal project for Around Town Movers — not published/licensed for external use.
+
+## Docs
+
+- [`docs/TASKING.md`](docs/TASKING.md) — the Tasking module (office pending-actions board, dispatch notes, materials).

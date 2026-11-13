@@ -1,4 +1,4 @@
-import { apiCall } from '../../api';
+import { apiCall, authHeaders } from '../../api';
 
 export async function fetchLeadsSummary(backendUrl) {
   return apiCall(backendUrl, 'GET', '/api/leads/summary');
@@ -84,7 +84,7 @@ export async function downloadListingsCsv(backendUrl, { status, state, county, s
   if (minPrice) params.set('minPrice', String(minPrice));
   if (maxPrice) params.set('maxPrice', String(maxPrice));
   if (month && month !== 'all') params.set('month', month);
-  const res = await fetch(`${backendUrl}/api/leads/export.csv?${params.toString()}`, { credentials: 'include' });
+  const res = await fetch(`${backendUrl}/api/leads/export.csv?${params.toString()}`, { credentials: 'include', headers: authHeaders(backendUrl) });
   if (!res.ok) throw new Error(`Export failed (${res.status})`);
   const blob = await res.blob();
   saveBlob(blob, `pre-mover-leads-${new Date().toISOString().slice(0, 10)}.csv`);

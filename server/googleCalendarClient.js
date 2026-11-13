@@ -18,7 +18,7 @@
  * regardless of which of the two fetch paths supplied the event.
  */
 
-const { google } = require('googleapis');
+const { calendar: googleCalendar } = require('@googleapis/calendar'); // small per-API package instead of the 115 MB `googleapis` (keeps the AWS Lambda bundle small)
 const { getAuthenticatedClient } = require('./smartInsightsGmail');
 
 // Which calendar to read — confirmed live with the user 2026-08-26: SmartMoving syncs into its own
@@ -54,7 +54,7 @@ function addDaysUtc(date, days) {
  */
 async function fetchCalendarEvents() {
   const auth = getAuthenticatedClient();
-  const calendar = google.calendar({ version: 'v3', auth });
+  const calendar = googleCalendar({ version: 'v3', auth });
 
   const now = new Date();
   const timeMin = addDaysUtc(now, -WINDOW_PAST_DAYS).toISOString();

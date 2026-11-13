@@ -1,0 +1,296 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  ATM Scheduler backend on AWS - one Lambda (HTTP via Function URL + scheduled jobs via EventBridge Scheduler).
+  Tables live in the separate atm-data stack. Firestore and Firebase Hosting stay on Google.
+  Build the code first (npm run build-lambda in server/), then deploy with "aws cloudformation package" + "deploy"
+  (see docs/AWS-COMPUTE.md).
+
+Parameters:
+  TablePrefix:
+    Type: String
+    Default: atm-
+    Description: Prefix of the DynamoDB tables created by the atm-data stack.
+  SsmPrefix:
+    Type: String
+    Default: /atm/prod/
+    Description: SSM Parameter Store path holding the configuration (see server/scripts/copy-config-to-ssm.js). Must start and end with /.
+    AllowedPattern: ^/[A-Za-z0-9_./-]*/$
+  SchedulesState:
+    Type: String
+    Default: DISABLED
+    AllowedValues: [ENABLED, DISABLED]
+    Description: Keep DISABLED while Google's Cloud Scheduler still runs the same jobs; set ENABLED at cutover so jobs never run twice.
+  AlertEmail:
+    Type: String
+    Default: ''
+    Description: Optional. Email address that gets an alert when the function errors or a scheduled job fails.
+
+Conditions:
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, '']]
+
+Resources:
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/atm-api
+      RetentionInDays: 14
+
+  FunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: atm-api
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: Logs
+                Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub ${LogGroup.Arn}:*
+              - Sid: DynamoDbTables
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:BatchGetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:DescribeTable
+                Resource:
+                  - !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*
+                  - !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*
+              - Sid: ReadConfig
+                Effect: Allow
+                Action: [ssm:GetParametersByPath, ssm:GetParameters, ssm:GetParameter]
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}*
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}
+
+  ApiFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: LogGroup
+    Properties:
+      FunctionName: atm-api
+      Description: ATM Scheduler API (HTTP) and scheduled sync jobs
+      Runtime: nodejs22.x
+      Architectures: [x86_64]
+      Handler: lambda.handler
+      Code: ../build/lambda   # replaced with an S3 location by "aws cloudformation package"
+      MemorySize: 2048
+      Timeout: 600
+      Role: !GetAtt FunctionRole.Arn
+      Environment:
+        Variables:
+          ATM_SSM_PREFIX: !Ref SsmPrefix
+          ATM_DDB_PREFIX: !Ref TablePrefix
+          ATM_AWS_REGION: !Ref AWS::Region
+          NODE_OPTIONS: --enable-source-maps
+
+  FunctionUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !GetAtt ApiFunction.Arn
+      AuthType: NONE        # the app authenticates every request itself (session token, scraper key, webhook secret)
+      InvokeMode: BUFFERED
+
+  UrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ApiFunction
+      Action: lambda:InvokeFunctionUrl
+      Principal: '*'
+      FunctionUrlAuthType: NONE
+
+  UrlInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ApiFunction
+      Action: lambda:InvokeFunction
+      Principal: '*'
+      InvokedViaFunctionUrl: true
+
+  # ---------------- Scheduled jobs (EventBridge Scheduler, Eastern time, DST-aware) ----------------
+  SchedulerDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: atm-scheduled-jobs-dlq
+      MessageRetentionPeriod: 1209600
+
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: scheduler.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: invoke-api-and-dlq
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt ApiFunction.Arn
+              - Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt SchedulerDlq.Arn
+
+  PollSweepSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: atm-poll-sweep-6am
+      Description: SmartMoving reconciliation sweep + Tasking refresh, daily 6:00 AM ET
+      State: !Ref SchedulesState
+      ScheduleExpression: cron(0 6 * * ? *)
+      ScheduleExpressionTimezone: America/New_York
+      FlexibleTimeWindow: { Mode: 'OFF' }
+      Target:
+        Arn: !GetAtt ApiFunction.Arn
+        RoleArn: !GetAtt SchedulerRole.Arn
+        Input: '{"job":"pollSweep","label":"6:00 AM"}'
+        RetryPolicy: { MaximumRetryAttempts: 2, MaximumEventAgeInSeconds: 3600 }
+        DeadLetterConfig: { Arn: !GetAtt SchedulerDlq.Arn }
+
+  MaterialsMorningSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: atm-materials-630am
+      Description: Job Materials report from Gmail, daily 6:30 AM ET
+      State: !Ref SchedulesState
+      ScheduleExpression: cron(30 6 * * ? *)
+      ScheduleExpressionTimezone: America/New_York
+      FlexibleTimeWindow: { Mode: 'OFF' }
+      Target:
+        Arn: !GetAtt ApiFunction.Arn
+        RoleArn: !GetAtt SchedulerRole.Arn
+        Input: '{"job":"materials","label":"6:30 AM"}'
+        RetryPolicy: { MaximumRetryAttempts: 2, MaximumEventAgeInSeconds: 3600 }
+        DeadLetterConfig: { Arn: !GetAtt SchedulerDlq.Arn }
+
+  MaterialsEveningSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: atm-materials-5pm
+      Description: Job Materials report from Gmail, daily 5:00 PM ET
+      State: !Ref SchedulesState
+      ScheduleExpression: cron(0 17 * * ? *)
+      ScheduleExpressionTimezone: America/New_York
+      FlexibleTimeWindow: { Mode: 'OFF' }
+      Target:
+        Arn: !GetAtt ApiFunction.Arn
+        RoleArn: !GetAtt SchedulerRole.Arn
+        Input: '{"job":"materials","label":"5:00 PM"}'
+        RetryPolicy: { MaximumRetryAttempts: 2, MaximumEventAgeInSeconds: 3600 }
+        DeadLetterConfig: { Arn: !GetAtt SchedulerDlq.Arn }
+
+  SmartInsightsSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: atm-smart-insights
+      Description: Smart Insights report from Gmail, daily 12:00 PM and 4:00 PM ET
+      State: !Ref SchedulesState
+      ScheduleExpression: cron(0 12,16 * * ? *)
+      ScheduleExpressionTimezone: America/New_York
+      FlexibleTimeWindow: { Mode: 'OFF' }
+      Target:
+        Arn: !GetAtt ApiFunction.Arn
+        RoleArn: !GetAtt SchedulerRole.Arn
+        Input: '{"job":"smartInsights","label":"12:00 PM / 4:00 PM"}'
+        RetryPolicy: { MaximumRetryAttempts: 2, MaximumEventAgeInSeconds: 3600 }
+        DeadLetterConfig: { Arn: !GetAtt SchedulerDlq.Arn }
+
+  CalendarSweepSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: atm-calendar-sweep
+      Description: SmartMoving dispatch calendar sweep, daily 8:00 AM, 12:00 PM and 1:00 PM ET
+      State: !Ref SchedulesState
+      ScheduleExpression: cron(0 8,12,13 * * ? *)
+      ScheduleExpressionTimezone: America/New_York
+      FlexibleTimeWindow: { Mode: 'OFF' }
+      Target:
+        Arn: !GetAtt ApiFunction.Arn
+        RoleArn: !GetAtt SchedulerRole.Arn
+        Input: '{"job":"calendar","label":"8:00 AM / 12:00 PM / 1:00 PM"}'
+        RetryPolicy: { MaximumRetryAttempts: 2, MaximumEventAgeInSeconds: 3600 }
+        DeadLetterConfig: { Arn: !GetAtt SchedulerDlq.Arn }
+
+  CalendarSweepAfternoonSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: atm-calendar-sweep-403pm
+      Description: SmartMoving dispatch calendar sweep, daily 4:03 PM ET
+      State: !Ref SchedulesState
+      ScheduleExpression: cron(3 16 * * ? *)
+      ScheduleExpressionTimezone: America/New_York
+      FlexibleTimeWindow: { Mode: 'OFF' }
+      Target:
+        Arn: !GetAtt ApiFunction.Arn
+        RoleArn: !GetAtt SchedulerRole.Arn
+        Input: '{"job":"calendar","label":"4:03 PM"}'
+        RetryPolicy: { MaximumRetryAttempts: 2, MaximumEventAgeInSeconds: 3600 }
+        DeadLetterConfig: { Arn: !GetAtt SchedulerDlq.Arn }
+
+  # ---------------- Alerts ----------------
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Condition: HasAlertEmail
+    Properties:
+      TopicName: atm-alerts
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlertEmail
+
+  ErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlertEmail
+    Properties:
+      AlarmName: atm-api-errors
+      AlarmDescription: The ATM API/sync function returned an error (a crashed request or scheduled job).
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - { Name: FunctionName, Value: !Ref ApiFunction }
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+
+  DlqAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlertEmail
+    Properties:
+      AlarmName: atm-scheduled-job-failed
+      AlarmDescription: A scheduled sync job could not be delivered or kept failing after retries.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - { Name: QueueName, Value: !GetAtt SchedulerDlq.QueueName }
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+
+Outputs:
+  FunctionUrl:
+    Description: Base URL of the API (it ends with a slash - drop the slash where a URL without one is asked for). Use it as ?api=... on the beta site, VITE_API_URL, the scraper's backend URL and the SmartMoving webhook host.
+    Value: !GetAtt FunctionUrl.FunctionUrl
+  FunctionName:
+    Value: !Ref ApiFunction

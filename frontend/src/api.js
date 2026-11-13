@@ -12,7 +12,9 @@
 //    cross-site headaches. `backendUrl + path` with backendUrl = '' simply hits the current origin.
 // The `?api=` override still works in both cases, for pointing a deployed frontend at a different
 // backend (e.g. a staging App Runner service) without a rebuild.
-export const DEFAULT_BACKEND_URL = import.meta.env.DEV ? 'http://localhost:8787' : '';
+// VITE_API_URL: set at build time (frontend/.env.production) to point the deployed site at an API on another
+// origin, e.g. the AWS Lambda URL. Leave unset for same-origin hosting. The ?api= query parameter still overrides it.
+export const DEFAULT_BACKEND_URL = import.meta.env.DEV ? 'http://localhost:8787' : (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 
 export function initialBackendUrl() {
   const fromQuery = new URLSearchParams(window.location.search).get('api');
@@ -23,6 +25,22 @@ export function normalizeBackendUrl(url) {
   return (url ?? DEFAULT_BACKEND_URL).trim().replace(/\/$/, '');
 }
 
+// Cross-origin sessions (the site on Firebase Hosting calling the API on AWS): browsers can block
+// third-party cookies, so in that mode the backend also hands back the signed session token at login and
+// we send it as "Authorization: Bearer ...". Same-origin hosting (backendUrl === '') keeps using only the
+// httpOnly cookie and never touches this. The token lives in this browser's localStorage and is removed on
+// logout or when the server says it is no longer valid.
+const TOKEN_KEY = 'atm-session-token';
+function readToken() { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; } }
+function writeToken(t) { try { if (t) localStorage.setItem(TOKEN_KEY, t); else localStorage.removeItem(TOKEN_KEY); } catch { /* storage blocked: cookie fallback only */ } }
+
+/** Headers every call to a cross-origin backend needs (empty for same-origin). Used by apiCall and by direct fetches such as file exports. */
+export function authHeaders(backendUrl) {
+  if (!backendUrl) return {};
+  const t = readToken();
+  return t ? { Authorization: `Bearer ${t}` } : {};
+}
+
 export async function apiCall(backendUrl, method, path, body) {
   const res = await fetch(backendUrl + path, {
     method,
@@ -31,9 +49,14 @@ export async function apiCall(backendUrl, method, path, body) {
     // the "nothing in local storage" rule, which is about trucks/drivers/jobs living only in the
     // backend's database, not about how the login session itself is carried.
     credentials: 'include',
-    headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+    headers: {
+      ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      ...(backendUrl ? { 'x-session-mode': 'bearer' } : {}),
+      ...authHeaders(backendUrl),
+    },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
+  if (backendUrl && res.status === 401) writeToken('');
   if (!res.ok) {
     let detail = '';
     try {
@@ -45,5 +68,13 @@ export async function apiCall(backendUrl, method, path, body) {
     err.status = res.status;
     throw err;
   }
-  return res.status === 204 ? null : res.json();
+  if (res.status === 204) return null;
+  const data = await res.json();
+  if (backendUrl && path === '/api/auth/logout') writeToken('');
+  else if (backendUrl && data && typeof data === 'object' && data.sessionToken) {
+    writeToken(data.sessionToken);
+    const { sessionToken, ...rest } = data; // keep the token out of app state
+    return rest;
+  }
+  return data;
 }

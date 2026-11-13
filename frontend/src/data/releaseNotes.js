@@ -7,6 +7,84 @@
 
 export const RELEASES = [
   {
+    version: '2.1.0',
+    name: 'Tasking, Map and a faster back end',
+    date: '2026-11-13',
+    tagline: 'Two new modules (Tasking and Map), a night view, a tidier Leads search, and a quicker, cheaper system behind the scenes.',
+    new: [
+      {
+        title: 'Tasking: Summary (the office to-do board)',
+        body: 'Open Tasking in the sidebar, then Summary. Pick a day with the arrows or Today and you get five lists. Call list: every job that day by start time. Tick the box when the customer has been called, and choose whether Crew or Erika is calling (the choice is saved for that day). PBO upsell follow-ups: PBO jobs in the next 14 days, each with a status, a note and a follow-up date. Upcoming jobs not secured: jobs in the next 90 days where the estimate is not signed or no deposit is paid, with a days-left pill (red = 3 days or less, amber = 7 or less). Use the All / Within 3 days / Within 7 days chips and the Previous / Next buttons to page through it. Completed jobs not paid: finished jobs with a balance still owed. Active claims: open claims from SmartMoving. Press Refresh from SmartMoving to pull the latest payments, signatures and claims. It also refreshes by itself every morning after the 6 AM sweep. If a list looks empty, press Refresh first.',
+        audience: 'staff',
+      },
+      {
+        title: 'Tasking: Dispatch (notes, materials and crates)',
+        body: 'Under Tasking, open Dispatch and pick a day. Each job shows its time, customer and truck. Notes from SmartMoving appear in separate coloured blocks (Dispatch, Internal, Crew and Customer notes), and you can type your own Dispatch notes (office) underneath, which SmartMoving never overwrites. Materials and crates are filled in automatically from the daily Job Materials report (checked at 6:30 AM and 5 PM). Tick each item when it is ready, add your own items and crates with the Add boxes, and use Print materials for the warehouse sheet. Email assigned jobs sends the whole day to the addresses you type. Three helper buttons: Import notes from SmartMoving, Check materials email (look for the report right now) and Upload materials report (add the .xlsx by hand).',
+        audience: 'staff',
+      },
+      {
+        title: 'Map module (for everyone)',
+        body: 'Open Map in the sidebar. Local - Day View shows the day\'s local jobs: a solid line from the warehouse to the pickup, and a dashed line from the pickup to the drop-off. Long Distance Trips shows trips running that day from pickup to drop-off, and Whole USA zooms out to fit them all. Pickups are filled dots and drop-offs are hollow, numbered to match the list beside the map. Click a job in the list or on the map to highlight it. Use the arrows or Today to change the day. The first time a new address appears it says Locating new addresses and takes a few seconds, then it is remembered. The map is view-only, so nothing here can change a job. Live truck positions (Motive) are planned.',
+        audience: 'all',
+      },
+      {
+        title: 'Night view',
+        body: 'The moon button in the top bar switches the whole app to a dark theme, and the sun button switches back. It is remembered on that device. The Leads county map and charts follow it too.',
+        audience: 'all',
+      },
+      {
+        title: 'Leads: search now lives in the top bar',
+        body: 'The extra search box inside the Leads filters is gone. The search box at the top of the page now searches whatever Leads page is open, and its hint tells you what: listings (address, homeowner, realtor, city, ZIP), matched customers (name, address, email, phone, agent) or the data sheet you are on. Click the x or press Esc to clear it. Filters, the county map and the Matches table work as before. Click a county on the map to see its listings.',
+        audience: 'staff',
+      },
+      {
+        title: 'Truck Board: View and Print menus',
+        body: 'The loose switches above the board are now two menus. View holds Timeline view / Compact grid and Hide in-transit days. Print holds the print options (list, board, orientation, include in-transit jobs). On a phone the board now opens as the compact grid, and Timeline view (where you drag jobs) is one tap away in View.',
+        audience: 'all',
+      },
+      {
+        title: 'Storage Tracker: cleaner prices',
+        body: 'The Update prices button works again and starts a fresh price collection. Unit sizes are now written the same way everywhere (for example 10x15, smaller side first) so the same size is no longer split across several rows. City, state, ZIP and brand are filled in where they were showing as Unknown, and the city and brand summary updates on its own when a collection finishes.',
+        audience: 'staff',
+      },
+      {
+        title: 'Owner and Developer roles',
+        body: 'Two roles now sit above Admin: Owner and Developer. They can do everything an Admin can, and they are the only ones who can add or remove users and give out those two roles. Settings > Users is now visible to Owner and Developer only. If you are an Admin and need a user added or changed, ask one of them.',
+        audience: 'admin',
+      },
+    ],
+    changing: [
+      {
+        title: 'Please sign in once more',
+        body: 'The way the app keeps you signed in changed with the back-end move below, so everyone is asked to sign in again once. Use your usual email and password (or Forgot password). After that you stay signed in as before until you press Log out.',
+        audience: 'all',
+      },
+      {
+        title: 'Back end moved to Amazon (AWS)',
+        body: 'The system that runs behind the screens moved from Google to the company\'s Amazon account. It costs less and has more room to grow. It is the same data and the same screens. The SmartMoving webhook, the 6 AM job sweep, the materials checks (6:30 AM and 5 PM), the Smart Insights reports (12 PM and 4 PM) and the calendar sweeps (8 AM, 12 PM, 1 PM and 4:03 PM, Eastern time) all run there on the same schedule.',
+        audience: 'staff',
+      },
+      {
+        title: 'Leads and storage data in a new database',
+        body: 'The Leads (listings, matched customers, uploads) and Storage Tracker data now live in Amazon\'s DynamoDB instead of the old Google SQL database. Nothing was lost. Leads and storage pages and the Leads Excel export load the same way as before, and large exports are compressed so they download faster.',
+        audience: 'staff',
+      },
+      {
+        title: 'Heads up: a slower first click',
+        body: 'After the system has been idle for a while, the first page you open can take two to four seconds longer while it wakes up. After that it is quick again. If something looks stuck for more than about ten seconds, refresh the page and tell an admin.',
+        audience: 'all',
+      },
+    ],
+    upcoming: [
+      { title: 'Live trucks on the Map', body: 'Motive truck positions as an overlay on the Map pages (the Motive box there is a placeholder for now).', audience: 'all' },
+      { title: 'Tasks', body: 'SmartMoving tasks and your own tasks in one list, with due dates and comments. Owners and developers see every task and everyone else sees their own.', audience: 'admin' },
+      { title: 'Texting jobs to crews', body: 'Tasking can email the day\'s jobs today. Texting is not built yet.', audience: 'admin' },
+      { title: 'Automatic storage price updates', body: 'Prices refreshed on a schedule, so the Update prices button is only needed for a quick refresh.', audience: 'staff' },
+      { title: 'Storage operations, Military, Referrals and KPIs', body: 'The remaining modules in the sidebar are planned to move into ATM Hub one at a time.', audience: 'admin' },
+    ],
+    upcomingNote: 'These are plans, not promises. Order and timing are not set, and they can change.',
+  },
+  {
     version: '2.0.0',
     name: 'ATM Hub 2.0',
     date: '2026-11-04',
