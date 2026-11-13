@@ -26,33 +26,51 @@ import UsersTab from './components/admin/UsersTab';
 import CrewTab from './components/CrewTab';
 import LeadsTab from './components/leads/LeadsTab';
 import StorageTab from './components/storage/StorageTab';
+import TaskingSummary from './components/tasking/TaskingSummary';
+import TaskingDispatch from './components/tasking/TaskingDispatch';
+import MapView from './components/map/MapView';
 import BenchmarksTab from './components/storage/BenchmarksTab';
+import WhatsNewTab from './components/WhatsNewTab';
+
+// Pages whose title-bar search is the jump-to-job search, each with its own hint. Every other page
+// registers its own search (hooks/usePageSearch.js) or has nothing to search, so shows no job search.
+const JOB_SEARCH_BY_TAB = {
+  board: { placeholder: 'Search the board: customer, address, job ID…' },
+  crew: { placeholder: 'Find a job to open on the board…' },
+  ld: { placeholder: 'Search long-distance jobs: customer, address, job ID…', longDistanceOnly: true },
+};
 
 export default function App() {
   const [backendUrl, setBackendUrlState] = useState(initialBackendUrl());
   const setBackendUrl = (url) => setBackendUrlState(normalizeBackendUrl(url));
 
-  // Day/night theme. Always starts light now (changed 2026-09-15 at the user's request, "make the
-  // light theme default") — used to start from the OS/browser's own light-vs-dark preference
-  // (window.matchMedia('(prefers-color-scheme: dark)')) instead, which meant anyone whose OS/browser
-  // defaults to dark mode saw this app open dark on every visit whether they'd ever chosen that here
-  // or not. Still switchable with the header toggle, and still deliberately isn't saved anywhere (no
-  // localStorage), consistent with this app's "nothing lives only on one device" rule — it just
-  // falls back to this same light default again on the next visit rather than remembering a
-  // per-device choice, the same tradeoff as before, just with a different starting point.
-  const [theme, setTheme] = useState('light');
+  // Day/night theme, remembered per device. Updated 2026-11-05 at the user's request: the choice is
+  // saved in this browser's localStorage ('atm-theme') so it survives reloads and logouts, but it
+  // does NOT follow the person to another device or browser. A device that has never chosen still
+  // starts light (the 2026-09-15 "make the light theme default" decision stands) rather than
+  // following the OS's dark-mode setting. The same key is read by the inline script in index.html so
+  // the right theme is applied before first paint (no light flash for dark-mode users).
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem('atm-theme') === 'dark' ? 'dark' : 'light'; } catch { return 'light'; }
+  });
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
+    try { localStorage.setItem('atm-theme', theme); } catch { /* storage blocked: theme just won't persist */ }
   }, [theme]);
   const toggleTheme = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
 
   const authState = useAuth(backendUrl);
   const { user, status: authStatus } = authState;
   const isAuthenticated = authStatus === 'authenticated';
-  const role = user?.role;
+  // 'owner' (Ryan) and 'developer' (Sasi) are supersets of 'admin': every admin gate in the UI treats
+  // them as an admin, so the rest of this file keeps working off `role`. `rawRole` / `isTopRole` are
+  // only for what they add on top (granting those roles, seeing every task).
+  const rawRole = user?.role;
+  const isTopRole = rawRole === 'owner' || rawRole === 'developer';
+  const role = isTopRole ? 'admin' : rawRole;
 
   const data = useSchedulerData(backendUrl, { enabled: isAuthenticated, onAuthError: authState.handleAuthError });
-  const usersData = useUsers(backendUrl, isAuthenticated && role === 'admin');
+  const usersData = useUsers(backendUrl, isAuthenticated && isTopRole);
   const { trucks, drivers, jobs } = data;
 
   const [activeTab, setActiveTab] = useState('board');
@@ -61,13 +79,13 @@ export default function App() {
   // "coming soon" modules have no tab, so they're tracked separately in soonModule.
   const [soonModule, setSoonModule] = useState(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => (typeof window !== 'undefined' ? window.innerWidth < 1000 : false));
-  const activeMod = soonModule || moduleOfTab(activeTab, role) || MODULES.find((m) => m.id === 'dispatch');
+  const activeMod = soonModule || moduleOfTab(activeTab, role, isTopRole) || MODULES.find((m) => m.id === 'dispatch');
 
   function handleSelectModule(mod) {
     if (typeof window !== 'undefined' && window.innerWidth <= 720) setSidebarCollapsed(true);
     if (mod.soon) { setSoonModule(mod); return; }
     setSoonModule(null);
-    const tabs = tabsFor(mod, role);
+    const tabs = tabsFor(mod, role, isTopRole);
     if (tabs.length) setActiveTab(tabs.includes(activeTab) ? activeTab : tabs[0]);
   }
   const [currentCrewTruck, setCurrentCrewTruck] = useState('T1');
@@ -122,7 +140,7 @@ export default function App() {
       const mod = MODULES.find((m) => m.soon && `soon-${m.id}` === tab);
       if (mod) { setSoonModule(mod); return; }
     }
-    if (tab && moduleOfTab(tab, currentRole)) { setSoonModule(null); setActiveTab(tab); return; }
+    if (tab && moduleOfTab(tab, currentRole, isTopRole)) { setSoonModule(null); setActiveTab(tab); return; }
     setSoonModule(null);
     setActiveTab(currentRole === 'crew' ? 'crew' : 'board');
   }
@@ -224,6 +242,7 @@ export default function App() {
       <div className="app-shell">
       <Sidebar
         role={role}
+        isTopRole={isTopRole}
         activeModuleId={activeMod.id}
         onSelectModule={handleSelectModule}
         collapsed={sidebarCollapsed}
@@ -235,6 +254,7 @@ export default function App() {
       <Header
         user={user}
         role={role}
+        roleLabel={rawRole}
         onLogout={authState.logout}
         trucks={trucks}
         jobs={jobs}
@@ -246,15 +266,16 @@ export default function App() {
         onToggleSidebar={() => setSidebarCollapsed((c) => !c)}
         moduleLabel={activeMod.label}
         tabLabel={soonModule ? null : TAB_LABELS[activeTab]}
+        jobSearch={soonModule ? null : JOB_SEARCH_BY_TAB[activeTab] || null}
       />
       <Nav
-        tabIds={soonModule ? [] : tabsFor(activeMod, role)}
+        tabIds={soonModule ? [] : tabsFor(activeMod, role, isTopRole)}
         activeTab={activeTab}
         onTabChange={setActiveTab}
         alertTabs={role === 'admin' && isGmailAuthAlert(data.gmailAuthStatus)
           ? { assignments: 'Gmail authorization is expiring or expired — see Job Assignments' } : {}}
       />
-      <main className={!soonModule && (activeTab === 'board' || activeTab === 'ld') ? 'board-main' : ''}>
+      <main className={!soonModule && (activeTab === 'board' || activeTab === 'ld') ? 'board-main' : !soonModule && activeTab.startsWith('map-') ? 'board-main map-main' : ''}>
         <BackendBanner
           backendConnected={data.backendConnected}
           backendErrorMsg={data.backendErrorMsg}
@@ -263,7 +284,7 @@ export default function App() {
         />
         {/* Only on Job Assignments (2026-09-30) — elsewhere the red dot on that tab is the alert. */}
         {role === 'admin' && activeTab === 'assignments' && <GmailAuthBanner status={data.gmailAuthStatus} />}
-        {showRoleHint && <div className="hint">{roleLabels[role]}</div>}
+        {showRoleHint && <div className="hint">{roleLabels[rawRole] || roleLabels[role]}</div>}
 
         {soonModule && <ComingSoon module={soonModule} />}
 
@@ -329,9 +350,9 @@ export default function App() {
           />
         )}
 
-        {!soonModule && activeTab === 'users' && role === 'admin' && (
+        {!soonModule && activeTab === 'users' && isTopRole && (
           <UsersTab
-            users={usersData.users} currentUserId={user.id}
+            users={usersData.users} currentUserId={user.id} isTopRole={isTopRole}
             onCreateUser={usersData.createUser} onChangeUserRole={usersData.changeRole}
             onDeleteUser={usersData.deleteUser}
             allowedExternalEmails={usersData.allowedExternalEmails}
@@ -351,6 +372,16 @@ export default function App() {
         {!soonModule && activeTab === 'benchmarks' && (role === 'admin' || role === 'dispatcher') && (
           <BenchmarksTab backendUrl={backendUrl} />
         )}
+
+        {!soonModule && activeTab === 'tk-summary' && (role === 'admin' || role === 'dispatcher') && (
+          <TaskingSummary backendUrl={backendUrl} />
+        )}
+        {!soonModule && activeTab === 'tk-dispatch' && (role === 'admin' || role === 'dispatcher') && (
+          <TaskingDispatch backendUrl={backendUrl} userEmail={user && user.email} />
+        )}
+        {!soonModule && activeTab === 'map-local' && <MapView backendUrl={backendUrl} kind="local" />}
+        {!soonModule && activeTab === 'map-ld' && <MapView backendUrl={backendUrl} kind="ld" />}
+        {!soonModule && activeTab === 'whatsnew' && <WhatsNewTab role={role} />}
 
         {!soonModule && activeTab === 'crew' && (
           <CrewTab trucks={trucks} drivers={drivers} jobs={jobs} currentCrewTruck={currentCrewTruck} conflictIds={conflictIds} />

@@ -30,6 +30,8 @@ frontend/src/styles.css                   styles, all prefixed  tk-
 
 **How "Upcoming not secured" is shown:** `NotSecuredList.jsx` draws this list (display only, nothing is saved). It shows 8 rows per page with Previous / Next (`PAGE_SIZE`), inside an area that scrolls on its own (`.tk-ns-list`, max 520px), with filter chips (All / Within 3 days / Within 7 days — the `FILTERS` array) and the estimate total of the rows in the current filter. To change the page size or add a filter, edit those two constants; styles are the `tk-ns-*` and `tk-chip` classes in `styles.css`.
 
+**How SmartMoving notes are shown on Dispatch:** the calendar event lists notes under headings (*Dispatch notes, Internal notes, Crew notes, Customer notes*). `parseCalendarNotes` keeps each one separately in `sections` and saves it on the job as `smNoteSections` (`{dispatch, internal, crew, crewFeedback, customer}`). The job card draws one labelled block per type (`NOTE_TYPES` in `TaskingDispatch.jsx` sets the order, labels and colours); identical text under two headings is shown once with both tags. `smNotes` (all types in one text) is still saved for the crew email, PBO matching, and as the fallback for jobs imported before the split. **Crew feedback** is supported by the parser but SmartMoving does not put it in the calendar event, so that block stays empty until another source provides it.
+
 ## How the data gets in (read this before debugging an empty list)
 
 Pages read **Firestore only** — opening Tasking never calls SmartMoving.

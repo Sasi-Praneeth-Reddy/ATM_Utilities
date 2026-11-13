@@ -17,8 +17,8 @@ const METRICS = [
   { key: 'monthsSupply', label: 'Months of supply', fmt: (v) => (v === null || v === undefined ? '—' : v.toFixed(2)), axis: (v) => v.toFixed(1), good: null },
 ];
 
-const LABEL = { fontSize: '11px', fontWeight: 700, color: '#4a5568', textTransform: 'uppercase', letterSpacing: '0.02em' };
-const INPUT = { padding: '6px 10px', borderRadius: '4px', border: '1px solid #cbd5e0', fontSize: '12px', backgroundColor: 'var(--bg-card, #ffffff)', color: 'var(--text-main, #2d3748)' };
+const LABEL = { fontSize: '11px', fontWeight: 700, color: 'var(--m-text-2)', textTransform: 'uppercase', letterSpacing: '0.02em' };
+const INPUT = { padding: '6px 10px', borderRadius: '4px', border: '1px solid var(--m-border-strong)', fontSize: '12px', backgroundColor: 'var(--bg-card, #ffffff)', color: 'var(--text-main, #2d3748)' };
 
 const monthKey = (b) => String(b.periodDate || '').slice(0, 7);
 const prevMonth = (k) => { const [y, m] = k.split('-').map(Number); return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`; };
@@ -164,7 +164,7 @@ export default function BenchmarksTab({ backendUrl }) {
   ], tableRows);
 
   const th = (key, label) => (
-    <th onClick={() => toggleSort(key)} style={{ padding: '12px 16px', fontWeight: 600, color: '#4a5568', cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none' }}>
+    <th onClick={() => toggleSort(key)} style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--m-text-2)', cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none' }}>
       {label}{sort.key === key ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
     </th>
   );
@@ -173,11 +173,11 @@ export default function BenchmarksTab({ backendUrl }) {
     <div>
       <div style={{ marginBottom: '16px' }}>
         <h1 style={{ margin: '0 0 4px 0', fontSize: '22px', fontWeight: 700 }}>Real Estate Market Benchmarks</h1>
-        <p style={{ margin: 0, color: '#718096', fontSize: '13px' }}>Monthly housing-market comparisons from NVAR and Bright MLS. Housing activity is a leading signal for moving and storage demand.</p>
+        <p style={{ margin: 0, color: 'var(--m-muted)', fontSize: '13px' }}>Monthly housing-market comparisons from NVAR and Bright MLS. Housing activity is a leading signal for moving and storage demand.</p>
       </div>
 
       {/* Filters */}
-      <div style={{ backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, #e2e8f0)', borderRadius: '8px', padding: '12px 16px', marginBottom: '18px', display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap' }}>
+      <div style={{ backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, var(--m-border))', borderRadius: '8px', padding: '12px 16px', marginBottom: '18px', display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap' }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           <span style={LABEL}>Source</span>
           <select value={source} onChange={(e) => setSource(e.target.value)} style={INPUT}>
@@ -215,18 +215,18 @@ export default function BenchmarksTab({ backendUrl }) {
           </select>
         </label>
         {filtersActive && (
-          <button onClick={clearFilters} style={{ marginLeft: 'auto', padding: '4px 12px', borderRadius: '4px', border: '1px solid #cbd5e0', backgroundColor: 'transparent', fontSize: '12px', cursor: 'pointer', color: '#4a5568' }}>✕ Clear filters</button>
+          <button onClick={clearFilters} style={{ marginLeft: 'auto', padding: '4px 12px', borderRadius: '4px', border: '1px solid var(--m-border-strong)', backgroundColor: 'transparent', fontSize: '12px', cursor: 'pointer', color: 'var(--m-text-2)' }}>✕ Clear filters</button>
         )}
       </div>
 
-      {error && <div style={{ backgroundColor: '#fff5f5', color: '#c53030', border: '1px solid #feb2b2', padding: '10px 14px', borderRadius: '6px', fontSize: '13px', marginBottom: '16px' }}>{error}</div>}
+      {error && <div style={{ backgroundColor: 'var(--tint-red-bg)', color: 'var(--m-red)', border: '1px solid var(--tint-red-border)', padding: '10px 14px', borderRadius: '6px', fontSize: '13px', marginBottom: '16px' }}>{error}</div>}
 
       {loading && !all.length ? <Empty>Loading benchmarks…</Empty> : !rows.length ? (
         <Empty>{all.length ? 'No months match these filters.' : 'No benchmark records found.'}</Empty>
       ) : (
         <>
           {latest && (
-            <div style={{ fontSize: '12px', color: '#718096', marginBottom: '8px' }}>
+            <div style={{ fontSize: '12px', color: 'var(--m-muted)', marginBottom: '8px' }}>
               Latest {primary} report: <b>{monthLabel(latest.month)}</b> · {latest.region}. Arrows compare with the same month last year and the month before.
             </div>
           )}
@@ -268,14 +268,14 @@ export default function BenchmarksTab({ backendUrl }) {
       )}
 
       {/* History table */}
-      <div style={{ backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, #e2e8f0)', borderRadius: '8px', overflowX: 'auto', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
-        <div style={{ padding: '14px 16px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div style={{ backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, var(--m-border))', borderRadius: '8px', overflowX: 'auto', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+        <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--m-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 700 }}>📋 Monthly history ({rows.length})</h3>
-          <button onClick={exportCsv} disabled={!rows.length} style={{ padding: '6px 12px', borderRadius: '4px', border: '1px solid #cbd5e0', backgroundColor: 'transparent', fontSize: '12px', fontWeight: 600, cursor: rows.length ? 'pointer' : 'not-allowed', color: '#2b6cb0' }}>⬇ Export CSV</button>
+          <button onClick={exportCsv} disabled={!rows.length} style={{ padding: '6px 12px', borderRadius: '4px', border: '1px solid var(--m-border-strong)', backgroundColor: 'transparent', fontSize: '12px', fontWeight: 600, cursor: rows.length ? 'pointer' : 'not-allowed', color: 'var(--m-blue)' }}>⬇ Export CSV</button>
         </div>
         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
           <thead>
-            <tr style={{ backgroundColor: 'var(--bg-subtle, #f7fafc)', borderBottom: '1px solid #e2e8f0' }}>
+            <tr style={{ backgroundColor: 'var(--bg-subtle, var(--m-surface-2))', borderBottom: '1px solid var(--m-border)' }}>
               {th('period', 'Period')}
               {th('source', 'Source')}
               {th('region', 'Region')}
@@ -290,21 +290,21 @@ export default function BenchmarksTab({ backendUrl }) {
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={10} style={{ padding: '30px', textAlign: 'center', color: '#718096' }}>Loading benchmarks…</td></tr>
+              <tr><td colSpan={10} style={{ padding: '30px', textAlign: 'center', color: 'var(--m-muted)' }}>Loading benchmarks…</td></tr>
             ) : tableRows.length === 0 ? (
-              <tr><td colSpan={10} style={{ padding: '30px', textAlign: 'center', color: '#718096' }}>No records match these filters.</td></tr>
+              <tr><td colSpan={10} style={{ padding: '30px', textAlign: 'center', color: 'var(--m-muted)' }}>No records match these filters.</td></tr>
             ) : tableRows.map((b) => (
-              <tr key={b.id || `${b.source}-${b.periodDate}`} style={{ borderBottom: '1px solid #e2e8f0' }}>
+              <tr key={b.id || `${b.source}-${b.periodDate}`} style={{ borderBottom: '1px solid var(--m-border)' }}>
                 <td style={{ padding: '12px 16px', fontWeight: 600 }}>{b.periodDate}</td>
                 <td style={{ padding: '12px 16px' }}>
                   <span style={{ padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 600, color: SOURCE_COLORS[b.source] || '#4a5568', backgroundColor: `${SOURCE_COLORS[b.source] || '#64748b'}1a` }}>{b.source}</span>
                 </td>
-                <td style={{ padding: '12px 16px', color: '#718096' }}>{b.region}</td>
+                <td style={{ padding: '12px 16px', color: 'var(--m-muted)' }}>{b.region}</td>
                 <td style={{ padding: '12px 16px', fontWeight: 600, color: '#38a169' }}>{b.closedSales ? num(b.closedSales) : '—'}</td>
                 <td style={{ padding: '12px 16px' }}>{b.newListings ? num(b.newListings) : '—'}</td>
                 <td style={{ padding: '12px 16px' }}>{b.activeListings ? num(b.activeListings) : '—'}</td>
                 <td style={{ padding: '12px 16px' }}>{b.medianDaysOnMarket || '—'}</td>
-                <td style={{ padding: '12px 16px', fontWeight: 600, color: '#2b6cb0' }}>{b.medianClosePrice ? money(b.medianClosePrice) : '—'}</td>
+                <td style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--m-blue)' }}>{b.medianClosePrice ? money(b.medianClosePrice) : '—'}</td>
                 <td style={{ padding: '12px 16px' }}>{b.closeToListRatio ? `${b.closeToListRatio}%` : '—'}</td>
                 <td style={{ padding: '12px 16px' }}>{b.monthsSupply !== null ? b.monthsSupply.toFixed(2) : '—'}</td>
               </tr>

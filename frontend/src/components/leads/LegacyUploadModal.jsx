@@ -121,18 +121,18 @@ export default function LegacyUploadModal({ backendUrl, onClose, onImported }) {
           <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 600 }}>
             Import Historical Legacy Customers
           </h2>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#718096' }}>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: 'var(--m-muted)' }}>
             ✕
           </button>
         </div>
 
-        <p style={{ fontSize: '13px', color: '#718096', margin: '0 0 16px 0', lineHeight: 1.5 }}>
+        <p style={{ fontSize: '13px', color: 'var(--m-muted)', margin: '0 0 16px 0', lineHeight: 1.5 }}>
           Upload past customer move records from a CSV spreadsheet. The system will index their home addresses and automatically run address matching against all USA Home Listings.
         </p>
 
         {error && (
           <div style={{
-            backgroundColor: '#fff5f5', color: '#c53030', border: '1px solid #feb2b2',
+            backgroundColor: 'var(--tint-red-bg)', color: 'var(--m-red)', border: '1px solid var(--tint-red-border)',
             padding: '10px 14px', borderRadius: '4px', fontSize: '13px', marginBottom: '14px'
           }}>
             {error}
@@ -141,7 +141,7 @@ export default function LegacyUploadModal({ backendUrl, onClose, onImported }) {
 
         {result ? (
           <div style={{
-            backgroundColor: '#f0fff4', color: '#276749', border: '1px solid #9ae6b4',
+            backgroundColor: 'var(--tint-green-bg)', color: 'var(--tint-green-text)', border: '1px solid #9ae6b4',
             padding: '16px', borderRadius: '6px', textAlign: 'center', fontWeight: 600
           }}>
             ✓ Successfully imported {result.imported} legacy customer records! Reconciling address matches...
@@ -149,7 +149,7 @@ export default function LegacyUploadModal({ backendUrl, onClose, onImported }) {
         ) : (
           <div>
             <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#4a5568', marginBottom: '6px' }}>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--m-text-2)', marginBottom: '6px' }}>
                 Select CSV File
               </label>
               <input
@@ -161,7 +161,7 @@ export default function LegacyUploadModal({ backendUrl, onClose, onImported }) {
             </div>
 
             <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#4a5568', marginBottom: '6px' }}>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--m-text-2)', marginBottom: '6px' }}>
                 Or Paste CSV Content
               </label>
               <textarea
@@ -171,7 +171,7 @@ export default function LegacyUploadModal({ backendUrl, onClose, onImported }) {
                 placeholder="Name,Email,Phone,Moving To,Moving From,Service Date&#10;John Smith,john@example.com,703-555-0100,123 Main St Fairfax VA,456 Oak Rd Reston VA,2024-06-15"
                 style={{
                   width: '100%', padding: '10px 12px', fontSize: '12px', borderRadius: '4px',
-                  border: '1px solid var(--border-color, #cbd5e0)', boxSizing: 'border-box',
+                  border: '1px solid var(--border-color, var(--m-border-strong))', boxSizing: 'border-box',
                   fontFamily: 'monospace', lineHeight: 1.4, resize: 'vertical'
                 }}
               />
@@ -183,7 +183,7 @@ export default function LegacyUploadModal({ backendUrl, onClose, onImported }) {
                 onClick={onClose}
                 disabled={uploading}
                 style={{
-                  padding: '8px 16px', borderRadius: '4px', border: '1px solid #cbd5e0',
+                  padding: '8px 16px', borderRadius: '4px', border: '1px solid var(--m-border-strong)',
                   background: 'none', cursor: 'pointer', fontSize: '14px'
                 }}
               >

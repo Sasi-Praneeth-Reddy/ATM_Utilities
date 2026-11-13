@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import logo from '../assets/atm-logo.png';
+import CreditMark from './CreditMark';
+import { APP_VERSION, SUPPORT_EMAIL, CREDIT } from '../version';
 
 function Logo() {
   return <img className="login-logo" src={logo} alt="Around Town Movers - Moving & Storage" />;
@@ -171,6 +173,11 @@ export default function LoginScreen({ onLogin, onForgotPassword, onResetPassword
             </div>
           </div>
         )}
+      </div>
+      <div className="login-version">
+        ATM Hub v{APP_VERSION}
+        <CreditMark />
+        <div className="credit-line">{CREDIT}. Something buggy? <a href={`mailto:${SUPPORT_EMAIL}?subject=ATM%20Hub%20issue`}>{SUPPORT_EMAIL}</a></div>
       </div>
       </main>
     </div>

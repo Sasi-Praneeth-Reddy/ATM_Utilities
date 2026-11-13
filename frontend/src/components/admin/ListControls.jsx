@@ -1,12 +1,19 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 /**
  * Search + fixed-size paging for the Trucks & Drivers lists (added 2026-09-30, user request:
  * search bar per list, 10 per page). `matchFn(item, lowercasedQuery)` decides what a search hits.
+ *
+ * `externalQuery` (optional): when the page owns the search text itself (Trucks & Drivers drives both
+ * of its lists from the title-bar search box), pass it here and the hook uses it instead of its own
+ * state, resetting to page 1 whenever it changes. Left undefined, the list keeps its own box.
  */
-export function usePagedSearch(items, matchFn, pageSize = 10) {
-  const [query, setQuery] = useState('');
+export function usePagedSearch(items, matchFn, pageSize = 10, externalQuery) {
+  const controlled = externalQuery !== undefined;
+  const [ownQuery, setQuery] = useState('');
+  const query = controlled ? externalQuery : ownQuery;
   const [page, setPage] = useState(1);
+  useEffect(() => { if (controlled) setPage(1); }, [controlled, externalQuery]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();

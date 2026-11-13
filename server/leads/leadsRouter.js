@@ -70,8 +70,10 @@ async function handleLeadsRequest(req, res, url, currentUser) {
   // Auth requirement: Lead intelligence is restricted to logged-in admin and dispatcher users,
   // OR automated scrapers authenticated via x-api-key header matching SECRET_WEBHOOK_KEY.
   const hasValidApiKey = hasValidScraperKey(req);
-  const isAuthorizedUser = Boolean(currentUser && ['admin', 'dispatcher'].includes(currentUser.role));
-  const isAdmin = Boolean(currentUser && currentUser.role === 'admin');
+  // 'owner' and 'developer' are above admin, so they count as admin here.
+  const effectiveRole = currentUser && ['owner', 'developer'].includes(currentUser.role) ? 'admin' : (currentUser && currentUser.role);
+  const isAuthorizedUser = Boolean(currentUser && ['admin', 'dispatcher'].includes(effectiveRole));
+  const isAdmin = Boolean(currentUser && effectiveRole === 'admin');
 
   if (p === '/api/leads/ingest' || p === '/api/leads/analytics/refresh') {
     if (!hasValidApiKey && !isAuthorizedUser) {

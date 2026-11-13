@@ -1969,6 +1969,17 @@ header.topbar .page-search .list-search-clear{right:8px;}
 .tk-more{display:block;margin-top:6px;background:none;border:none;padding:2px 0;color:var(--tint-blue-text);font-weight:700;font-size:12px;cursor:pointer;text-decoration:underline;position:relative;z-index:1;}
 .tk-sm.tk-clamp .tk-more{position:absolute;bottom:2px;left:10px;}
 .tk-card-head h3{overflow-wrap:anywhere;}
+/* SmartMoving notes split by type on a Dispatch job card (TaskingDispatch.jsx, NOTE_TYPES). */
+.tk-note{padding:6px 0;border-top:1px dashed var(--tint-blue-border);}
+.tk-note:first-of-type{border-top:none;padding-top:2px;}
+.tk-note-tags{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:3px;}
+.tk-note-tag{border-radius:4px;padding:1px 7px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;}
+.tk-note-text{color:var(--text);}
+.tk-nt-internal{background:var(--tint-red-bg);color:var(--tint-red-text);}
+.tk-nt-customer{background:var(--tint-green-bg);color:var(--tint-green-text);}
+.tk-nt-crew{background:var(--tint-amber-bg);color:var(--tint-amber-text);}
+.tk-nt-feedback{background:var(--tint-orange-bg);color:var(--tint-orange-text);}
+.tk-nt-dispatch{background:var(--card);color:var(--tint-blue-text);border:1px solid var(--tint-blue-border);}
 /* "Upcoming jobs not secured" list (components/tasking/NotSecuredList.jsx): filter chips, own scroll area, pager. */
 .tk-ns-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;}
 .tk-ns-filters{display:flex;gap:6px;flex-wrap:wrap;}

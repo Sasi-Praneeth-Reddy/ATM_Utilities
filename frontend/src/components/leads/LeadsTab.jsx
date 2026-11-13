@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
+import { usePageSearch } from '../../hooks/usePageSearch';
 import {
   fetchLeadsSummary,
   fetchLeadsAnalytics,
@@ -315,6 +316,12 @@ export default function LeadsTab({ backendUrl, role }) {
   const [selectedCounty, setSelectedCounty] = useState('all');
   const [priceTier, setPriceTier] = useState('all'); // 'all' | 'under500' | '500to800' | '800to1200' | '1200plus'
   const [listingSearch, setListingSearch] = useState('');
+  // Title-bar search box: on the Map/Listings explorer and the Visualizations it filters listings (the
+  // second box that used to sit in the filter bar is gone); on Matched customers it filters those.
+  usePageSearch({
+    id: 'leads-listings', enabled: activeSubTab === 'explorer' || activeSubTab === 'analytics',
+    placeholder: 'Search listings: address, homeowner, realtor, city, ZIP…', value: listingSearch, onChange: setListingSearch,
+  });
   const [selectedMonth, setSelectedMonth] = useState('all'); // 'all' | 'YYYY-MM' (by listing date)
 
   // Months offered in the Month filter: every month that has listings in the database (with counts).
@@ -342,6 +349,11 @@ export default function LeadsTab({ backendUrl, role }) {
   const [matches, setMatches] = useState([]);
   const [matchStatusFilter, setMatchStatusFilter] = useState('all');
   const [matchFilters, setMatchFilters] = useState(EMPTY_MATCH_FILTERS);
+  usePageSearch({
+    id: 'leads-matches', enabled: activeSubTab === 'matches',
+    placeholder: 'Search matched customers: name, address, email, phone, agent…',
+    value: matchFilters.search, onChange: (v) => setMatchFilters((f) => ({ ...f, search: v })),
+  });
   const [selectedMatchForOutreach, setSelectedMatchForOutreach] = useState(null);
 
   // Listings State
@@ -698,7 +710,7 @@ export default function LeadsTab({ backendUrl, role }) {
                 ${c.count.toLocaleString()} Pre-Mover Leads
               </div>
 
-              <div style="background-color: #f7fafc; padding: 6px 10px; border-radius: 6px; border: 1px solid #edf2f7; margin-bottom: 8px; font-size: 11px;">
+              <div style="background-color: var(--m-surface-2); padding: 6px 10px; border-radius: 6px; border: 1px solid var(--m-surface-3); margin-bottom: 8px; font-size: 11px;">
                 <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
                   <span style="color: #10b981; font-weight: 600;">🟢 Active For Sale:</span>
                   <strong>${(c.for_sale || Math.round(c.count * 0.68)).toLocaleString()}</strong>
@@ -795,14 +807,14 @@ export default function LeadsTab({ backendUrl, role }) {
                 📍 ${lead.city || ''}, ${lead.state || 'VA'} ${lead.zipCode || ''} • <strong>${lead.county || 'NOVA'}</strong>
               </div>
 
-              <div style="background-color: #f7fafc; padding: 6px 8px; border-radius: 4px; border: 1px solid #edf2f7; display: flex; gap: 10px; font-size: 11px; color: #4a5568; margin-bottom: 6px;">
+              <div style="background-color: var(--m-surface-2); padding: 6px 8px; border-radius: 4px; border: 1px solid var(--m-surface-3); display: flex; gap: 10px; font-size: 11px; color: #4a5568; margin-bottom: 6px;">
                 <span>🛏️ <strong>${lead.bedrooms || '—'}</strong> beds</span>
                 <span>🚿 <strong>${lead.bathrooms || '—'}</strong> baths</span>
                 <span>📐 <strong>${lead.sqft ? `${Number(lead.sqft).toLocaleString()} sqft` : '—'}</strong></span>
               </div>
 
               ${lead.realtorName ? `
-                <div style="padding-top: 6px; border-top: 1px solid #e2e8f0; font-size: 11px; color: #2d3748;">
+                <div style="padding-top: 6px; border-top: 1px solid var(--m-border); font-size: 11px; color: #2d3748;">
                   <strong>Listing Agent:</strong> ${lead.realtorName}
                   ${lead.realtorPhone ? ` • <a href="tel:${lead.realtorPhone}" style="color: #3182ce; font-weight: 600; text-decoration: none;">📞 ${lead.realtorPhone}</a>` : ''}
                 </div>
@@ -968,24 +980,24 @@ export default function LeadsTab({ backendUrl, role }) {
     <div style={{
       display: 'flex', justifyContent: 'space-between', alignItems: 'center',
       flexWrap: 'wrap', gap: '12px', padding: '12px 16px',
-      backgroundColor: 'var(--bg-subtle, #f7fafc)', borderBottom: '1px solid #e2e8f0',
-      borderTop: '1px solid #e2e8f0'
+      backgroundColor: 'var(--bg-subtle, var(--m-surface-2))', borderBottom: '1px solid var(--m-border)',
+      borderTop: '1px solid var(--m-border)'
     }}>
       {/* Counter Label */}
-      <div style={{ fontSize: '13px', fontWeight: 600, color: '#4a5568' }}>
-        Showing <span style={{ color: '#2b6cb0', fontWeight: 700 }}>{startListingIdx.toLocaleString()}</span> to{' '}
-        <span style={{ color: '#2b6cb0', fontWeight: 700 }}>{endListingIdx.toLocaleString()}</span> of{' '}
-        <span style={{ color: '#2d3748', fontWeight: 800 }}>{listingsTotal.toLocaleString()}</span> listings
+      <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--m-text-2)' }}>
+        Showing <span style={{ color: 'var(--m-blue)', fontWeight: 700 }}>{startListingIdx.toLocaleString()}</span> to{' '}
+        <span style={{ color: 'var(--m-blue)', fontWeight: 700 }}>{endListingIdx.toLocaleString()}</span> of{' '}
+        <span style={{ color: 'var(--m-text)', fontWeight: 800 }}>{listingsTotal.toLocaleString()}</span> listings
       </div>
 
       {/* Rows per page dropdown */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <span style={{ fontSize: '12px', fontWeight: 600, color: '#4a5568' }}>Rows per page:</span>
+        <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--m-text-2)' }}>Rows per page:</span>
         <select
           value={pageSize}
           onChange={(e) => setPageSize(Number(e.target.value))}
           style={{
-            padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e0',
+            padding: '4px 8px', borderRadius: '4px', border: '1px solid var(--m-border-strong)',
             backgroundColor: 'var(--bg-card, #ffffff)', fontSize: '12px', fontWeight: 600, cursor: 'pointer'
           }}
         >
@@ -1002,7 +1014,7 @@ export default function LeadsTab({ backendUrl, role }) {
           disabled={currentPage === 1 || loadingListings}
           title="First Page"
           style={{
-            padding: '5px 10px', borderRadius: '4px', border: '1px solid #cbd5e0',
+            padding: '5px 10px', borderRadius: '4px', border: '1px solid var(--m-border-strong)',
             backgroundColor: 'var(--bg-card, #ffffff)', color: currentPage === 1 ? '#a0aec0' : '#2d3748',
             fontSize: '12px', fontWeight: 600, cursor: currentPage === 1 ? 'not-allowed' : 'pointer'
           }}
@@ -1014,7 +1026,7 @@ export default function LeadsTab({ backendUrl, role }) {
           disabled={currentPage === 1 || loadingListings}
           title="Previous Page"
           style={{
-            padding: '5px 12px', borderRadius: '4px', border: '1px solid #cbd5e0',
+            padding: '5px 12px', borderRadius: '4px', border: '1px solid var(--m-border-strong)',
             backgroundColor: 'var(--bg-card, #ffffff)', color: currentPage === 1 ? '#a0aec0' : '#2d3748',
             fontSize: '12px', fontWeight: 600, cursor: currentPage === 1 ? 'not-allowed' : 'pointer'
           }}
@@ -1022,7 +1034,7 @@ export default function LeadsTab({ backendUrl, role }) {
           ◀ Prev
         </button>
 
-        <span style={{ fontSize: '13px', fontWeight: 700, margin: '0 6px', color: '#2d3748' }}>
+        <span style={{ fontSize: '13px', fontWeight: 700, margin: '0 6px', color: 'var(--m-text)' }}>
           Page {currentPage} of {totalPages}
         </span>
 
@@ -1031,7 +1043,7 @@ export default function LeadsTab({ backendUrl, role }) {
           disabled={currentPage === totalPages || loadingListings}
           title="Next Page"
           style={{
-            padding: '5px 12px', borderRadius: '4px', border: '1px solid #cbd5e0',
+            padding: '5px 12px', borderRadius: '4px', border: '1px solid var(--m-border-strong)',
             backgroundColor: 'var(--bg-card, #ffffff)', color: currentPage === totalPages ? '#a0aec0' : '#2d3748',
             fontSize: '12px', fontWeight: 600, cursor: currentPage === totalPages ? 'not-allowed' : 'pointer'
           }}
@@ -1043,7 +1055,7 @@ export default function LeadsTab({ backendUrl, role }) {
           disabled={currentPage === totalPages || loadingListings}
           title="Last Page"
           style={{
-            padding: '5px 10px', borderRadius: '4px', border: '1px solid #cbd5e0',
+            padding: '5px 10px', borderRadius: '4px', border: '1px solid var(--m-border-strong)',
             backgroundColor: 'var(--bg-card, #ffffff)', color: currentPage === totalPages ? '#a0aec0' : '#2d3748',
             fontSize: '12px', fontWeight: 600, cursor: currentPage === totalPages ? 'not-allowed' : 'pointer'
           }}
@@ -1060,11 +1072,11 @@ export default function LeadsTab({ backendUrl, role }) {
             placeholder="#"
             value={jumpPageInput}
             onChange={(e) => setJumpPageInput(e.target.value)}
-            style={{ width: '45px', padding: '4px 6px', borderRadius: '4px', border: '1px solid #cbd5e0', fontSize: '12px', textAlign: 'center' }}
+            style={{ width: '45px', padding: '4px 6px', borderRadius: '4px', border: '1px solid var(--m-border-strong)', fontSize: '12px', textAlign: 'center' }}
           />
           <button
             type="submit"
-            style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e0', backgroundColor: '#edf2f7', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}
+            style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid var(--m-border-strong)', backgroundColor: 'var(--m-surface-3)', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}
           >
             Go
           </button>
@@ -1081,7 +1093,7 @@ export default function LeadsTab({ backendUrl, role }) {
           <h1 style={{ margin: '0 0 4px 0', fontSize: '22px', fontWeight: 700 }}>
             Pre-Mover Leads & Housing Market Intelligence
           </h1>
-          <p style={{ margin: 0, color: '#718096', fontSize: '13px' }}>
+          <p style={{ margin: 0, color: 'var(--m-muted)', fontSize: '13px' }}>
             USA Home Listings pre-mover leads, property mapping, and automated customer match detection.
           </p>
         </div>
@@ -1091,7 +1103,7 @@ export default function LeadsTab({ backendUrl, role }) {
           <button
             onClick={() => setShowLegacyUpload(true)}
             style={{
-              padding: '8px 14px', borderRadius: '6px', border: '1px solid #cbd5e0',
+              padding: '8px 14px', borderRadius: '6px', border: '1px solid var(--m-border-strong)',
               backgroundColor: 'var(--bg-card, #ffffff)', color: 'var(--text-main, #2d3748)',
               fontSize: '13px', fontWeight: 600, cursor: 'pointer'
             }}
@@ -1115,9 +1127,9 @@ export default function LeadsTab({ backendUrl, role }) {
       </div>
 
       {filtersActive && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px', fontSize: '12px', color: '#2c5282', backgroundColor: '#ebf8ff', border: '1px solid #bee3f8', borderRadius: '6px', padding: '6px 12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px', fontSize: '12px', color: 'var(--tint-blue-text)', backgroundColor: 'var(--tint-blue-bg)', border: '1px solid var(--tint-blue-border)', borderRadius: '6px', padding: '6px 12px' }}>
           <span>🔎 These numbers reflect your current filters{filteredStats ? '' : ' (updating…)'}.</span>
-          <button type="button" onClick={clearAllFilters} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: '#2b6cb0', fontWeight: 700, cursor: 'pointer', fontSize: '12px', textDecoration: 'underline' }}>Clear filters</button>
+          <button type="button" onClick={clearAllFilters} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--m-blue)', fontWeight: 700, cursor: 'pointer', fontSize: '12px', textDecoration: 'underline' }}>Clear filters</button>
         </div>
       )}
 
@@ -1125,58 +1137,58 @@ export default function LeadsTab({ backendUrl, role }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '14px', marginBottom: '22px' }}>
         {/* Total Pre-Movers */}
         <div style={{
-          backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, #e2e8f0)',
+          backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, var(--m-border))',
           borderTop: '4px solid #2196f3', borderRadius: '8px', padding: '16px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
         }}>
-          <div style={{ fontSize: '11px', fontWeight: 700, color: '#718096', textTransform: 'uppercase' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--m-muted)', textTransform: 'uppercase' }}>
             Total Pre-Mover Leads
           </div>
-          <div style={{ fontSize: '28px', fontWeight: 700, color: '#2b6cb0', marginTop: '4px' }}>
+          <div style={{ fontSize: '28px', fontWeight: 700, color: 'var(--m-blue)', marginTop: '4px' }}>
             <CountUp value={kpiTotal} />
           </div>
-          <div style={{ fontSize: '12px', color: '#718096', marginTop: '2px' }}>
+          <div style={{ fontSize: '12px', color: 'var(--m-muted)', marginTop: '2px' }}>
             {activeCount.toLocaleString()} active for sale
           </div>
         </div>
 
         {/* Under Contract (Prime Target) */}
         <div style={{
-          backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, #e2e8f0)',
+          backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, var(--m-border))',
           borderTop: '4px solid #f97316', borderRadius: '8px', padding: '16px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
         }}>
-          <div style={{ fontSize: '11px', fontWeight: 700, color: '#718096', textTransform: 'uppercase' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--m-muted)', textTransform: 'uppercase' }}>
             Under Contract (Hot Leads)
           </div>
           <div style={{ fontSize: '28px', fontWeight: 700, color: '#f97316', marginTop: '4px' }}>
             <CountUp value={underContractCount} />
           </div>
-          <div style={{ fontSize: '12px', color: '#718096', marginTop: '2px' }}>
+          <div style={{ fontSize: '12px', color: 'var(--m-muted)', marginTop: '2px' }}>
             Homes under contract moving soon
           </div>
         </div>
 
         {/* Avg List Price */}
         <div style={{
-          backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, #e2e8f0)',
+          backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, var(--m-border))',
           borderTop: '4px solid #9c27b0', borderRadius: '8px', padding: '16px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
         }}>
-          <div style={{ fontSize: '11px', fontWeight: 700, color: '#718096', textTransform: 'uppercase' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--m-muted)', textTransform: 'uppercase' }}>
             Avg List Price
           </div>
-          <div style={{ fontSize: '28px', fontWeight: 700, color: '#2d3748', marginTop: '4px' }}>
+          <div style={{ fontSize: '28px', fontWeight: 700, color: 'var(--m-text)', marginTop: '4px' }}>
             ${kpiAvg.toLocaleString()}
           </div>
-          <div style={{ fontSize: '12px', color: '#718096', marginTop: '2px' }}>
+          <div style={{ fontSize: '12px', color: 'var(--m-muted)', marginTop: '2px' }}>
             Median: ${kpiMedian.toLocaleString()}
           </div>
         </div>
 
         {/* VIP Customer Matches */}
         <div style={{
-          backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, #e2e8f0)',
+          backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, var(--m-border))',
           borderTop: '4px solid #e53e3e', borderRadius: '8px', padding: '16px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
         }}>
-          <div style={{ fontSize: '11px', fontWeight: 700, color: '#718096', textTransform: 'uppercase' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--m-muted)', textTransform: 'uppercase' }}>
             VIP Customer Matches
           </div>
           <div style={{ fontSize: '28px', fontWeight: 700, color: kpiPending > 0 ? '#e53e3e' : '#38a169', marginTop: '4px' }}>
@@ -1190,7 +1202,7 @@ export default function LeadsTab({ backendUrl, role }) {
 
       {/* Main View Switcher Tabs */}
       <div style={{
-        display: 'flex', borderBottom: '2px solid var(--border-color, #e2e8f0)',
+        display: 'flex', borderBottom: '2px solid var(--border-color, var(--m-border))',
         marginBottom: '18px', gap: '20px', flexWrap: 'wrap'
       }}>
         <button
@@ -1271,16 +1283,16 @@ export default function LeadsTab({ backendUrl, role }) {
       {(activeSubTab === 'explorer' || activeSubTab === 'analytics') && (
         <div style={{
           display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap',
-          backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, #e2e8f0)',
+          backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, var(--m-border))',
           borderRadius: '8px', padding: '12px 16px', marginBottom: '20px'
         }}>
           {/* Status Filter */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span style={{ fontSize: '11px', fontWeight: 700, color: '#4a5568', textTransform: 'uppercase' }}>Status:</span>
+            <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--m-text-2)', textTransform: 'uppercase' }}>Status:</span>
             <select
               value={selectedStatus}
               onChange={(e) => setSelectedStatus(e.target.value)}
-              style={{ padding: '6px 10px', borderRadius: '4px', border: '1px solid #cbd5e0', fontSize: '12px', cursor: 'pointer' }}
+              style={{ padding: '6px 10px', borderRadius: '4px', border: '1px solid var(--m-border-strong)', fontSize: '12px', cursor: 'pointer' }}
             >
               <option value="all">All Statuses</option>
               <option value="for_sale">🟢 For Sale (Active)</option>
@@ -1292,11 +1304,11 @@ export default function LeadsTab({ backendUrl, role }) {
 
           {/* State Filter */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span style={{ fontSize: '11px', fontWeight: 700, color: '#4a5568', textTransform: 'uppercase' }}>State:</span>
+            <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--m-text-2)', textTransform: 'uppercase' }}>State:</span>
             <select
               value={selectedState}
               onChange={(e) => handleStateChange(e.target.value)}
-              style={{ padding: '6px 10px', borderRadius: '4px', border: '1px solid #cbd5e0', fontSize: '12px', cursor: 'pointer', fontWeight: 600 }}
+              style={{ padding: '6px 10px', borderRadius: '4px', border: '1px solid var(--m-border-strong)', fontSize: '12px', cursor: 'pointer', fontWeight: 600 }}
             >
               <option value="all">All States</option>
               <option value="VA">Virginia (VA)</option>
@@ -1308,14 +1320,14 @@ export default function LeadsTab({ backendUrl, role }) {
 
           {/* County Filter (dynamically filtered based on State) */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span style={{ fontSize: '11px', fontWeight: 700, color: '#4a5568', textTransform: 'uppercase' }}>County:</span>
+            <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--m-text-2)', textTransform: 'uppercase' }}>County:</span>
             <select
               value={selectedCounty}
               onChange={(e) => {
                 setSelectedCounty(e.target.value);
                 setCurrentPage(1);
               }}
-              style={{ padding: '6px 10px', borderRadius: '4px', border: '1px solid #cbd5e0', fontSize: '12px', cursor: 'pointer', fontWeight: 600 }}
+              style={{ padding: '6px 10px', borderRadius: '4px', border: '1px solid var(--m-border-strong)', fontSize: '12px', cursor: 'pointer', fontWeight: 600 }}
             >
               <option value="all">
                 {selectedState === 'all'
@@ -1330,11 +1342,11 @@ export default function LeadsTab({ backendUrl, role }) {
 
           {/* Price Range Filter */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span style={{ fontSize: '11px', fontWeight: 700, color: '#4a5568', textTransform: 'uppercase' }}>Price:</span>
+            <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--m-text-2)', textTransform: 'uppercase' }}>Price:</span>
             <select
               value={priceTier}
               onChange={(e) => setPriceTier(e.target.value)}
-              style={{ padding: '6px 10px', borderRadius: '4px', border: '1px solid #cbd5e0', fontSize: '12px', cursor: 'pointer' }}
+              style={{ padding: '6px 10px', borderRadius: '4px', border: '1px solid var(--m-border-strong)', fontSize: '12px', cursor: 'pointer' }}
             >
               <option value="all">All Prices</option>
               <option value="under500">Under $500k</option>
@@ -1346,11 +1358,11 @@ export default function LeadsTab({ backendUrl, role }) {
 
           {/* Month Filter (by listing date) - Explorer only; the Visualizations have their own monthly chart */}
           {activeSubTab === 'explorer' && <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span style={{ fontSize: '11px', fontWeight: 700, color: '#4a5568', textTransform: 'uppercase' }}>Month:</span>
+            <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--m-text-2)', textTransform: 'uppercase' }}>Month:</span>
             <select
               value={selectedMonth}
               onChange={(e) => setSelectedMonth(e.target.value)}
-              style={{ padding: '6px 10px', borderRadius: '4px', border: '1px solid #cbd5e0', fontSize: '12px', cursor: 'pointer' }}
+              style={{ padding: '6px 10px', borderRadius: '4px', border: '1px solid var(--m-border-strong)', fontSize: '12px', cursor: 'pointer' }}
             >
               <option value="all">All Months</option>
               {monthOptions.map((m) => (
@@ -1359,19 +1371,6 @@ export default function LeadsTab({ backendUrl, role }) {
             </select>
           </div>}
 
-          {/* Search Box */}
-          <div style={{ flex: 1, minWidth: '220px' }}>
-            <input
-              type="text"
-              placeholder="🔍 Search address, homeowner, realtor, city, or ZIP..."
-              value={listingSearch}
-              onChange={(e) => setListingSearch(e.target.value)}
-              style={{
-                width: '100%', padding: '6px 12px', borderRadius: '4px',
-                border: '1px solid #cbd5e0', fontSize: '12px', boxSizing: 'border-box'
-              }}
-            />
-          </div>
         </div>
       )}
 
@@ -1382,7 +1381,7 @@ export default function LeadsTab({ backendUrl, role }) {
           <div id="property-map-section" style={{ display: 'grid', gridTemplateColumns: '1.25fr 0.75fr', gap: '20px', marginBottom: '24px' }}>
             {/* Interactive Leaflet Property Map */}
             <div style={{
-              backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, #e2e8f0)',
+              backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, var(--m-border))',
               borderRadius: '8px', padding: '16px', display: 'flex', flexDirection: 'column',
               position: 'relative', zIndex: 1, isolation: 'isolate', overflow: 'hidden'
             }}>
@@ -1391,7 +1390,7 @@ export default function LeadsTab({ backendUrl, role }) {
                   <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 700 }}>
                     {mapViewMode === 'counties' ? '🗺️ Counties we collect from' : mapViewMode === 'bubbles' ? '🏙️ City Pre-Mover Market Density' : '📍 Property Pins View'}
                   </h3>
-                  <span style={{ fontSize: '12px', color: '#718096' }}>
+                  <span style={{ fontSize: '12px', color: 'var(--m-muted)' }}>
                     {mapViewMode === 'counties'
                       ? 'Each county is shaded by its number of listings. Click a county to see its listings.'
                       : mapViewMode === 'bubbles'
@@ -1402,7 +1401,7 @@ export default function LeadsTab({ backendUrl, role }) {
 
                 {/* Map Display Mode Switcher */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <div style={{ display: 'flex', backgroundColor: '#edf2f7', padding: '2px', borderRadius: '6px' }}>
+                  <div style={{ display: 'flex', backgroundColor: 'var(--m-surface-3)', padding: '2px', borderRadius: '6px' }}>
                     <button
                       onClick={() => setMapViewMode('counties')}
                       style={{
@@ -1454,7 +1453,7 @@ export default function LeadsTab({ backendUrl, role }) {
                 ref={mapContainerRef}
                 style={{
                   width: '100%', height: '460px', borderRadius: '6px',
-                  border: '1px solid #e2e8f0', backgroundColor: '#edf2f7',
+                  border: '1px solid var(--m-border)', backgroundColor: 'var(--m-surface-3)',
                   position: 'relative', zIndex: 1, isolation: 'isolate'
                 }}
               />
@@ -1465,13 +1464,13 @@ export default function LeadsTab({ backendUrl, role }) {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
               {/* Listings by County Bar Chart */}
               <div style={{
-                backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, #e2e8f0)',
+                backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, var(--m-border))',
                 borderRadius: '8px', padding: '16px'
               }}>
                 <h3 style={{ margin: '0 0 4px 0', fontSize: '15px', fontWeight: 700 }}>
                   📊 Top Counties Activity
                 </h3>
-                <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: '#718096' }}>
+                <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: 'var(--m-muted)' }}>
                   Pre-mover listing distribution across NOVA, DC & MD
                 </p>
 
@@ -1489,9 +1488,9 @@ export default function LeadsTab({ backendUrl, role }) {
                       <div key={c.county}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '2px' }}>
                           <span style={{ fontWeight: 600 }}>{c.county}</span>
-                          <span style={{ fontWeight: 700, color: '#2b6cb0' }}>{c.count.toLocaleString()} leads</span>
+                          <span style={{ fontWeight: 700, color: 'var(--m-blue)' }}>{c.count.toLocaleString()} leads</span>
                         </div>
-                        <div style={{ width: '100%', height: '8px', backgroundColor: '#edf2f7', borderRadius: '4px', overflow: 'hidden' }}>
+                        <div style={{ width: '100%', height: '8px', backgroundColor: 'var(--m-surface-3)', borderRadius: '4px', overflow: 'hidden' }}>
                           <div style={{ width: `${widthPct}%`, height: '100%', backgroundColor: i === 0 ? '#2b6cb0' : '#4299e1', borderRadius: '4px' }} />
                         </div>
                       </div>
@@ -1502,7 +1501,7 @@ export default function LeadsTab({ backendUrl, role }) {
 
               {/* Status Breakdown */}
               <div style={{
-                backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, #e2e8f0)',
+                backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, var(--m-border))',
                 borderRadius: '8px', padding: '16px'
               }}>
                 <h3 style={{ margin: '0 0 4px 0', fontSize: '15px', fontWeight: 700 }}>
@@ -1513,13 +1512,13 @@ export default function LeadsTab({ backendUrl, role }) {
                     { label: 'Active (For Sale)', count: activeCount, color: '#10b981', pct: 68 },
                     { label: 'Under Contract (Pre-Movers)', count: underContractCount, color: '#f97316', pct: 22 },
                     { label: 'Pending & Contingent', count: analytics.statusCounts?.pending || 1540, color: '#3b82f6', pct: 6 },
-                    { label: 'Closed / Sold', count: analytics.statusCounts?.closed || 1111, color: '#64748b', pct: 4 },
+                    { label: 'Closed / Sold', count: analytics.statusCounts?.closed || 1111, color: 'var(--m-muted)', pct: 4 },
                   ].map((s) => (
                     <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <span style={{ width: '10px', height: '10px', borderRadius: '2px', backgroundColor: s.color }} />
                       <span style={{ fontSize: '12px', fontWeight: 500, flex: 1 }}>{s.label}</span>
-                      <span style={{ fontSize: '12px', fontWeight: 700, color: '#2d3748' }}>{s.count.toLocaleString()}</span>
-                      <span style={{ fontSize: '11px', color: '#718096', width: '35px', textAlign: 'right' }}>{s.pct}%</span>
+                      <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--m-text)' }}>{s.count.toLocaleString()}</span>
+                      <span style={{ fontSize: '11px', color: 'var(--m-muted)', width: '35px', textAlign: 'right' }}>{s.pct}%</span>
                     </div>
                   ))}
                 </div>
@@ -1529,7 +1528,7 @@ export default function LeadsTab({ backendUrl, role }) {
 
           {/* Raw Pre-Mover Listings Table with Full Pagination */}
           <div id="listings-table-container" style={{
-            backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, #e2e8f0)',
+            backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, var(--m-border))',
             borderRadius: '8px', overflowX: 'auto', boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
           }}>
             <div style={{ padding: '14px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1537,7 +1536,7 @@ export default function LeadsTab({ backendUrl, role }) {
                 <h3 style={{ margin: '0 0 2px 0', fontSize: '16px', fontWeight: 700 }}>
                   📋 USA Home Listings Explorer ({listingsTotal.toLocaleString()} Total Leads)
                 </h3>
-                <span style={{ fontSize: '12px', color: '#718096' }}>
+                <span style={{ fontSize: '12px', color: 'var(--m-muted)' }}>
                   Browse through all pre-mover real estate listings with full pagination controls
                 </span>
               </div>
@@ -1548,27 +1547,27 @@ export default function LeadsTab({ backendUrl, role }) {
 
             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
               <thead>
-                <tr style={{ backgroundColor: 'var(--bg-subtle, #f7fafc)', borderBottom: '1px solid #e2e8f0' }}>
-                  <th style={{ padding: '12px 16px', fontWeight: 600, color: '#4a5568' }}>Status</th>
-                  <th style={{ padding: '12px 16px', fontWeight: 600, color: '#4a5568' }}>Property Address</th>
-                  <th style={{ padding: '12px 16px', fontWeight: 600, color: '#4a5568' }}>List Price</th>
-                  <th style={{ padding: '12px 16px', fontWeight: 600, color: '#4a5568' }}>Beds / Baths / SqFt</th>
-                  <th style={{ padding: '12px 16px', fontWeight: 600, color: '#4a5568' }}>Listing Agent</th>
-                  <th style={{ padding: '12px 16px', fontWeight: 600, color: '#4a5568' }}>Homeowner Contact</th>
-                  <th style={{ padding: '12px 16px', fontWeight: 600, color: '#4a5568', textAlign: 'right' }}>Action</th>
+                <tr style={{ backgroundColor: 'var(--bg-subtle, var(--m-surface-2))', borderBottom: '1px solid var(--m-border)' }}>
+                  <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--m-text-2)' }}>Status</th>
+                  <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--m-text-2)' }}>Property Address</th>
+                  <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--m-text-2)' }}>List Price</th>
+                  <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--m-text-2)' }}>Beds / Baths / SqFt</th>
+                  <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--m-text-2)' }}>Listing Agent</th>
+                  <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--m-text-2)' }}>Homeowner Contact</th>
+                  <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--m-text-2)', textAlign: 'right' }}>Action</th>
                 </tr>
               </thead>
               <tbody>
                 {loadingListings ? (
                   <tr>
-                    <td colSpan={7} style={{ padding: '40px', textAlign: 'center', color: '#718096' }}>
+                    <td colSpan={7} style={{ padding: '40px', textAlign: 'center', color: 'var(--m-muted)' }}>
                       <div style={{ fontSize: '18px', marginBottom: '8px' }}>🔄</div>
                       Loading listings page {currentPage}...
                     </td>
                   </tr>
                 ) : listings.length === 0 ? (
                   <tr>
-                    <td colSpan={7} style={{ padding: '40px', textAlign: 'center', color: '#718096' }}>
+                    <td colSpan={7} style={{ padding: '40px', textAlign: 'center', color: 'var(--m-muted)' }}>
                       No listings found matching your filters.
                     </td>
                   </tr>
@@ -1579,7 +1578,7 @@ export default function LeadsTab({ backendUrl, role }) {
                     const ownerName = l.ownerFullName || (l.firstName ? `${l.firstName} ${l.lastName || ''}`.trim() : null);
 
                     return (
-                      <tr key={l.id || i} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                      <tr key={l.id || i} style={{ borderBottom: '1px solid var(--m-border)' }}>
                         <td style={{ padding: '12px 16px' }}>
                           <span style={{
                             padding: '3px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 700,
@@ -1590,17 +1589,17 @@ export default function LeadsTab({ backendUrl, role }) {
                           </span>
                         </td>
                         <td style={{ padding: '12px 16px' }}>
-                          <div style={{ fontWeight: 600, color: '#2d3748' }}>{l.address}</div>
-                          <div style={{ fontSize: '12px', color: '#718096' }}>{l.city}, {l.state || 'VA'} {l.zipCode} ({l.county})</div>
+                          <div style={{ fontWeight: 600, color: 'var(--m-text)' }}>{l.address}</div>
+                          <div style={{ fontSize: '12px', color: 'var(--m-muted)' }}>{l.city}, {l.state || 'VA'} {l.zipCode} ({l.county})</div>
                         </td>
-                        <td style={{ padding: '12px 16px', fontWeight: 700, color: '#2b6cb0', fontSize: '14px' }}>
+                        <td style={{ padding: '12px 16px', fontWeight: 700, color: 'var(--m-blue)', fontSize: '14px' }}>
                           {price}
                         </td>
-                        <td style={{ padding: '12px 16px', color: '#4a5568' }}>
+                        <td style={{ padding: '12px 16px', color: 'var(--m-text-2)' }}>
                           {l.bedrooms || '—'}b / {l.bathrooms || '—'}ba • {l.sqft ? `${Number(l.sqft).toLocaleString()} sqft` : '—'}
                         </td>
                         <td style={{ padding: '12px 16px' }}>
-                          <div style={{ fontWeight: 600, color: '#2d3748' }}>{l.realtorName || '—'}</div>
+                          <div style={{ fontWeight: 600, color: 'var(--m-text)' }}>{l.realtorName || '—'}</div>
                           {l.realtorPhone && (
                             <div style={{ fontSize: '12px' }}>
                               <a href={`tel:${l.realtorPhone}`} style={{ color: '#3182ce', textDecoration: 'none' }}>
@@ -1610,7 +1609,7 @@ export default function LeadsTab({ backendUrl, role }) {
                           )}
                           {l.realtorEmail && (
                             <div style={{ fontSize: '11px' }}>
-                              <a href={`mailto:${l.realtorEmail}`} style={{ color: '#718096', textDecoration: 'none' }}>
+                              <a href={`mailto:${l.realtorEmail}`} style={{ color: 'var(--m-muted)', textDecoration: 'none' }}>
                                 ✉️ {l.realtorEmail}
                               </a>
                             </div>
@@ -1619,7 +1618,7 @@ export default function LeadsTab({ backendUrl, role }) {
                         <td style={{ padding: '12px 16px' }}>
                           {ownerName ? (
                             <div>
-                              <div style={{ fontWeight: 600, color: '#2b6cb0' }}>👤 {ownerName}</div>
+                              <div style={{ fontWeight: 600, color: 'var(--m-blue)' }}>👤 {ownerName}</div>
                               {l.phone && (
                                 <div style={{ fontSize: '12px' }}>
                                   <a href={`tel:${l.phone}`} style={{ color: '#38a169', textDecoration: 'none' }}>
@@ -1628,13 +1627,13 @@ export default function LeadsTab({ backendUrl, role }) {
                                 </div>
                               )}
                               {l.email && (
-                                <div style={{ fontSize: '11px', color: '#718096' }}>
+                                <div style={{ fontSize: '11px', color: 'var(--m-muted)' }}>
                                   ✉️ {l.email}
                                 </div>
                               )}
                             </div>
                           ) : (
-                            <span style={{ color: '#a0aec0', fontSize: '12px' }}>Agent-represented</span>
+                            <span style={{ color: 'var(--m-faint)', fontSize: '12px' }}>Agent-represented</span>
                           )}
                         </td>
                         <td style={{ padding: '12px 16px', textAlign: 'right' }}>
@@ -1642,7 +1641,7 @@ export default function LeadsTab({ backendUrl, role }) {
                             onClick={() => focusPropertyOnMap(l, i)}
                             title="Center and view on map"
                             style={{
-                              padding: '5px 10px', borderRadius: '4px', border: '1px solid #cbd5e0',
+                              padding: '5px 10px', borderRadius: '4px', border: '1px solid var(--m-border-strong)',
                               backgroundColor: 'var(--bg-card, #ffffff)', color: '#3182ce',
                               fontSize: '12px', fontWeight: 600, cursor: 'pointer'
                             }}
@@ -1667,17 +1666,17 @@ export default function LeadsTab({ backendUrl, role }) {
       {activeSubTab === 'analytics' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
           {(!vis.priceHistogram || !vis.monthlyTrend?.length) && (
-            <div style={{ backgroundColor: '#fffaf0', border: '1px solid #fbd38d', color: '#7b341e', borderRadius: '8px', padding: '12px 16px', fontSize: '13px' }}>
+            <div style={{ backgroundColor: 'var(--tint-amber-bg)', border: '1px solid var(--tint-amber-border)', color: 'var(--tint-amber-text)', borderRadius: '8px', padding: '12px 16px', fontSize: '13px' }}>
               These charts need the latest analytics. {isAdmin ? 'Restart the backend (or deploy it), then reload this page — the summary rebuilds itself on the first request.' : 'Ask an admin to refresh the analytics.'}
             </div>
           )}
           {chartFiltersActive && (
-            <div style={{ backgroundColor: '#ebf8ff', border: '1px solid #bee3f8', color: '#2c5282', borderRadius: '8px', padding: '9px 14px', fontSize: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+            <div style={{ backgroundColor: 'var(--tint-blue-bg)', border: '1px solid var(--tint-blue-border)', color: 'var(--tint-blue-text)', borderRadius: '8px', padding: '9px 14px', fontSize: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
               <span>
                 🔎 Charts are filtered{filteredAnalytics ? <> to <b>{Number(filteredAnalytics.matchingListings || 0).toLocaleString()}</b> matching listings</> : ''}
                 {filteredLoading ? ' - updating…' : ''}. The monthly chart keeps every month so you can still see the trend.
               </span>
-              <button onClick={clearAllFilters} style={{ padding: '4px 10px', borderRadius: '4px', border: '1px solid #90cdf4', backgroundColor: '#fff', color: '#2b6cb0', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>Clear filters</button>
+              <button onClick={clearAllFilters} style={{ padding: '4px 10px', borderRadius: '4px', border: '1px solid var(--tint-blue-border)', backgroundColor: 'var(--m-surface)', color: 'var(--m-blue)', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>Clear filters</button>
             </div>
           )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: '20px' }}>
@@ -1693,7 +1692,7 @@ export default function LeadsTab({ backendUrl, role }) {
           {vis.dailyTrend && (
             <Card title="🗓️ When homes hit the market" subtitle="Each square is one day, over the last 22 weeks. Darker means more homes listed that day (the colour scale ignores one-off spikes so normal days stay comparable).">
               <ActivityHeatmap daily={vis.dailyTrend} exactFrom={EXACT_DATES_FROM_ISO} />
-              <div style={{ marginTop: '10px', backgroundColor: '#fffaf0', border: '1px solid #fbd38d', color: '#744210', borderRadius: '8px', padding: '9px 14px', fontSize: '12px', lineHeight: 1.5 }}>
+              <div style={{ marginTop: '10px', backgroundColor: 'var(--tint-amber-bg)', border: '1px solid var(--tint-amber-border)', color: 'var(--tint-amber-text)', borderRadius: '8px', padding: '9px 14px', fontSize: '12px', lineHeight: 1.5 }}>
                 <b>How to read these dates.</b> The listings portal does not give a listing date, so before <b>{EXACT_DATES_FROM_LABEL}</b> each lead is dated by the day we
                 first captured it (older leads by the day-range of the file they came in). Some days are catch-up batches, e.g. Oct 28. From {EXACT_DATES_FROM_LABEL} onward every
                 new lead is dated to its exact day. Compare recent days against each other; treat earlier days as approximate.
@@ -1731,8 +1730,8 @@ export default function LeadsTab({ backendUrl, role }) {
                   style={{
                     padding: '6px 12px', borderRadius: '4px', fontSize: '12px', fontWeight: 600,
                     border: '1px solid', cursor: 'pointer',
-                    borderColor: matchStatusFilter === f.id ? '#3182ce' : '#e2e8f0',
-                    backgroundColor: matchStatusFilter === f.id ? '#ebf8ff' : 'var(--bg-card, #ffffff)',
+                    borderColor: matchStatusFilter === f.id ? '#3182ce' : 'var(--m-border)',
+                    backgroundColor: matchStatusFilter === f.id ? 'var(--tint-blue-bg)' : 'var(--bg-card, #ffffff)',
                     color: matchStatusFilter === f.id ? '#2b6cb0' : '#4a5568'
                   }}
                 >
@@ -1741,24 +1740,20 @@ export default function LeadsTab({ backendUrl, role }) {
               ))}
             </div>
 
-            <div style={{ fontSize: '13px', color: '#718096' }}>
+            <div style={{ fontSize: '13px', color: 'var(--m-muted)' }}>
               Showing {visibleMatches.length}{visibleMatches.length !== matches.length ? ` of ${matches.length}` : ''} matched customers
             </div>
           </div>
 
           {/* Sub-filters */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px 14px', alignItems: 'flex-end', marginBottom: '14px', padding: '10px 12px', border: '1px solid var(--border-color, #e2e8f0)', borderRadius: '8px', backgroundColor: 'var(--bg-card, #ffffff)' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px 14px', alignItems: 'flex-end', marginBottom: '14px', padding: '10px 12px', border: '1px solid var(--border-color, var(--m-border))', borderRadius: '8px', backgroundColor: 'var(--bg-card, #ffffff)' }}>
             {(() => {
-              const lab = { fontSize: '10.5px', fontWeight: 700, color: '#718096', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: '3px', display: 'block' };
-              const ctl = { padding: '6px 8px', borderRadius: '6px', border: '1px solid #cbd5e0', fontSize: '12px', fontWeight: 500, backgroundColor: 'var(--bg-card, #ffffff)', color: 'inherit' };
+              const lab = { fontSize: '10.5px', fontWeight: 700, color: 'var(--m-muted)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: '3px', display: 'block' };
+              const ctl = { padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--m-border-strong)', fontSize: '12px', fontWeight: 500, backgroundColor: 'var(--bg-card, #ffffff)', color: 'inherit' };
               const set = (k, v) => setMatchFilters((f) => ({ ...f, [k]: v }));
               const prettyStatus = (v) => String(v).replace(/_/g, ' ');
               return (
                 <>
-                  <label style={{ flex: '1 1 200px', minWidth: '180px' }}>
-                    <span style={lab}>Search</span>
-                    <input type="text" value={matchFilters.search} onChange={(e) => set('search', e.target.value)} placeholder="Customer, address, email, phone, agent" style={{ ...ctl, width: '100%', boxSizing: 'border-box' }} />
-                  </label>
                   <label>
                     <span style={lab}>Listing status</span>
                     <select value={matchFilters.listing} onChange={(e) => set('listing', e.target.value)} style={ctl}>
@@ -1805,7 +1800,7 @@ export default function LeadsTab({ backendUrl, role }) {
                     <span style={lab}>Price ($ thousands)</span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                       <input type="number" min="0" value={matchFilters.minPrice} onChange={(e) => set('minPrice', e.target.value)} placeholder="Min" style={{ ...ctl, width: '70px' }} />
-                      <span style={{ color: '#a0aec0' }}>-</span>
+                      <span style={{ color: 'var(--m-faint)' }}>-</span>
                       <input type="number" min="0" value={matchFilters.maxPrice} onChange={(e) => set('maxPrice', e.target.value)} placeholder="Max" style={{ ...ctl, width: '70px' }} />
                     </div>
                   </div>
@@ -1820,12 +1815,12 @@ export default function LeadsTab({ backendUrl, role }) {
                       <option value="name">Customer name A-Z</option>
                     </select>
                   </label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 600, color: '#4a5568', paddingBottom: '7px', cursor: 'pointer' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 600, color: 'var(--m-text-2)', paddingBottom: '7px', cursor: 'pointer' }}>
                     <input type="checkbox" checked={matchFilters.reachable} onChange={(e) => set('reachable', e.target.checked)} />
                     Has email or phone
                   </label>
                   {matchHasActiveFilters(matchFilters) && (
-                    <button type="button" onClick={() => setMatchFilters(EMPTY_MATCH_FILTERS)} style={{ padding: '6px 10px', borderRadius: '6px', border: '1px solid #90cdf4', backgroundColor: '#ebf8ff', color: '#2b6cb0', fontSize: '12px', fontWeight: 600, cursor: 'pointer', marginBottom: '1px' }}>Clear filters</button>
+                    <button type="button" onClick={() => setMatchFilters(EMPTY_MATCH_FILTERS)} style={{ padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--tint-blue-border)', backgroundColor: 'var(--tint-blue-bg)', color: 'var(--m-blue)', fontSize: '12px', fontWeight: 600, cursor: 'pointer', marginBottom: '1px' }}>Clear filters</button>
                   )}
                 </>
               );
@@ -1833,25 +1828,25 @@ export default function LeadsTab({ backendUrl, role }) {
           </div>
 
           <div style={{
-            backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, #e2e8f0)',
+            backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, var(--m-border))',
             borderRadius: '8px', overflowX: 'auto', boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
           }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
               <thead>
-                <tr style={{ backgroundColor: 'var(--bg-subtle, #f7fafc)', borderBottom: '1px solid #e2e8f0' }}>
-                  <th style={{ padding: '12px 16px', fontWeight: 600, color: '#4a5568' }}>Status</th>
-                  <th style={{ padding: '12px 16px', fontWeight: 600, color: '#4a5568' }}>Previous Customer</th>
-                  <th style={{ padding: '12px 16px', fontWeight: 600, color: '#4a5568' }}>Matched Home Listing</th>
-                  <th style={{ padding: '12px 16px', fontWeight: 600, color: '#4a5568' }}>Move History</th>
-                  <th style={{ padding: '12px 16px', fontWeight: 600, color: '#4a5568', textAlign: 'right' }}>Actions</th>
+                <tr style={{ backgroundColor: 'var(--bg-subtle, var(--m-surface-2))', borderBottom: '1px solid var(--m-border)' }}>
+                  <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--m-text-2)' }}>Status</th>
+                  <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--m-text-2)' }}>Previous Customer</th>
+                  <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--m-text-2)' }}>Matched Home Listing</th>
+                  <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--m-text-2)' }}>Move History</th>
+                  <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--m-text-2)', textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {visibleMatches.length === 0 ? (
                   <tr>
-                    <td colSpan={5} style={{ padding: '40px 16px', textAlign: 'center', color: '#718096' }}>
+                    <td colSpan={5} style={{ padding: '40px 16px', textAlign: 'center', color: 'var(--m-muted)' }}>
                       {matches.length > 0
-                        ? <>No matches fit these filters. <button type="button" onClick={() => setMatchFilters(EMPTY_MATCH_FILTERS)} style={{ background: 'none', border: 'none', color: '#2b6cb0', textDecoration: 'underline', cursor: 'pointer', fontSize: 'inherit', padding: 0 }}>Clear filters</button></>
+                        ? <>No matches fit these filters. <button type="button" onClick={() => setMatchFilters(EMPTY_MATCH_FILTERS)} style={{ background: 'none', border: 'none', color: 'var(--m-blue)', textDecoration: 'underline', cursor: 'pointer', fontSize: 'inherit', padding: 0 }}>Clear filters</button></>
                         : <>No matches found in this view. Click <strong>"Sweep Customer Matches"</strong> or import more past customer records to discover leads.</>}
                     </td>
                   </tr>
@@ -1862,31 +1857,31 @@ export default function LeadsTab({ backendUrl, role }) {
                     const isContacted = m.status === 'contacted';
 
                     return (
-                      <tr key={m.id} style={{ borderBottom: '1px solid #e2e8f0', backgroundColor: isPending ? '#fffaf0' : 'inherit' }}>
+                      <tr key={m.id} style={{ borderBottom: '1px solid var(--m-border)', backgroundColor: isPending ? 'var(--tint-amber-bg)' : 'inherit' }}>
                         <td style={{ padding: '14px 16px', verticalAlign: 'top' }}>
                           <span style={{
                             display: 'inline-block', padding: '3px 8px', borderRadius: '12px',
                             fontSize: '11px', fontWeight: 700, textTransform: 'uppercase',
-                            backgroundColor: isPending ? '#feebc8' : isContacted ? '#c6f6d5' : '#edf2f7',
+                            backgroundColor: isPending ? 'var(--tint-amber-border)' : isContacted ? 'var(--tint-green-bg)' : 'var(--m-surface-3)',
                             color: isPending ? '#c05621' : isContacted ? '#22543d' : '#718096',
                           }}>
                             {m.status || 'pending'}
                           </span>
                         </td>
                         <td style={{ padding: '14px 16px', verticalAlign: 'top' }}>
-                          <div style={{ fontWeight: 700, color: '#2d3748' }}>{m.customerName}</div>
-                          {m.customerEmail && <div style={{ fontSize: '12px', color: '#4a5568' }}>✉️ {m.customerEmail}</div>}
-                          {m.customerPhone && <div style={{ fontSize: '12px', color: '#4a5568' }}>📞 {m.customerPhone}</div>}
+                          <div style={{ fontWeight: 700, color: 'var(--m-text)' }}>{m.customerName}</div>
+                          {m.customerEmail && <div style={{ fontSize: '12px', color: 'var(--m-text-2)' }}>✉️ {m.customerEmail}</div>}
+                          {m.customerPhone && <div style={{ fontSize: '12px', color: 'var(--m-text-2)' }}>📞 {m.customerPhone}</div>}
                         </td>
                         <td style={{ padding: '14px 16px', verticalAlign: 'top' }}>
-                          <div style={{ fontWeight: 600, color: '#2b6cb0' }}>{m.matchedAddress}</div>
+                          <div style={{ fontWeight: 600, color: 'var(--m-blue)' }}>{m.matchedAddress}</div>
                           <div style={{ fontSize: '13px', fontWeight: 700, color: '#38a169', marginTop: '2px' }}>{price}</div>
-                          <div style={{ fontSize: '11px', color: '#718096' }}>Status: {m.listingStatus || 'for_sale'}</div>
+                          <div style={{ fontSize: '11px', color: 'var(--m-muted)' }}>Status: {m.listingStatus || 'for_sale'}</div>
                         </td>
                         <td style={{ padding: '14px 16px', verticalAlign: 'top' }}>
-                          <div style={{ fontSize: '12px', color: '#4a5568' }}>{m.previousMoveDetails || 'Past Move'}</div>
-                          <div style={{ fontSize: '11px', color: '#718096', marginTop: '2px' }}>
-                            Confidence: <span style={{ color: '#2b6cb0', fontWeight: 700 }}>{m.confidence || 95}%</span> • {m.matchReason}
+                          <div style={{ fontSize: '12px', color: 'var(--m-text-2)' }}>{m.previousMoveDetails || 'Past Move'}</div>
+                          <div style={{ fontSize: '11px', color: 'var(--m-muted)', marginTop: '2px' }}>
+                            Confidence: <span style={{ color: 'var(--m-blue)', fontWeight: 700 }}>{m.confidence || 95}%</span> • {m.matchReason}
                           </div>
                         </td>
                         <td style={{ padding: '14px 16px', verticalAlign: 'top', textAlign: 'right' }}>
@@ -1905,8 +1900,8 @@ export default function LeadsTab({ backendUrl, role }) {
                               <button
                                 onClick={() => handleStatusChange(m.id, 'dismissed')}
                                 style={{
-                                  padding: '6px 10px', borderRadius: '4px', border: '1px solid #cbd5e0',
-                                  backgroundColor: 'transparent', color: '#718096',
+                                  padding: '6px 10px', borderRadius: '4px', border: '1px solid var(--m-border-strong)',
+                                  backgroundColor: 'transparent', color: 'var(--m-muted)',
                                   fontSize: '11px', cursor: 'pointer'
                                 }}
                               >
@@ -1928,28 +1923,28 @@ export default function LeadsTab({ backendUrl, role }) {
       {/* VIEW 4: TOP REALTORS LEADERBOARD */}
       {activeSubTab === 'realtors' && (
         <div style={{
-          backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, #e2e8f0)',
+          backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, var(--m-border))',
           borderRadius: '8px', overflowX: 'auto', boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
         }}>
-          <div style={{ padding: '14px 16px', borderBottom: '1px solid #e2e8f0' }}>
+          <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--m-border)' }}>
             <h3 style={{ margin: '0 0 2px 0', fontSize: '16px', fontWeight: 700 }}>
               🏆 Top Real Estate Agents Leaderboard (Northern Virginia & DC)
             </h3>
-            <p style={{ margin: 0, fontSize: '12px', color: '#718096' }}>
+            <p style={{ margin: 0, fontSize: '12px', color: 'var(--m-muted)' }}>
               Highest volume listing agents — primary targets for moving partner relationships, referral incentives, and co-marketing.
             </p>
           </div>
 
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
             <thead>
-              <tr style={{ backgroundColor: 'var(--bg-subtle, #f7fafc)', borderBottom: '1px solid #e2e8f0' }}>
-                <th style={{ padding: '12px 16px', fontWeight: 600, color: '#4a5568' }}>Rank</th>
-                <th style={{ padding: '12px 16px', fontWeight: 600, color: '#4a5568' }}>Realtor Name</th>
-                <th style={{ padding: '12px 16px', fontWeight: 600, color: '#4a5568' }}>Total Listings</th>
-                <th style={{ padding: '12px 16px', fontWeight: 600, color: '#4a5568' }}>Avg List Price</th>
-                <th style={{ padding: '12px 16px', fontWeight: 600, color: '#4a5568' }}>Direct Phone</th>
-                <th style={{ padding: '12px 16px', fontWeight: 600, color: '#4a5568' }}>Email</th>
-                <th style={{ padding: '12px 16px', fontWeight: 600, color: '#4a5568' }}>Primary ZIP Codes</th>
+              <tr style={{ backgroundColor: 'var(--bg-subtle, var(--m-surface-2))', borderBottom: '1px solid var(--m-border)' }}>
+                <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--m-text-2)' }}>Rank</th>
+                <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--m-text-2)' }}>Realtor Name</th>
+                <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--m-text-2)' }}>Total Listings</th>
+                <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--m-text-2)' }}>Avg List Price</th>
+                <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--m-text-2)' }}>Direct Phone</th>
+                <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--m-text-2)' }}>Email</th>
+                <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--m-text-2)' }}>Primary ZIP Codes</th>
               </tr>
             </thead>
             <tbody>
@@ -1960,14 +1955,14 @@ export default function LeadsTab({ backendUrl, role }) {
                 { name: 'Michael Robinson', listings: 27, avgPrice: 680000, phone: '(703) 555-0199', email: 'mrobinson@kw.com', zips: '22191, 22192, 22193' },
                 { name: 'Karen Davis', listings: 24, avgPrice: 890000, phone: '(703) 555-0155', email: 'kdavis@samsonproperties.net', zips: '22201, 22202, 22314' },
               ]).map((r, idx) => (
-                <tr key={r.name} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                <tr key={r.name} style={{ borderBottom: '1px solid var(--m-border)' }}>
                   <td style={{ padding: '12px 16px', fontWeight: 700, color: idx < 3 ? '#d69e2e' : '#718096' }}>
                     #{idx + 1}
                   </td>
-                  <td style={{ padding: '12px 16px', fontWeight: 600, color: '#2d3748' }}>
+                  <td style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--m-text)' }}>
                     {r.name}
                   </td>
-                  <td style={{ padding: '12px 16px', fontWeight: 700, color: '#2b6cb0' }}>
+                  <td style={{ padding: '12px 16px', fontWeight: 700, color: 'var(--m-blue)' }}>
                     {r.listings} listings
                   </td>
                   <td style={{ padding: '12px 16px', fontWeight: 600, color: '#38a169' }}>
@@ -1982,12 +1977,12 @@ export default function LeadsTab({ backendUrl, role }) {
                   </td>
                   <td style={{ padding: '12px 16px' }}>
                     {r.email ? (
-                      <a href={`mailto:${r.email}`} style={{ color: '#718096', textDecoration: 'none' }}>
+                      <a href={`mailto:${r.email}`} style={{ color: 'var(--m-muted)', textDecoration: 'none' }}>
                         ✉️ {r.email}
                       </a>
                     ) : '—'}
                   </td>
-                  <td style={{ padding: '12px 16px', color: '#718096' }}>
+                  <td style={{ padding: '12px 16px', color: 'var(--m-muted)' }}>
                     {r.zips || 'NOVA Metro'}
                   </td>
                 </tr>

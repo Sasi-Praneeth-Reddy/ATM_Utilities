@@ -6,6 +6,8 @@ export const DRIVER_COLORS = [
 ];
 
 export const roleLabels = {
+  owner: 'Owner — everything an admin can do, plus all tasks and the power to grant the owner/developer roles.',
+  developer: 'Developer — same full access as Owner: everything an admin can do, plus all tasks and the power to grant the owner/developer roles.',
   admin: 'Admin — full access to trucks, drivers, availability, and jobs.',
   dispatcher: 'Dispatcher — can assign/move jobs on the board and LD planner. Truck & driver records are locked.',
   crew: 'Crew / Driver — read-only view of the truck board and your own jobs, optimized for mobile. No editing.',

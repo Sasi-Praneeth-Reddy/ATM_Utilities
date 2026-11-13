@@ -4,7 +4,7 @@ import UsersAdmin from './UsersAdmin';
  * file) so Users gets its own top-level nav tab instead of living at the bottom of Trucks &
  * Drivers. Mirrors JobAssignmentsTab.jsx's role here. */
 export default function UsersTab({
-  users, currentUserId, onCreateUser, onChangeUserRole, onDeleteUser,
+  users, currentUserId, isTopRole, onCreateUser, onChangeUserRole, onDeleteUser,
   allowedExternalEmails, onAddAllowedExternalEmail, onRemoveAllowedExternalEmail,
 }) {
   return (
@@ -12,6 +12,7 @@ export default function UsersTab({
       <UsersAdmin
         users={users}
         currentUserId={currentUserId}
+        isTopRole={isTopRole}
         onCreateUser={onCreateUser}
         onChangeRole={onChangeUserRole}
         onDeleteUser={onDeleteUser}

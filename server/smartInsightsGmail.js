@@ -92,6 +92,13 @@ const DOWNLOAD_URL_PATTERN = /https:\/\/smfilestore\.blob\.core\.windows\.net\/r
 // two words being missing/doubled/replaced with an underscore.
 const ALL_JOBS_FILENAME_PATTERN = /all[\s_]*jobs/i;
 
+// Job Materials report (materialsReport.js / materialsSync.js). Subject is "Job Materials Exports" (set in SmartMoving, 2026-11-05); the real identity check is
+// still the attachment / file name. Override with MATERIALS_REPORT_QUERY if you want it narrower.
+const { MATERIALS_FILENAME_RE } = require('./materialsReport');
+const SEARCH_QUERY_MATERIALS = process.env.MATERIALS_REPORT_QUERY
+  || '(from:send.sigmacomputing.com OR from:no-reply@smartmoving.com) subject:(Job Materials) newer_than:4d';
+const safeDecode = (x) => { try { return decodeURIComponent(x); } catch { return x; } };
+
 function getOAuth2Client() {
   const clientId = process.env.GMAIL_OAUTH_CLIENT_ID;
   const clientSecret = process.env.GMAIL_OAUTH_CLIENT_SECRET;
@@ -233,6 +240,11 @@ async function findUnprocessedBookedOpportunityFiles() {
     }
     try {
       const filename = downloadUrl.split('/').pop();
+      // The Job Materials report (materialsSync.js) can arrive the same way - leave it for that pipeline.
+      if (MATERIALS_FILENAME_RE.test(safeDecode(filename))) {
+        results.push({ messageId, skipped: true, reason: 'Job Materials report - handled by materialsSync' });
+        continue;
+      }
       const buffer = await fetchReportFile(downloadUrl);
       results.push({ messageId, buffer, filename });
     } catch (err) {
@@ -287,6 +299,46 @@ async function findUnprocessedAllJobsFiles() {
   return results;
 }
 
+/**
+ * Finds not-yet-processed Job Materials report emails (attached .xlsx, or the download link in the body) and returns
+ * their bytes, oldest first. Same contract as the other finders: labelling is the caller's job, after success.
+ * @returns {Promise<Array<{messageId: string, buffer: Buffer, filename: string} | {messageId: string, skipped: true, reason: string} | {messageId: string, error: string}>>}
+ */
+async function findUnprocessedMaterialsFiles() {
+  const auth = getAuthenticatedClient();
+  const gmail = google.gmail({ version: 'v1', auth });
+  const { data: listData } = await gmail.users.messages.list({
+    userId: 'me',
+    q: `${SEARCH_QUERY_MATERIALS} -label:${LABEL_NAME.replace('/', '-')}`,
+  });
+  const messageIds = (listData.messages || []).map((m) => m.id);
+  const { fetched, results: fetchErrors } = await fetchAndSortByDate(gmail, messageIds);
+  const results = [...fetchErrors];
+  for (const { messageId, message } of fetched) {
+    try {
+      const attachment = extractXlsxAttachmentPart(message);
+      if (attachment) {
+        if (!MATERIALS_FILENAME_RE.test(attachment.filename)) {
+          results.push({ messageId, skipped: true, reason: `attachment "${attachment.filename}" is not the Job Materials report` });
+          continue;
+        }
+        results.push({ messageId, buffer: await fetchAttachmentBuffer(gmail, messageId, attachment.attachmentId), filename: attachment.filename });
+        continue;
+      }
+      const url = extractDownloadUrl(message);
+      const filename = url ? safeDecode(url.split('/').pop()) : '';
+      if (url && MATERIALS_FILENAME_RE.test(filename)) {
+        results.push({ messageId, buffer: await fetchReportFile(url), filename });
+      } else {
+        results.push({ messageId, skipped: true, reason: 'no Job Materials .xlsx attachment or link' });
+      }
+    } catch (err) {
+      results.push({ messageId, error: err.message });
+    }
+  }
+  return results;
+}
+
 /** Marks a message processed once its file has been successfully ingested — see the doc comments
  * above for why this is a separate step, not automatic. Works the same regardless of which of the
  * two reports the message was — both share LABEL_NAME.
@@ -312,7 +364,7 @@ async function markMessageProcessed(messageId) {
 
 module.exports = {
   getOAuth2Client, getAuthenticatedClient,
-  findUnprocessedBookedOpportunityFiles, findUnprocessedAllJobsFiles,
+  findUnprocessedBookedOpportunityFiles, findUnprocessedAllJobsFiles, findUnprocessedMaterialsFiles,
   markMessageProcessed, SCOPES, LABEL_NAME,
   // Exported 2026-08-31 for debug-job-lookup.js — these were previously module-private, but a
   // diagnostic that traces one specific job through the pipeline needs to fetch/parse a report

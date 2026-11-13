@@ -83,9 +83,9 @@ function driverMatches(d, q) {
 }
 
 /* 2026-09-30: searchable + 10 per page (user request). */
-export default function DriverAdminList({ drivers, showAddForm, onSaveNewDriver, onCancelAddDriver, onUpdateField, onDeleteDriver }) {
+export default function DriverAdminList({ query, drivers, showAddForm, onSaveNewDriver, onCancelAddDriver, onUpdateField, onDeleteDriver }) {
   const matchFn = useCallback(driverMatches, []);
-  const paged = usePagedSearch(drivers, matchFn, 10);
+  const paged = usePagedSearch(drivers, matchFn, 10, query);
   // The cards scroll inside their own box (2026-09-30) instead of the whole page — jump back to the
   // top of that box whenever the page or search changes.
   const scrollRef = useRef(null);
@@ -93,7 +93,7 @@ export default function DriverAdminList({ drivers, showAddForm, onSaveNewDriver,
 
   return (
     <div>
-      <ListSearch value={paged.query} onChange={paged.setQuery} placeholder="Search drivers (name, phone, label)…" />
+      {query === undefined && <ListSearch value={paged.query} onChange={paged.setQuery} placeholder="Search drivers (name, phone, label)…" />}
       <SimplePager paged={paged} noun="drivers" />
       {paged.query.trim() && !paged.filtered.length && <div className="empty">No drivers match "{paged.query}".</div>}
       <div className="admin-scroll" ref={scrollRef}>

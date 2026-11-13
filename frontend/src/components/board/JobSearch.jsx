@@ -59,7 +59,7 @@ function jobIdNumber(job) {
  * switches to day view (via onJumpToJob) since that's the one place a job's exact truck/time is
  * visible, and BoardTab briefly highlights the job once the board lands on that date.
  */
-export default function JobSearch({ jobs, trucks, onJumpToJob }) {
+export default function JobSearch({ jobs, trucks, onJumpToJob, placeholder = 'Search jobs (customer, address, job ID)…', emptyNoun = 'jobs' }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
 
@@ -88,7 +88,7 @@ export default function JobSearch({ jobs, trucks, onJumpToJob }) {
       <input
         type="text"
         className="job-search-input"
-        placeholder="Search jobs (customer, address, job ID)…"
+        placeholder={placeholder}
         value={query}
         onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
         onFocus={() => setOpen(true)}
@@ -117,7 +117,7 @@ export default function JobSearch({ jobs, trucks, onJumpToJob }) {
               </span>
             </button>
           )) : (
-            <div className="job-search-empty">No jobs match "{query}"</div>
+            <div className="job-search-empty">No {emptyNoun} match "{query}"</div>
           )}
         </div>
       )}

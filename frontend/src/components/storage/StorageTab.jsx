@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
+import { usePageSearch } from '../../hooks/usePageSearch';
 import { apiCall } from '../../api';
 import { readRoute, writeRoute } from '../../utils/route';
 import { Card, Empty, HBars, RangeBars, Histogram, Donut, RankList, Stat, Delta, money, downloadCsv } from './MarketCharts';
@@ -32,14 +33,34 @@ const median = (a) => {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
 
-const LABEL = { fontSize: '11px', fontWeight: 700, color: '#4a5568', textTransform: 'uppercase', letterSpacing: '0.02em' };
+const LABEL = { fontSize: '11px', fontWeight: 700, color: 'var(--m-text-2)', textTransform: 'uppercase', letterSpacing: '0.02em' };
 const INPUT = {
-  padding: '6px 10px', borderRadius: '4px', border: '1px solid #cbd5e0', fontSize: '12px',
+  padding: '6px 10px', borderRadius: '4px', border: '1px solid var(--m-border-strong)', fontSize: '12px',
   backgroundColor: 'var(--bg-card, #ffffff)', color: 'var(--text-main, #2d3748)', boxSizing: 'border-box',
 };
 
+/** Temporary pause: the price scraper is not running on its office PC yet. Set to false to bring the
+    button back (nothing else needs to change). */
+const PRICE_UPDATES_PAUSED = false;
+const PAUSED_MESSAGE = 'Sasi is actively working to bring price updates to your hands. This button will switch on as soon as the scraper is running.';
+
 /** Admin-only button: starts the storage-price scraper (GitHub Actions) and shows its progress. */
 function UpdatePricesButton({ backendUrl }) {
+  if (PRICE_UPDATES_PAUSED) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+        <button type="button" disabled title={PAUSED_MESSAGE} style={{
+          padding: '7px 14px', borderRadius: '6px', border: '1px solid var(--m-border-strong)', fontSize: '12px', fontWeight: 700,
+          cursor: 'not-allowed', backgroundColor: 'var(--m-border)', color: 'var(--m-muted)',
+        }}>🔄 Update prices</button>
+        <span style={{ fontSize: '12px', color: 'var(--m-muted)' }}>{PAUSED_MESSAGE}</span>
+      </div>
+    );
+  }
+  return <UpdatePricesLive backendUrl={backendUrl} />;
+}
+
+function UpdatePricesLive({ backendUrl }) {
   const [run, setRun] = useState(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
@@ -75,10 +96,10 @@ function UpdatePricesButton({ backendUrl }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
       <button onClick={start} disabled={busy || running} style={{
-        padding: '7px 14px', borderRadius: '6px', border: '1px solid #2b6cb0', fontSize: '12px', fontWeight: 700,
-        cursor: busy || running ? 'default' : 'pointer', backgroundColor: busy || running ? '#e2e8f0' : '#3182ce', color: busy || running ? '#4a5568' : '#fff',
+        padding: '7px 14px', borderRadius: '6px', border: '1px solid var(--m-blue)', fontSize: '12px', fontWeight: 700,
+        cursor: busy || running ? 'default' : 'pointer', backgroundColor: busy || running ? 'var(--m-border)' : '#3182ce', color: busy || running ? '#4a5568' : '#fff',
       }}>{running ? '⏳ Updating prices…' : '🔄 Update prices'}</button>
-      <span style={{ fontSize: '12px', color: '#718096' }}>
+      <span style={{ fontSize: '12px', color: 'var(--m-muted)' }}>
         {msg || (running && 'Scraping competitor prices - about 10 minutes.')}
         {!msg && !running && done && (ok
           ? <>Last update {new Date(run.updatedAt).toLocaleString()} ✓ <a href="#" onClick={(e) => { e.preventDefault(); window.location.reload(); }}>Reload data</a></>
@@ -97,6 +118,8 @@ export default function StorageTab({ backendUrl, role }) {
   const [maxRate, setMaxRate] = useState('');
   const [onlyPriced, setOnlyPriced] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  // The title-bar search box drives this filter (it used to be a second box in the filter bar).
+  usePageSearch({ id: 'storage', placeholder: 'Search facilities: name, city, ZIP, address…', value: searchQuery, onChange: setSearchQuery });
   const [viewMode, setViewMode] = useState(() => {
     const r = readRoute();
     return r.tab === 'storage' && r.sub === 'table' ? 'table' : 'dashboard';
@@ -331,7 +354,7 @@ export default function StorageTab({ backendUrl, role }) {
             <div style="display: inline-block; padding: 2px 6px; background-color: ${brandColor}; color: white; border-radius: 3px; font-size: 10px; font-weight: bold; margin-bottom: 6px;">${esc(fac.brand)}</div>
             <div style="color: #4a5568; margin-bottom: 4px;">📍 ${esc(fac.address)}, ${esc(fac.city)} ${esc(fac.zipCode)}</div>
             ${fac.phone && !/^unknown$/i.test(fac.phone) ? `<div style="color: #4a5568; margin-bottom: 4px;">📞 ${esc(fac.phone)}</div>` : ''}
-            <div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid #e2e8f0; font-weight: bold; color: #2b6cb0;">
+            <div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--m-border); font-weight: bold; color: #2b6cb0;">
               ${esc(unitSize)} rate: <span style="font-size: 14px;">${esc(rateText)}</span>${fac.street && fac.street > (fac.web || 0) ? ` <s style="color:#a0aec0;font-weight:400">$${fac.street}</s>` : ''}
             </div>
           </div>`;
@@ -363,7 +386,7 @@ export default function StorageTab({ backendUrl, role }) {
   const shareParts = byBrand.map((b) => ({ key: b.brand, label: b.brand, color: b.color, n: b.facilities }));
 
   const th = (key, label) => (
-    <th onClick={() => toggleSort(key)} style={{ padding: '12px 16px', fontWeight: 600, color: '#4a5568', cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none' }}>
+    <th onClick={() => toggleSort(key)} style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--m-text-2)', cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none' }}>
       {label}{sort.key === key ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
     </th>
   );
@@ -374,12 +397,12 @@ export default function StorageTab({ backendUrl, role }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px', marginBottom: '16px' }}>
         <div>
           <h1 style={{ margin: '0 0 4px 0', fontSize: '22px', fontWeight: 700 }}>Self-Storage Market Tracker</h1>
-          <p style={{ margin: 0, color: '#718096', fontSize: '13px' }}>
+          <p style={{ margin: 0, color: 'var(--m-muted)', fontSize: '13px' }}>
             Competitor pricing, market share, and facility locations across Northern Virginia, DC, and Maryland.
           </p>
           {role === 'admin' && <div style={{ marginTop: '10px' }}><UpdatePricesButton backendUrl={backendUrl} /></div>}
         </div>
-        <div style={{ display: 'flex', gap: '6px', backgroundColor: 'var(--bg-subtle, #edf2f7)', padding: '3px', borderRadius: '6px' }}>
+        <div style={{ display: 'flex', gap: '6px', backgroundColor: 'var(--bg-subtle, var(--m-surface-3))', padding: '3px', borderRadius: '6px' }}>
           {[['dashboard', '📊 Map & Analytics'], ['table', `📋 Facility Directory (${rows.length})`]].map(([id, label]) => (
             <button key={id} onClick={() => setViewMode(id)} style={{
               padding: '6px 14px', borderRadius: '4px', border: 'none', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
@@ -391,13 +414,13 @@ export default function StorageTab({ backendUrl, role }) {
       </div>
 
       {staleDays !== null && staleDays > 7 && (
-        <div style={{ backgroundColor: '#fffaf0', color: '#9c4221', border: '1px solid #fbd38d', padding: '9px 14px', borderRadius: '6px', fontSize: '12px', marginBottom: '14px' }}>
+        <div style={{ backgroundColor: 'var(--tint-amber-bg)', color: 'var(--tint-amber-text)', border: '1px solid var(--tint-amber-border)', padding: '9px 14px', borderRadius: '6px', fontSize: '12px', marginBottom: '14px' }}>
           ⚠️ Prices were last collected on <b>{lastScraped.toLocaleDateString()}</b> ({staleDays} days ago). Rates below are from that scrape; competitor prices may have changed since.
         </div>
       )}
 
       {/* Filters */}
-      <div style={{ backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, #e2e8f0)', borderRadius: '8px', padding: '12px 16px', marginBottom: '18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      <div style={{ backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, var(--m-border))', borderRadius: '8px', padding: '12px 16px', marginBottom: '18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
         <div style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <span style={LABEL}>Unit size</span>
@@ -422,17 +445,13 @@ export default function StorageTab({ backendUrl, role }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <span style={LABEL}>{unitSize} rate $</span>
             <input type="number" min="0" placeholder="min" value={minRate} onChange={(e) => setMinRate(e.target.value)} style={{ ...INPUT, width: '70px' }} />
-            <span style={{ color: '#a0aec0' }}>–</span>
+            <span style={{ color: 'var(--m-faint)' }}>–</span>
             <input type="number" min="0" placeholder="max" value={maxRate} onChange={(e) => setMaxRate(e.target.value)} style={{ ...INPUT, width: '70px' }} />
           </div>
           <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', cursor: 'pointer' }}>
             <input type="checkbox" checked={onlyPriced} onChange={(e) => setOnlyPriced(e.target.checked)} />
             Only facilities with a rate
           </label>
-          <input
-            type="text" placeholder="🔍 Search name, city, ZIP, address…" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
-            style={{ ...INPUT, flex: 1, minWidth: '220px' }}
-          />
         </div>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={LABEL}>Brand</span>
@@ -447,7 +466,7 @@ export default function StorageTab({ backendUrl, role }) {
             );
           })}
           {filtersActive && (
-            <button onClick={clearFilters} style={{ marginLeft: 'auto', padding: '4px 12px', borderRadius: '4px', border: '1px solid #cbd5e0', backgroundColor: 'transparent', fontSize: '12px', cursor: 'pointer', color: '#4a5568' }}>
+            <button onClick={clearFilters} style={{ marginLeft: 'auto', padding: '4px 12px', borderRadius: '4px', border: '1px solid var(--m-border-strong)', backgroundColor: 'transparent', fontSize: '12px', cursor: 'pointer', color: 'var(--m-text-2)' }}>
               ✕ Clear filters
             </button>
           )}
@@ -455,18 +474,18 @@ export default function StorageTab({ backendUrl, role }) {
       </div>
 
       {error && (
-        <div style={{ backgroundColor: '#fff5f5', color: '#c53030', border: '1px solid #feb2b2', padding: '10px 14px', borderRadius: '6px', fontSize: '13px', marginBottom: '16px' }}>{error}</div>
+        <div style={{ backgroundColor: 'var(--tint-red-bg)', color: 'var(--m-red)', border: '1px solid var(--tint-red-border)', padding: '10px 14px', borderRadius: '6px', fontSize: '13px', marginBottom: '16px' }}>{error}</div>
       )}
 
       {filtersActive && (
-        <div style={{ fontSize: '12px', color: '#2b6cb0', marginBottom: '8px' }}>
+        <div style={{ fontSize: '12px', color: 'var(--m-blue)', marginBottom: '8px' }}>
           Showing <b>{rows.length}</b> of {totalFacilities} facilities ({priced.length} with a {unitSize} rate). Cards and charts below follow your filters.
         </div>
       )}
 
       {/* KPI cards (follow the filters) */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '14px', marginBottom: '20px' }}>
-        <Stat accent="#e91e63" label={filtersActive ? 'Facilities in view' : 'Tracked facilities'} valueColor="#2b6cb0" value={rows.length}
+        <Stat accent="#e91e63" label={filtersActive ? 'Facilities in view' : 'Tracked facilities'} valueColor="var(--m-blue)" value={rows.length}
           sub={`${priced.length} with a ${unitSize} rate`} />
         <Stat accent="#00bcd4" label={`Avg ${unitSize} rate`} valueColor="#38a169" value={priced.length ? `${money(stats.avg)}/mo` : '—'}
           delta={filtersActive && priced.length && marketAvg ? <Delta pct={((stats.avg - marketAvg) / marketAvg) * 100} good={null} /> : null}
@@ -478,7 +497,7 @@ export default function StorageTab({ backendUrl, role }) {
         {stats.avgDiscount !== null
           ? <Stat accent="#ffc107" label="Avg web discount" valueColor="#805ad5" value={`${Math.round(stats.avgDiscount)}%`} sub="web rate vs. street rate" />
           : <Stat accent="#ffc107" label="Rate spread" valueColor="#805ad5" value={stats.cheapest ? money(stats.priciest.web - stats.cheapest.web) : '—'} sub="highest minus lowest rate" />}
-        <Stat accent="#4caf50" label="Recent price records" valueColor="#4a5568" value={(kpis?.activeSnapshots || 0).toLocaleString()}
+        <Stat accent="#4caf50" label="Recent price records" valueColor="var(--m-text-2)" value={(kpis?.activeSnapshots || 0).toLocaleString()}
           sub={lastScraped ? `last 30 days · collected ${lastScraped.toLocaleDateString()}` : 'last 30 days'} />
       </div>
 
@@ -495,23 +514,23 @@ export default function StorageTab({ backendUrl, role }) {
           )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: '20px', marginBottom: '20px' }}>
             {/* Map */}
-            <div style={{ backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, #e2e8f0)', borderRadius: '8px', padding: '16px', display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 1, isolation: 'isolate', overflow: 'hidden', minWidth: 0 }}>
+            <div style={{ backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, var(--m-border))', borderRadius: '8px', padding: '16px', display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 1, isolation: 'isolate', overflow: 'hidden', minWidth: 0 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
                 <div>
                   <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 700 }}>📍 Facilities map</h3>
-                  <span style={{ fontSize: '12px', color: '#718096' }}>Showing {rows.length} locations{loading ? ' · loading rates…' : ''}</span>
+                  <span style={{ fontSize: '12px', color: 'var(--m-muted)' }}>Showing {rows.length} locations{loading ? ' · loading rates…' : ''}</span>
                 </div>
                 <div style={{ display: 'flex', gap: '4px', fontSize: '11px' }}>
                   {[['brand', 'Colour by brand'], ['price', 'Colour by price']].map(([id, label]) => (
                     <button key={id} onClick={() => setMapColor(id)} style={{
                       padding: '3px 9px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', border: '1px solid',
-                      borderColor: mapColor === id ? '#3182ce' : '#cbd5e0', backgroundColor: mapColor === id ? '#ebf8ff' : 'transparent', color: mapColor === id ? '#2b6cb0' : '#4a5568',
+                      borderColor: mapColor === id ? '#3182ce' : 'var(--m-border-strong)', backgroundColor: mapColor === id ? 'var(--tint-blue-bg)' : 'transparent', color: mapColor === id ? 'var(--m-blue)' : 'var(--m-text-2)',
                     }}>{label}</button>
                   ))}
                 </div>
               </div>
-              <div ref={mapContainerRef} style={{ width: '100%', height: '460px', borderRadius: '6px', border: '1px solid #e2e8f0', backgroundColor: '#e2e8f0' }} />
-              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '11px', marginTop: '10px', color: '#4a5568' }}>
+              <div ref={mapContainerRef} style={{ width: '100%', height: '460px', borderRadius: '6px', border: '1px solid var(--m-border)', backgroundColor: 'var(--m-border)' }} />
+              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '11px', marginTop: '10px', color: 'var(--m-text-2)' }}>
                 {mapColor === 'brand'
                   ? byBrand.map((b) => <span key={b.brand} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><span style={{ width: '9px', height: '9px', borderRadius: '50%', backgroundColor: b.color }} />{b.brand}</span>)
                   : [['#10b981', 'Cheapest third'], ['#f59e0b', 'Middle third'], ['#ef4444', 'Priciest third'], ['#a0aec0', 'No rate']].map(([c, l]) => <span key={l} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><span style={{ width: '9px', height: '9px', borderRadius: '50%', backgroundColor: c }} />{l}</span>)}
@@ -530,7 +549,7 @@ export default function StorageTab({ backendUrl, role }) {
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: '20px', marginBottom: '20px' }}>
             <Card title={`💵 How ${unitSize} rates are spread`} subtitle="Number of facilities per price band">
-              <Histogram values={priced.map((r) => r.web)} markers={priced.length ? [{ label: 'Average', value: stats.avg, color: '#2b6cb0' }, { label: 'Median', value: stats.median, color: '#d69e2e' }] : []} />
+              <Histogram values={priced.map((r) => r.web)} markers={priced.length ? [{ label: 'Average', value: stats.avg, color: 'var(--m-blue)' }, { label: 'Median', value: stats.median, color: '#d69e2e' }] : []} />
             </Card>
             <Card title="🏙️ Average rate by city" subtitle={`Busiest cities (2+ facilities with a ${unitSize} rate), priciest first`}>
               <HBars rows={byCity.map((c) => ({ key: c.city, label: c.city, value: c.avg, sub: `${c.count} facilities`, color: '#3182ce' }))} />
@@ -559,41 +578,41 @@ export default function StorageTab({ backendUrl, role }) {
       )}
 
       {/* Directory */}
-      <div style={{ backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, #e2e8f0)', borderRadius: '8px', overflowX: 'auto', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
-        <div style={{ padding: '14px 16px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+      <div style={{ backgroundColor: 'var(--bg-card, #ffffff)', border: '1px solid var(--border-color, var(--m-border))', borderRadius: '8px', overflowX: 'auto', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+        <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--m-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
           <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 700 }}>🏢 Facilities &amp; current {unitSize} rates ({rows.length})</h3>
-          <button onClick={exportCsv} disabled={!rows.length} style={{ padding: '6px 12px', borderRadius: '4px', border: '1px solid #cbd5e0', backgroundColor: 'transparent', fontSize: '12px', fontWeight: 600, cursor: rows.length ? 'pointer' : 'not-allowed', color: '#2b6cb0' }}>
+          <button onClick={exportCsv} disabled={!rows.length} style={{ padding: '6px 12px', borderRadius: '4px', border: '1px solid var(--m-border-strong)', backgroundColor: 'transparent', fontSize: '12px', fontWeight: 600, cursor: rows.length ? 'pointer' : 'not-allowed', color: 'var(--m-blue)' }}>
             ⬇ Export CSV
           </button>
         </div>
         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
           <thead>
-            <tr style={{ backgroundColor: 'var(--bg-subtle, #f7fafc)', borderBottom: '1px solid #e2e8f0' }}>
+            <tr style={{ backgroundColor: 'var(--bg-subtle, var(--m-surface-2))', borderBottom: '1px solid var(--m-border)' }}>
               {th('name', 'Facility')}
               {th('brand', 'Brand')}
               {th('city', 'Location')}
-              <th style={{ padding: '12px 16px', fontWeight: 600, color: '#4a5568' }}>Phone</th>
+              <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--m-text-2)' }}>Phone</th>
               {th('web', `${unitSize} web rate`)}
               {th('street', 'Street rate')}
               {th('discount', 'Web discount')}
-              <th style={{ padding: '12px 16px', fontWeight: 600, color: '#4a5568' }}>vs. average</th>
+              <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--m-text-2)' }}>vs. average</th>
             </tr>
           </thead>
           <tbody>
             {sortedRows.length === 0 ? (
-              <tr><td colSpan={8} style={{ padding: '30px', textAlign: 'center', color: '#718096' }}>No facilities match your filters.</td></tr>
+              <tr><td colSpan={8} style={{ padding: '30px', textAlign: 'center', color: 'var(--m-muted)' }}>No facilities match your filters.</td></tr>
             ) : sortedRows.slice(0, visible).map((fac) => {
               const color = getBrandColor(fac.brand);
               return (
-                <tr key={fac.id} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                <tr key={fac.id} style={{ borderBottom: '1px solid var(--m-border)' }}>
                   <td style={{ padding: '12px 16px', fontWeight: 600 }}>{fac.name || `Facility #${fac.id}`}</td>
                   <td style={{ padding: '12px 16px' }}>
                     <span style={{ padding: '3px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600, backgroundColor: `${color}20`, color, border: `1px solid ${color}40` }}>{fac.brand}</span>
                   </td>
-                  <td style={{ padding: '12px 16px', color: '#718096' }}>{fac.address ? `${fac.address}, ${fac.city || ''} ${fac.zipCode || ''}` : 'Northern Virginia'}</td>
+                  <td style={{ padding: '12px 16px', color: 'var(--m-muted)' }}>{fac.address ? `${fac.address}, ${fac.city || ''} ${fac.zipCode || ''}` : 'Northern Virginia'}</td>
                   <td style={{ padding: '12px 16px' }}>{fac.phone && !/^unknown$/i.test(fac.phone) ? <a href={`tel:${fac.phone}`} style={{ color: '#3182ce', textDecoration: 'none' }}>{fac.phone}</a> : '—'}</td>
-                  <td style={{ padding: '12px 16px', color: '#2b6cb0', fontWeight: 700, fontSize: '14px' }}>{fac.web ? `$${fac.web}/mo` : 'Call for rate'}</td>
-                  <td style={{ padding: '12px 16px', color: '#a0aec0', textDecoration: fac.street && fac.web && fac.street > fac.web ? 'line-through' : 'none' }}>{fac.street ? `$${fac.street}` : '—'}</td>
+                  <td style={{ padding: '12px 16px', color: 'var(--m-blue)', fontWeight: 700, fontSize: '14px' }}>{fac.web ? `$${fac.web}/mo` : 'Call for rate'}</td>
+                  <td style={{ padding: '12px 16px', color: 'var(--m-faint)', textDecoration: fac.street && fac.web && fac.street > fac.web ? 'line-through' : 'none' }}>{fac.street ? `$${fac.street}` : '—'}</td>
                   <td style={{ padding: '12px 16px' }}>{fac.discountPct !== null ? `${fac.discountPct}%` : '—'}</td>
                   <td style={{ padding: '12px 16px' }}>
                     {fac.web && stats.avg ? <Delta pct={((fac.web - stats.avg) / stats.avg) * 100} good={null} /> : '—'}
@@ -604,8 +623,8 @@ export default function StorageTab({ backendUrl, role }) {
           </tbody>
         </table>
         {sortedRows.length > visible && (
-          <div style={{ padding: '12px', textAlign: 'center', borderTop: '1px solid #e2e8f0' }}>
-            <button onClick={() => setVisible((v) => v + 100)} style={{ padding: '6px 16px', borderRadius: '4px', border: '1px solid #cbd5e0', backgroundColor: 'transparent', fontSize: '12px', fontWeight: 600, cursor: 'pointer', color: '#2b6cb0' }}>
+          <div style={{ padding: '12px', textAlign: 'center', borderTop: '1px solid var(--m-border)' }}>
+            <button onClick={() => setVisible((v) => v + 100)} style={{ padding: '6px 16px', borderRadius: '4px', border: '1px solid var(--m-border-strong)', backgroundColor: 'transparent', fontSize: '12px', fontWeight: 600, cursor: 'pointer', color: 'var(--m-blue)' }}>
               Show 100 more ({sortedRows.length - visible} remaining)
             </button>
           </div>

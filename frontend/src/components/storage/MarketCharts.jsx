@@ -9,7 +9,7 @@ export const money = (v) => (v === null || v === undefined || Number.isNaN(v) ? 
 export const moneyShort = (v) => (v >= 1000000 ? `$${(v / 1000000).toFixed(2)}M` : v >= 1000 ? `$${Math.round(v / 1000)}k` : `$${Math.round(v)}`);
 
 const MUTED = '#718096';
-const TRACK = 'var(--bg-subtle, #edf2f7)';
+const TRACK = 'var(--bg-subtle, var(--m-surface-3))';
 
 function niceMax(v) {
   if (v <= 10) return 10;
@@ -60,7 +60,7 @@ export function RangeBars({ rows, labelWidth = 130 }) {
             </div>
             <div style={{ position: 'relative', flex: 1, height: '22px' }}>
               {ticks.map((t) => (
-                <div key={t} style={{ position: 'absolute', left: `${t * 100}%`, top: 0, bottom: 0, borderLeft: '1px dashed #e2e8f0' }} />
+                <div key={t} style={{ position: 'absolute', left: `${t * 100}%`, top: 0, bottom: 0, borderLeft: '1px dashed var(--m-border)' }} />
               ))}
               <div style={{ position: 'absolute', top: '8px', height: '6px', left: `${(r.min / hi) * 100}%`, width: `${Math.max(1, ((r.max - r.min) / hi) * 100)}%`, backgroundColor: r.color, opacity: 0.35, borderRadius: '3px' }} />
               <div style={{ position: 'absolute', top: '3px', width: '4px', height: '16px', left: `calc(${(r.avg / hi) * 100}% - 2px)`, backgroundColor: r.color, borderRadius: '2px' }} />
@@ -92,7 +92,7 @@ export function Histogram({ values, bins = 10, color = '#3182ce', format = money
   const H = 150;
   return (
     <div>
-      <div style={{ position: 'relative', height: `${H}px`, display: 'flex', alignItems: 'flex-end', gap: '3px', borderBottom: '1px solid #cbd5e0' }}>
+      <div style={{ position: 'relative', height: `${H}px`, display: 'flex', alignItems: 'flex-end', gap: '3px', borderBottom: '1px solid var(--m-border-strong)' }}>
         {counts.map((c, i) => {
           const from = lo + i * width;
           return (
@@ -111,7 +111,7 @@ export function Histogram({ values, bins = 10, color = '#3182ce', format = money
         <span>{format(hi)}</span>
       </div>
       {markers.length > 0 && (
-        <div style={{ display: 'flex', gap: '14px', marginTop: '6px', fontSize: '11px', color: '#4a5568' }}>
+        <div style={{ display: 'flex', gap: '14px', marginTop: '6px', fontSize: '11px', color: 'var(--m-text-2)' }}>
           {markers.map((m) => (
             <span key={m.label} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
               <span style={{ width: '14px', borderTop: `2px dashed ${m.color}` }} />{m.label} {format(m.value)}
@@ -205,7 +205,7 @@ export function LineChart({ labels, series, format = money, height = 230, dense 
       <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block' }} role="img" onMouseLeave={() => setHover(null)}>
         {grid.map((g) => (
           <g key={g}>
-            <line x1={PL} x2={W - PR} y1={y(g)} y2={y(g)} stroke="#e2e8f0" strokeDasharray="3 3" />
+            <line x1={PL} x2={W - PR} y1={y(g)} y2={y(g)} stroke="var(--m-border)" strokeDasharray="3 3" />
             <text x={PL - 6} y={y(g) + 3} textAnchor="end" fontSize="10" fill={MUTED}>{format(g)}</text>
           </g>
         ))}
@@ -232,14 +232,14 @@ export function LineChart({ labels, series, format = money, height = 230, dense 
         ))}
         {hover !== null && (
           <g pointerEvents="none">
-            <line x1={x(hover)} x2={x(hover)} y1={PT} y2={H - PB} stroke="#a0aec0" strokeDasharray="2 3" />
+            <line x1={x(hover)} x2={x(hover)} y1={PT} y2={H - PB} stroke="var(--m-faint)" strokeDasharray="2 3" />
             {(() => {
               const lines = [labels[hover], ...series.filter((s) => s.values[hover] !== null && s.values[hover] !== undefined).map((s) => `${s.name}: ${format(s.values[hover])}`)];
               const w = Math.max(...lines.map((t) => t.length)) * 6.2 + 16;
               const bx = Math.min(Math.max(x(hover) - w / 2, PL), W - PR - w);
               return (
                 <g>
-                  <rect x={bx} y={PT} width={w} height={lines.length * 15 + 8} rx="5" fill="#1a202c" opacity="0.92" />
+                  <rect x={bx} y={PT} width={w} height={lines.length * 15 + 8} rx="5" fill="var(--m-heading)" opacity="0.92" />
                   {lines.map((t, i) => <text key={t} x={bx + 8} y={PT + 17 + i * 15} fontSize="11" fill="#fff" fontWeight={i === 0 ? 700 : 400}>{t}</text>)}
                 </g>
               );
@@ -248,7 +248,7 @@ export function LineChart({ labels, series, format = money, height = 230, dense 
         )}
       </svg>
       {series.length > 1 && (
-        <div style={{ display: 'flex', gap: '16px', marginTop: '4px', fontSize: '11px', color: '#4a5568', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: '16px', marginTop: '4px', fontSize: '11px', color: 'var(--m-text-2)', flexWrap: 'wrap' }}>
           {series.map((s) => (
             <span key={s.key} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
               <span style={{ width: '14px', height: '3px', borderRadius: '2px', backgroundColor: s.color }} />{s.name}
@@ -266,9 +266,9 @@ export function PairedColumns({ rows, aLabel, bLabel, aColor = '#10b981', bColor
   const max = niceMax(Math.max(...rows.flatMap((r) => [r.a || 0, r.b || 0]), 1));
   return (
     <div>
-      <div style={{ position: 'relative', height: `${height}px`, display: 'flex', alignItems: 'flex-end', gap: '8px', borderBottom: '1px solid #cbd5e0' }}>
+      <div style={{ position: 'relative', height: `${height}px`, display: 'flex', alignItems: 'flex-end', gap: '8px', borderBottom: '1px solid var(--m-border-strong)' }}>
         {[0.25, 0.5, 0.75, 1].map((t) => (
-          <div key={t} style={{ position: 'absolute', left: 0, right: 0, top: `${(1 - t) * 100}%`, borderTop: '1px dashed #e2e8f0', pointerEvents: 'none' }}>
+          <div key={t} style={{ position: 'absolute', left: 0, right: 0, top: `${(1 - t) * 100}%`, borderTop: '1px dashed var(--m-border)', pointerEvents: 'none' }}>
             <span style={{ position: 'absolute', left: 0, top: '-7px', fontSize: '9px', color: MUTED, background: 'var(--bg-card, #fff)' }}>{Math.round(max * t).toLocaleString()}</span>
           </div>
         ))}
@@ -280,9 +280,9 @@ export function PairedColumns({ rows, aLabel, bLabel, aColor = '#10b981', bColor
         ))}
       </div>
       <div style={{ display: 'flex', gap: '8px', marginTop: '5px' }}>
-        {rows.map((r) => <div key={r.key} style={{ flex: 1, minWidth: 0, textAlign: 'center', fontSize: '10px', color: '#4a5568' }}>{r.label}</div>)}
+        {rows.map((r) => <div key={r.key} style={{ flex: 1, minWidth: 0, textAlign: 'center', fontSize: '10px', color: 'var(--m-text-2)' }}>{r.label}</div>)}
       </div>
-      <div style={{ display: 'flex', gap: '16px', marginTop: '8px', fontSize: '11px', color: '#4a5568' }}>
+      <div style={{ display: 'flex', gap: '16px', marginTop: '8px', fontSize: '11px', color: 'var(--m-text-2)' }}>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}><span style={{ width: '10px', height: '10px', borderRadius: '2px', backgroundColor: aColor }} />{aLabel}</span>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}><span style={{ width: '10px', height: '10px', borderRadius: '2px', backgroundColor: bColor }} />{bLabel}</span>
       </div>
@@ -317,7 +317,7 @@ export function SeasonHeat({ cells, format, goodHigh = true }) {
                 const key = `${y}-${String(i + 1).padStart(2, '0')}`;
                 const v = cells[key];
                 return (
-                  <td key={m} title={v === undefined ? 'No data' : `${m} ${y}: ${format(v)}`} style={{ textAlign: 'center', padding: '8px 0', borderRadius: '4px', backgroundColor: v === undefined ? 'transparent' : shade(v), color: '#1a202c', fontWeight: 600, border: v === undefined ? '1px dashed #e2e8f0' : 'none' }}>
+                  <td key={m} title={v === undefined ? 'No data' : `${m} ${y}: ${format(v)}`} style={{ textAlign: 'center', padding: '8px 0', borderRadius: '4px', backgroundColor: v === undefined ? 'transparent' : shade(v), color: 'var(--m-heading)', fontWeight: 600, border: v === undefined ? '1px dashed var(--m-border)' : 'none' }}>
                     {v === undefined ? '' : format(v)}
                   </td>
                 );
@@ -333,7 +333,7 @@ export function SeasonHeat({ cells, format, goodHigh = true }) {
 /** Small stat card used by both Market tabs. */
 export function Stat({ label, value, sub, accent = '#3182ce', valueColor, delta }) {
   return (
-    <div style={{ backgroundColor: 'var(--bg-card, #fff)', border: '1px solid var(--border-color, #e2e8f0)', borderTop: `4px solid ${accent}`, borderRadius: '8px', padding: '14px 16px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)', minWidth: 0 }}>
+    <div style={{ backgroundColor: 'var(--bg-card, #fff)', border: '1px solid var(--border-color, var(--m-border))', borderTop: `4px solid ${accent}`, borderRadius: '8px', padding: '14px 16px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)', minWidth: 0 }}>
       <div style={{ fontSize: '11px', fontWeight: 700, color: MUTED, textTransform: 'uppercase' }}>{label}</div>
       <div style={{ fontSize: '26px', fontWeight: 700, color: valueColor, marginTop: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</div>
       <div style={{ fontSize: '12px', color: MUTED, marginTop: '2px', display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>

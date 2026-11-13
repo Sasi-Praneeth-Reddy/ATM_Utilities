@@ -39,10 +39,10 @@
  *                                                     responds when DEV_BYPASS_LOGIN=true. See server/README.md.
  *   POST  /api/auth/logout
  *   GET   /api/auth/me
- *   GET   /api/users                                [admin]
- *   POST  /api/users                                [admin]  body: {email, role} — grants access with no password set yet
- *   PATCH /api/users/:id                             [admin]  body: {role}
- *   DELETE /api/users/:id                            [admin]
+ *   GET   /api/users                                [owner/developer]
+ *   POST  /api/users                                [owner/developer]  body: {email, role} — grants access with no password set yet
+ *   PATCH /api/users/:id                             [owner/developer]  body: {role}
+ *   DELETE /api/users/:id                            [owner/developer]
  *   GET   /api/state                                -> { trucks, drivers, jobs }
  *   POST  /api/trucks                                [admin]  body: {name, size, capacity, homeBase}
  *   PATCH /api/trucks/:id                            [admin]  body: any truck field(s) to change
@@ -168,7 +168,9 @@ require('./load-env');
 
 const db = require('./db');
 const auth = require('./auth');
-const { sendOtpEmail, otpEmailConfigured } = require('./emailer');
+const { sendOtpEmail, otpEmailConfigured, sendMail } = require('./emailer');
+const tasking = require('./tasking');
+const mapview = require('./mapview');
 const {
   getJobsByOpportunityId, getOpportunityDetails,
   getAllCrewMembers, getAllJobsByCrewMemberId, getAllCustomersWithOpportunities,
@@ -179,6 +181,7 @@ const { fetchIcalEvents } = require('./icalClient');
 const { fetchCalendarEvents } = require('./googleCalendarClient');
 const { mapIcalEventToJob, parseDescription } = require('./mapIcalEvent');
 const { syncSmartInsights } = require('./smartInsightsSync');
+const { syncMaterials, importMaterialsBuffer } = require('./materialsSync');
 const apiUsage = require('./apiUsage');
 
 const PORT = process.env.PORT || 8787;
@@ -373,8 +376,19 @@ async function requireAuth(req) {
   return user;
 }
 
+// 'owner' (Ryan) and 'developer' (Sasi) sit above 'admin'. Both are "top-level" roles: they pass every
+// role gate, are the only roles allowed to grant, change or remove top-level users, and are the only
+// users who see every task; everyone else sees just the tasks assigned to them (Tasking/Tasks).
+const TOP_ROLES = ['owner', 'developer'];
+const isTopRole = (role) => TOP_ROLES.includes(role);
+// User management (who can sign in, and as what) is restricted to owner/developer: admins can no
+// longer add, edit or remove users or edit External Access.
+function requireTop(user) {
+  if (!isTopRole(user.role)) { const err = new Error('Only an owner or developer can manage users'); err.status = 403; throw err; }
+}
+
 function requireRole(user, roles) {
-  if (!roles.includes(user.role)) { const err = new Error('Not allowed for your role'); err.status = 403; throw err; }
+  if (!isTopRole(user.role) && !roles.includes(user.role)) { const err = new Error('Not allowed for your role'); err.status = 403; throw err; }
 }
 
 // Only ever used to build a job's audit-log entry (see db.js's logJobChange, called right after
@@ -452,6 +466,7 @@ async function pollIcalFeed() {
 
   try {
     const [events, { trucks }] = await Promise.all([fetchIcalEvents(), db.getState()]);
+    const taskingCal = [];
 
     for (const event of events) {
       let job;
@@ -463,6 +478,7 @@ async function pollIcalFeed() {
         continue;
       }
       if (!job) { skippedUnparseable += 1; continue; }
+      taskingCal.push({ jobId: job.id, date: job.date, description: event.description });
 
       // Branch filter needs the raw parsed value, not anything mapIcalEventToJob kept — re-parse
       // just the branch line rather than threading it through the job shape for one field.
@@ -480,6 +496,7 @@ async function pollIcalFeed() {
       }
     }
 
+    await tasking.recordCalendarNotes(taskingCal);
     lastIcalSyncAt = new Date().toISOString();
     lastIcalSyncError = null;
   } catch (err) {
@@ -579,6 +596,7 @@ async function pollGoogleCalendarFeed() {
 
   try {
     const [events, { trucks, drivers }] = await Promise.all([fetchCalendarEvents(), db.getState()]);
+    const taskingCal = []; // Tasking module: full notes + materials text per job (docs/TASKING.md)
 
     for (const event of events) {
       let job;
@@ -590,6 +608,7 @@ async function pollGoogleCalendarFeed() {
         continue;
       }
       if (!job) { skippedUnparseable += 1; continue; }
+      taskingCal.push({ jobId: job.id, date: job.date, description: event.description });
 
       const matchedTruckId = db.findTruckIdBySmartMovingLabel(trucks, job.smartMovingTruckText);
       if (matchedTruckId) {
@@ -618,6 +637,7 @@ async function pollGoogleCalendarFeed() {
       }
     }
 
+    await tasking.recordCalendarNotes(taskingCal);
     lastCalendarSyncAt = new Date().toISOString();
     lastCalendarSyncError = null;
   } catch (err) {
@@ -643,6 +663,9 @@ async function pollGoogleCalendarFeed() {
  */
 async function hydrateOpportunity(opportunityId) {
   const opportunity = await getOpportunityDetails(opportunityId);
+  // Tasking module: remember status/customer/service date for every opportunity we see, booked or not
+  // (never throws, no extra API call). See docs/TASKING.md.
+  await tasking.recordOpportunityDetails(opportunity);
 
   // "Booked jobs only" filter (2026-08-18) — a live dispatch board shouldn't be cluttered with
   // quotes/leads that might never actually happen, and importing them wasted API calls on the
@@ -825,9 +848,11 @@ async function pollSweepInner({ from: fromOverride, to: toOverride, mode = 'diff
   try {
     const customers = await getAllCustomersWithOpportunities({ fromServiceDate: from, toServiceDate: to });
     const customerOpportunityIds = new Set();
+    const taskingNotes = []; // Tasking: stubs for every opportunity seen, booked or not (no extra API calls)
     customers.forEach(customer => {
       (customer.opportunities || []).forEach(opp => {
         if (!opp.id || !Array.isArray(opp.jobs) || opp.jobs.length === 0) return;
+        taskingNotes.push({ id: opp.id, customerId: customer.id, customerName: customer.name, status: opp.status, serviceDate: opp.serviceDate, quoteNumber: opp.quoteNumber });
         // Fail OPEN on a missing/unrecognized status — only skip once we positively know it's not
         // booked.
         if (opp.status !== undefined && opp.status !== null && !BOOKED_STATUSES.has(opp.status)) return;
@@ -841,6 +866,7 @@ async function pollSweepInner({ from: fromOverride, to: toOverride, mode = 'diff
       });
     });
     customerJobOpportunityCount = customerOpportunityIds.size;
+    await tasking.noteOpportunities(taskingNotes);
   } catch (err) {
     sourcesFailed += 1;
     errors.push({ opportunityId: null, customer: null, message: `GET /api/customers: ${err.message}` });
@@ -1194,16 +1220,16 @@ async function handleRequest(req, res) {
       return;
     }
 
-    /* ---- User management (admin only) ---- */
+    /* ---- User management (owner/developer only) ---- */
 
     if (p === '/api/users' && req.method === 'GET') {
-      requireRole(currentUser, ['admin']);
+      requireTop(currentUser);
       sendJson(req, res, 200, await db.listUsers());
       return;
     }
 
     if (p === '/api/users' && req.method === 'POST') {
-      requireRole(currentUser, ['admin']);
+      requireTop(currentUser);
       const body = await readJsonBody(req);
       const email = auth.normalizeEmail(body.email);
       // Company-domain addresses are always allowed; anything else needs to have been explicitly
@@ -1215,7 +1241,11 @@ async function handleRequest(req, res) {
         });
         return;
       }
-      const role = ['admin', 'dispatcher', 'crew'].includes(body.role) ? body.role : 'dispatcher';
+      const role = [...TOP_ROLES, 'admin', 'dispatcher', 'crew'].includes(body.role) ? body.role : 'dispatcher';
+      if (isTopRole(role) && !isTopRole(currentUser.role)) {
+        sendJson(req, res, 403, { error: 'Only an owner or developer can grant the owner or developer role' });
+        return;
+      }
       if (await db.getUserByEmail(email)) {
         sendJson(req, res, 409, { error: 'A user with that email already exists' });
         return;
@@ -1234,13 +1264,13 @@ async function handleRequest(req, res) {
        POST /api/users afterward, same as any other account. */
 
     if (p === '/api/allowed-external-emails' && req.method === 'GET') {
-      requireRole(currentUser, ['admin']);
+      requireTop(currentUser);
       sendJson(req, res, 200, await db.listAllowedExternalEmails());
       return;
     }
 
     if (p === '/api/allowed-external-emails' && req.method === 'POST') {
-      requireRole(currentUser, ['admin']);
+      requireTop(currentUser);
       const body = await readJsonBody(req);
       const email = auth.normalizeEmail(body.email);
       if (!email || !email.includes('@')) {
@@ -1258,7 +1288,7 @@ async function handleRequest(req, res) {
 
     let m = p.match(/^\/api\/allowed-external-emails\/([^/]+)$/);
     if (m && req.method === 'DELETE') {
-      requireRole(currentUser, ['admin']);
+      requireTop(currentUser);
       const email = auth.normalizeEmail(decodeURIComponent(m[1]));
       await db.removeAllowedExternalEmail(email);
       sendJson(req, res, 200, { ok: true });
@@ -1267,18 +1297,28 @@ async function handleRequest(req, res) {
 
     m = p.match(/^\/api\/users\/([^/]+)$/);
     if (m && req.method === 'PATCH') {
-      requireRole(currentUser, ['admin']);
+      requireTop(currentUser);
       const targetId = m[1];
       const target = await db.getUserById(targetId);
       if (!target) { sendJson(req, res, 404, { error: 'User not found' }); return; }
       const body = await readJsonBody(req);
       if (body.role !== undefined) {
-        if (!['admin', 'dispatcher', 'crew'].includes(body.role)) {
+        if (![...TOP_ROLES, 'admin', 'dispatcher', 'crew'].includes(body.role)) {
           sendJson(req, res, 400, { error: 'Invalid role' });
           return;
         }
-        if (target.role === 'admin' && body.role !== 'admin' && (await db.countAdmins()) <= 1) {
+        if ((isTopRole(target.role) || isTopRole(body.role)) && !isTopRole(currentUser.role)) {
+          sendJson(req, res, 403, { error: 'Only an owner or developer can grant or change the owner/developer roles' });
+          return;
+        }
+        const wasAdminLevel = target.role === 'admin' || isTopRole(target.role);
+        const staysAdminLevel = body.role === 'admin' || isTopRole(body.role);
+        if (wasAdminLevel && !staysAdminLevel && (await db.countAdmins()) <= 1) {
           sendJson(req, res, 400, { error: "Can't remove the last admin — promote someone else first" });
+          return;
+        }
+        if (isTopRole(target.role) && !isTopRole(body.role) && (await db.countTopLevel()) <= 1) {
+          sendJson(req, res, 400, { error: "Can't remove the last owner/developer — make someone else one first" });
           return;
         }
         await db.updateUserRole(targetId, body.role);
@@ -1289,17 +1329,118 @@ async function handleRequest(req, res) {
 
     m = p.match(/^\/api\/users\/([^/]+)$/);
     if (m && req.method === 'DELETE') {
-      requireRole(currentUser, ['admin']);
+      requireTop(currentUser);
       const targetId = m[1];
       const target = await db.getUserById(targetId);
       if (!target) { sendJson(req, res, 404, { error: 'User not found' }); return; }
       if (targetId === currentUser.id) { sendJson(req, res, 400, { error: "You can't delete your own account while logged in" }); return; }
-      if (target.role === 'admin' && (await db.countAdmins()) <= 1) {
+      if (isTopRole(target.role) && !isTopRole(currentUser.role)) {
+        sendJson(req, res, 403, { error: 'Only an owner or developer can remove an owner or developer' });
+        return;
+      }
+      if ((target.role === 'admin' || isTopRole(target.role)) && (await db.countAdmins()) <= 1) {
         sendJson(req, res, 400, { error: "Can't delete the last admin" });
+        return;
+      }
+      if (isTopRole(target.role) && (await db.countTopLevel()) <= 1) {
+        sendJson(req, res, 400, { error: "Can't delete the last owner/developer" });
         return;
       }
       await db.deleteUser(targetId);
       sendJson(req, res, 200, { ok: true });
+      return;
+    }
+
+    /* ---- Map view (read-only, any signed-in user) — see server/mapview.js. GET only; nothing here edits data. ---- */
+    if (p === '/api/map/jobs') {
+      if (req.method !== 'GET') { sendJson(req, res, 405, { error: 'Map is read-only' }); return; }
+      sendJson(req, res, 200, await mapview.buildMap(db, url.searchParams.get('date'), url.searchParams.get('kind')));
+      return;
+    }
+
+    /* ---- Tasking (office task board) — see docs/TASKING.md and server/tasking.js ----
+       Admin + dispatcher (owner/developer pass every gate). Reads come from Firestore only; SmartMoving is
+       only called by POST /api/tasking/refresh and the daily refresh after the 6 AM sweep. */
+    if (p.startsWith('/api/tasking/')) {
+      requireRole(currentUser, ['admin', 'dispatcher']);
+      const dateParam = url.searchParams.get('date');
+
+      if (p === '/api/tasking/summary' && req.method === 'GET') {
+        sendJson(req, res, 200, await tasking.buildSummary(db, dateParam));
+        return;
+      }
+      if (p === '/api/tasking/dispatch' && req.method === 'GET') {
+        sendJson(req, res, 200, await tasking.buildDispatch(db, dateParam));
+        return;
+      }
+      if (p === '/api/tasking/refresh' && req.method === 'POST') {
+        // Manual "Refresh from SmartMoving": capped lower than the daily run to stay inside the API budget.
+        sendJson(req, res, 200, await tasking.runRefresh({ db, maxOpps: 60, maxCustomers: 20, maxJobs: 20 }));
+        return;
+      }
+      if (p === '/api/tasking/materials-sync' && req.method === 'POST') {
+        // Check Gmail now for the Job Materials report (otherwise it runs at 6:30 AM and 5:00 PM ET).
+        sendJson(req, res, 200, await syncMaterials());
+        return;
+      }
+      if (p === '/api/tasking/materials-upload' && req.method === 'POST') {
+        // Manual upload of the Job Materials .xlsx (base64 in JSON) - same import as the email path.
+        const body = await readJsonBody(req);
+        if (!body.dataBase64 || typeof body.dataBase64 !== 'string') { sendJson(req, res, 400, { error: 'dataBase64 (the .xlsx file) is required' }); return; }
+        const buf = Buffer.from(body.dataBase64, 'base64');
+        if (buf.length < 100 || buf.length > 8 * 1024 * 1024) { sendJson(req, res, 400, { error: 'File is empty or larger than 8 MB' }); return; }
+        try { sendJson(req, res, 200, await importMaterialsBuffer(buf, String(body.filename || 'upload.xlsx').slice(0, 120))); }
+        catch (err) { sendJson(req, res, 400, { error: err.message }); }
+        return;
+      }
+      if (p === '/api/tasking/dispatch-refresh' && req.method === 'POST') {
+        // Re-read the SmartMoving calendar now; the calendar sync hands each event's notes + materials to Tasking.
+        const cal = await pollGoogleCalendarFeed();
+        const body = await readJsonBody(req);
+        const day = tasking.isIsoDate(body.date) ? body.date : tasking.todayIso();
+        const jobsOnDays = (await db.listJobsInRange(day, day)).length;
+        sendJson(req, res, 200, { imported: (tasking.getCalendarRun() || {}).updated || 0, jobsOnDays, calendarRun: tasking.getCalendarRun(), calendar: { matched: cal.matchedCount, errors: (cal.errors || []).slice(0, 3) } });
+        return;
+      }
+      let tm = p.match(/^\/api\/tasking\/job\/([^/]+)$/);
+      if (tm && req.method === 'PUT') {
+        const jobId = decodeURIComponent(tm[1]);
+        if (!(await db.getJob(jobId))) { sendJson(req, res, 404, { error: 'Job not found' }); return; }
+        const body = await readJsonBody(req);
+        delete body.emailedAt; // server-set only
+        sendJson(req, res, 200, await tasking.updateJobState(jobId, body, currentUser.email));
+        return;
+      }
+      tm = p.match(/^\/api\/tasking\/day\/(\d{4}-\d{2}-\d{2})$/);
+      if (tm && req.method === 'PUT') {
+        sendJson(req, res, 200, await tasking.setDayState(tm[1], await readJsonBody(req), currentUser.email));
+        return;
+      }
+      if (p === '/api/tasking/send-assignments' && req.method === 'POST') {
+        const body = await readJsonBody(req);
+        const to = (Array.isArray(body.to) ? body.to : []).map(e => auth.normalizeEmail(e)).filter(Boolean).slice(0, 10);
+        if (!to.length) { sendJson(req, res, 400, { error: 'Add at least one recipient email' }); return; }
+        for (const e of to) {
+          if (!auth.isCompanyEmail(e) && !(await db.isEmailAllowedExternally(e))) {
+            sendJson(req, res, 400, { error: `${e} is not a company address or an allowed external email` });
+            return;
+          }
+        }
+        const dispatch = await tasking.buildDispatch(db, body.date);
+        if (!dispatch.jobs.length) { sendJson(req, res, 400, { error: 'No jobs on that day to send' }); return; }
+        const mail = tasking.renderAssignmentsEmail(dispatch);
+        try {
+          await sendMail({ to: to.join(', '), ...mail });
+        } catch (err) {
+          sendJson(req, res, 502, { error: `Email failed: ${err.message}` });
+          return;
+        }
+        const stamp = new Date().toISOString();
+        await Promise.all(dispatch.jobs.map(j => tasking.updateJobState(j.jobId, { emailedAt: stamp }, currentUser.email)));
+        sendJson(req, res, 200, { ok: true, sentTo: to, jobCount: dispatch.jobs.length });
+        return;
+      }
+      sendJson(req, res, 404, { error: 'Not found' });
       return;
     }
 
@@ -1854,4 +1995,5 @@ async function start() {
 module.exports = {
   server, db, auth, hydrateOpportunity, pollSweep, pollIcalFeed, pollGoogleCalendarFeed,
   syncSmartInsights, handleRequest, initOnce, start,
+  runTaskingRefresh: (opts) => tasking.runRefresh({ db, ...opts }),
 };

@@ -56,14 +56,17 @@ async function handleStorageRequest(req, res, url, currentUser) {
   // bulk write endpoints below, never read anything.
   const isScraperWrite = req.method === 'POST' && (p.endsWith('/bulk') || p === '/api/storage/summary/refresh') && hasValidScraperKey(req);
 
+  // 'owner' and 'developer' are above admin, so they count as admin here.
+  const effectiveRole = currentUser && ['owner', 'developer'].includes(currentUser.role) ? 'admin' : (currentUser && currentUser.role);
+
   // Auth requirement: storage tracking data visible to admin and dispatcher
-  if (!isScraperWrite && (!currentUser || !['admin', 'dispatcher'].includes(currentUser.role))) {
+  if (!isScraperWrite && (!currentUser || !['admin', 'dispatcher'].includes(effectiveRole))) {
     sendJson(req, res, 403, { error: 'Forbidden: Storage intelligence requires admin or dispatcher access' });
     return true;
   }
 
   // Bulk writes change shared market data, so they are admin-only (dispatchers can still read everything).
-  if (req.method === 'POST' && !isScraperWrite && currentUser.role !== 'admin') {
+  if (req.method === 'POST' && !isScraperWrite && effectiveRole !== 'admin') {
     sendJson(req, res, 403, { error: 'Forbidden: changing storage data requires admin access' });
     return true;
   }

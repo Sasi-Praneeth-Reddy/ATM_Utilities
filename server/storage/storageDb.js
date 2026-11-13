@@ -1,13 +1,14 @@
 /**
  * server/storage/storageDb.js
  *
- * Data access layer for Self-Storage Tracking & MLS Benchmarks, backed by Firebase SQL Connect
- * (Cloud SQL for PostgreSQL) since 2026-10-28. Previously Firestore, and before that SQLite on AWS EC2.
+ * Data access layer for Self-Storage Tracking & MLS Benchmarks, backed by AWS DynamoDB (see ../awsStore.js
+ * and docs/AWS-DATA.md). Before that: Firebase SQL Connect / Cloud SQL (2026-10-28 to 2026-11), Firestore, and
+ * before that SQLite on AWS EC2.
  *
- * Tables (see /dataconnect/schema/schema.gql): StorageFacility, StoragePricing, MlsBenchmark, AppState.
+ * Tables (defined in ../awsStore.js): StorageFacility, StoragePricing, MlsBenchmark, AppState.
  */
 
-const sql = require('../sqlconnect');
+const store = require('../awsStore');
 
 /* ---------------------------------------------------------------------------------------------
  * Caching. Small tables (facilities, benchmarks) are cached in memory for 10 minutes. KPIs and the
@@ -27,16 +28,53 @@ function clearStorageCache() {
   memo.clear();
 }
 async function markStorageSummaryDirty() {
-  await sql.mergeState('storageSummary', { dirty: true });
+  await store.mergeState('storageSummary', { dirty: true });
+}
+
+
+// ================================================================
+// SCRAPER DATA CLEAN-UP
+// The StorageCafe scraper sends unit sizes like "10' x 15'" and facilities whose city/state/brand are
+// "Unknown"/"Independent" with the real values only inside the name ("Public Storage, Falls Church, VA 22042").
+// Both are normalised here, on write and on read, so old and new rows behave the same.
+// ================================================================
+
+/** "10' x 15'", "15 x 10", "10X15" -> "10x15" (smaller side first, so 5x10 and 10x5 are one size). */
+function normalizeUnitSize(raw) {
+  const m = /(\d+(?:\.\d+)?)\s*['"′]?\s*[x×*]\s*(\d+(?:\.\d+)?)/i.exec(String(raw || ''));
+  if (!m) return String(raw || '').trim() || '10x10';
+  const [a, b] = [Number(m[1]), Number(m[2])].sort((x, y) => x - y);
+  return `${a}x${b}`;
+}
+
+const KNOWN_BRANDS = [
+  ['Public Storage', /public storage/i], ['Extra Space Storage', /extra space/i], ['CubeSmart', /cubesmart|cube smart/i],
+  ['Life Storage', /life storage/i], ['U-Haul', /u-?haul/i], ['StorageMart', /storagemart/i], ['SmartStop', /smartstop/i],
+  ['Simply Self Storage', /simply self/i], ['iStorage', /istorage/i], ['National Storage Affiliates', /national storage/i],
+];
+const isUnknown = (v) => !v || /^unknown$/i.test(String(v).trim());
+
+/** Fill in city/state/brand from a name like "Public Storage, Falls Church, VA 22042" when the fields say Unknown. */
+function cleanFacilityFields(f) {
+  const out = { ...f };
+  const m = /,\s*([^,]+?),\s*([A-Z]{2})\s+(\d{5})\s*$/.exec(String(f.name || ''));
+  if (isUnknown(out.city)) out.city = m ? m[1].trim() : '';
+  if (isUnknown(out.state)) out.state = m ? m[2] : '';
+  if (isUnknown(out.zipCode) && m) out.zipCode = m[3];
+  for (const k of ['address', 'phone']) if (isUnknown(out[k])) out[k] = '';
+  if (!out.brand || out.brand === 'Independent') {
+    const hit = KNOWN_BRANDS.find(([, re]) => re.test(out.name || ''));
+    out.brand = hit ? hit[0] : 'Independent';
+  }
+  return out;
 }
 
 // ================================================================
 // FACILITIES
 // ================================================================
 
-const FACILITY_SELECTION = 'facilityId name brand address city state zipCode lat lon phone website';
 function rowToFacility(r) {
-  return {
+  return cleanFacilityFields({
     id: r.facilityId,
     name: r.name || '',
     brand: r.brand || '',
@@ -48,12 +86,12 @@ function rowToFacility(r) {
     lon: r.lon ?? null,
     phone: r.phone || '',
     website: r.website || '',
-  };
+  });
 }
 
 async function getFacilities({ brand, zipCode } = {}) {
   const all = await memoized('facilities', async () => {
-    const rows = await sql.pageAll('storageFacilities', 'facilityId', FACILITY_SELECTION);
+    const rows = await store.scan('StorageFacility');
     const list = rows.map(rowToFacility);
     list.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     return list;
@@ -62,8 +100,8 @@ async function getFacilities({ brand, zipCode } = {}) {
 }
 
 async function getFacility(id) {
-  const data = await sql.read(`query F($id: String!) { storageFacility(key: {facilityId: $id}) { ${FACILITY_SELECTION} } }`, { id: String(id) });
-  return data.storageFacility ? rowToFacility(data.storageFacility) : null;
+  const row = await store.getItem('StorageFacility', String(id));
+  return row ? rowToFacility(row) : null;
 }
 
 async function upsertFacilities(facilities = []) {
@@ -72,7 +110,7 @@ async function upsertFacilities(facilities = []) {
   for (const f of facilities) {
     const facilityId = f.googlePlaceId || f.google_place_id || (f.id !== undefined && f.id !== null ? String(f.id) : '');
     if (!facilityId) continue;
-    byId.set(facilityId, {
+    byId.set(facilityId, cleanFacilityFields({
       facilityId,
       name: f.name || '',
       brand: f.brand || 'Independent',
@@ -84,10 +122,10 @@ async function upsertFacilities(facilities = []) {
       lon: Number(f.lon) || null,
       phone: f.phone || '',
       website: f.website || '',
-    });
+    }));
   }
   const rows = [...byId.values()];
-  await sql.upsertMany('StorageFacility', 'storageFacility_upsertMany', rows);
+  await store.upsertMany('StorageFacility', rows);
   return { count: rows.length };
 }
 
@@ -108,17 +146,9 @@ async function getLatestPricing({ unitSize, facilityId } = {}) {
 async function getPricingHistory(facilityId, unitSize, days = 30) {
   const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
   const resolved = (await resolveFacilityId(facilityId)) || String(facilityId);
-  const data = await sql.read(
-    `query H($f: String!, $u: String!, $c: Timestamp!) {
-       storagePricings(limit: 5000, orderBy: {scrapedAt: ASC},
-         where: {facility: {facilityId: {eq: $f}}, unitSize: {eq: $u}, scrapedAt: {ge: $c}}) {
-         priceId facility { facilityId } unitSize unitType streetRate webRate availability source scrapedAt
-       }
-     }`,
-    { f: resolved, u: unitSize, c: cutoff }
-  );
-  return (data.storagePricings || []).map((r) => ({
-    facilityId: r.facility ? r.facility.facilityId : resolved,
+  const rows = await store.pricingHistory(resolved, unitSize, cutoff);
+  return rows.map((r) => ({
+    facilityId: r.facilityId || resolved,
     unitSize: r.unitSize,
     unitType: r.unitType || '',
     streetRate: r.streetRate ?? null,
@@ -135,7 +165,7 @@ async function resolveFacilityId(raw) {
   const id = String(raw);
   const facilities = await getFacilities();
   if (facilities.some((f) => f.id === id)) return id;
-  const map = await memoized('facilityIdMap', async () => (await sql.getState('facilityIdMap')) || {});
+  const map = await memoized('facilityIdMap', async () => (await store.getState('facilityIdMap')) || {});
   return map[id] || null;
 }
 
@@ -149,21 +179,21 @@ async function insertPricingSnapshots(snapshots = []) {
   for (const s of snapshots) {
     const facilityId = await resolveFacilityId(s.facilityId || s.facility_id);
     if (!facilityId) { skipped++; continue; }
-    const unitSize = s.unitSize || s.unit_size || '10x10';
+    const unitSize = normalizeUnitSize(s.unitSize || s.unit_size || '10x10');
     rows.push({
       // A scraper-supplied snapshotKey makes re-running the same day's job idempotent (same key = same row).
       priceId: s.snapshotKey ? `price_${facilityId}_${s.snapshotKey}` : `price_${facilityId}_${unitSize}_${Date.now()}_${n++}`,
-      facilityFacilityId: facilityId,
+      facilityId,
       unitSize,
       unitType: s.unitType || s.unit_type || 'Standard',
       streetRate: Math.round(Number(s.streetRate || s.street_rate)) || null,
       webRate: Math.round(Number(s.webRate || s.web_rate)) || null,
       availability: s.availability || 'available',
       source: s.source || 'scraper',
-      scrapedAt: sql.isoTs(s.scrapedAt || s.scraped_at) || now,
+      scrapedAt: store.isoTs(s.scrapedAt || s.scraped_at) || now,
     });
   }
-  if (rows.length) await sql.upsertMany('StoragePricing', 'storagePricing_upsertMany', rows);
+  if (rows.length) await store.upsertMany('StoragePricing', rows);
   if (skipped) console.warn(`[storageDb] ${skipped} pricing snapshots skipped: unknown facility id.`);
   return { count: rows.length, skipped };
 }
@@ -180,47 +210,44 @@ const SUMMARY_WINDOW_DAYS = 30;
 /** Pass over the most recent 30 days of pricing snapshots (history keeps growing daily, so we never
  * read all of it) - only run from getStorageSummary(). */
 async function computeStorageSummary() {
-  const newest = await sql.read('query N { storagePricings(limit: 1, orderBy: {scrapedAt: DESC}) { scrapedAt } }');
-  const newestAt = newest.storagePricings && newest.storagePricings[0] ? newest.storagePricings[0].scrapedAt : null;
+  const newestAt = await store.newestPricingAt();
   const since = new Date((newestAt ? Date.parse(newestAt) : Date.now()) - SUMMARY_WINDOW_DAYS * 86400000).toISOString();
-  const facilities = await sql.pageAll('storageFacilities', 'facilityId', 'facilityId');
+  const facilities = await store.scan('StorageFacility', { project: ['facilityId'] });
 
   // Stream the price rows page by page and keep only a running aggregate per facility + unit size
   // (its most recent scrape day), so memory stays small however much history has piled up.
   let activeSnapshots = 0;
   let lastScraped = '';
   const agg = new Map(); // `${facilityId}|${unitSize}` -> { day, sum, count, best }
-  await sql.pageAll('storagePricings', 'priceId', 'facility { facilityId } unitSize unitType availability streetRate webRate scrapedAt source', {
-    where: 'scrapedAt: {ge: $since}', varDefs: ', $since: Timestamp!', vars: { since },
-    onPage: (rows) => {
-      for (const r of rows) {
-        activeSnapshots += 1;
-        const at = String(r.scrapedAt || '');
-        if (at > lastScraped) lastScraped = at;
-        if (!r.webRate || !r.facility) continue;
-        const day = at.slice(0, 10);
-        const fid = String(r.facility.facilityId);
-        const key = `${fid}|${r.unitSize}`;
-        let a = agg.get(key);
-        if (!a || day > a.day) { a = { day, sum: 0, count: 0, best: null }; agg.set(key, a); }
-        if (day < a.day) continue;
-        a.sum += r.webRate;
-        a.count += 1;
-        if (!a.best || r.webRate < a.best.webRate) {
-          a.best = {
-            id: key.replace('|', '_'),
-            facilityId: fid,
-            unitSize: r.unitSize,
-            unitType: r.unitType || '',
-            availability: r.availability || '',
-            streetRate: r.streetRate ?? null,
-            webRate: r.webRate,
-            scrapedAt: at,
-            source: r.source || '',
-          };
-        }
+  await store.pricingSince(since, (rows) => {
+    for (const r of rows) {
+      activeSnapshots += 1;
+      const at = String(r.scrapedAt || '');
+      if (at > lastScraped) lastScraped = at;
+      if (!r.webRate || !r.facilityId) continue;
+      const day = at.slice(0, 10);
+      const fid = String(r.facilityId);
+      const size = normalizeUnitSize(r.unitSize); // rows saved before the clean-up still say "10' x 15'"
+      const key = `${fid}|${size}`;
+      let a = agg.get(key);
+      if (!a || day > a.day) { a = { day, sum: 0, count: 0, best: null }; agg.set(key, a); }
+      if (day < a.day) continue;
+      a.sum += r.webRate;
+      a.count += 1;
+      if (!a.best || r.webRate < a.best.webRate) {
+        a.best = {
+          id: key.replace('|', '_'),
+          facilityId: fid,
+          unitSize: size,
+          unitType: r.unitType || '',
+          availability: r.availability || '',
+          streetRate: r.streetRate ?? null,
+          webRate: r.webRate,
+          scrapedAt: at,
+          source: r.source || '',
+        };
       }
-    },
+    }
   });
 
   const sums = {};
@@ -273,13 +300,13 @@ const CITY_HISTORY_DAYS = 400;
 async function recordCityHistory(summary) {
   if (!summary.lastScraped || !(summary.cityRates || []).length) return;
   const day = String(summary.lastScraped).slice(0, 10);
-  const hist = (await sql.getState('storageCityHistory')) || {};
+  const hist = (await store.getState('storageCityHistory')) || {};
   const entry = {};
   for (const r of summary.cityRates) entry[`${r.city}|${r.state}|${r.unitSize}`] = [r.avg, r.facilities];
   hist[day] = entry;
   const days = Object.keys(hist).sort();
   while (days.length > CITY_HISTORY_DAYS) delete hist[days.shift()];
-  await sql.setState('storageCityHistory', hist);
+  await store.setState('storageCityHistory', hist);
 }
 
 async function getStorageOverview() {
@@ -294,7 +321,7 @@ async function getStorageOverview() {
 }
 
 async function getCityHistory({ city, state, unitSize = '10x10' } = {}) {
-  const hist = (await sql.getState('storageCityHistory')) || {};
+  const hist = (await store.getState('storageCityHistory')) || {};
   const key = city ? `${city}|${state || ''}|${unitSize}` : null;
   return Object.keys(hist).sort().map((day) => {
     if (key) { const v = hist[day][key]; return v ? { day, avg: v[0], facilities: v[1] } : null; }
@@ -313,7 +340,7 @@ async function refreshStorageSummary() {
   if (!summaryInflight) {
     summaryInflight = (async () => {
       const fresh = await computeStorageSummary();
-      await sql.setState('storageSummary', fresh);
+      await store.setState('storageSummary', fresh);
       try { await recordCityHistory(fresh); } catch (e) { console.error('recordCityHistory failed:', e.message); }
       return fresh;
     })().finally(() => { summaryInflight = null; });
@@ -324,7 +351,7 @@ async function refreshStorageSummary() {
 async function getStorageSummary() {
   // Page loads read the stored summary even if it is a little stale ("dirty"): a fast answer now beats a
   // 30-second scan. Fresh data arrives when the scraper triggers a refresh.
-  let data = await sql.getState('storageSummary');
+  let data = await store.getState('storageSummary');
   if (!data || !data.computedAt) data = await refreshStorageSummary();
   if (summaryCache.computedAt !== data.computedAt) summaryCache = { computedAt: data.computedAt, value: data };
   return { ...summaryCache.value, latestPricing: [...(summaryCache.value.latestPricing || [])] };
@@ -360,11 +387,9 @@ async function getMarketShare() {
 // MLS BENCHMARKS (NVAR & BRIGHT MLS)
 // ================================================================
 
-const BENCH_SELECTION = 'benchmarkId region source periodType periodDate year month activeListings newListings closedSales pendingSales avgClosePrice medianClosePrice medianDaysOnMarket closeToListRatio';
-
 async function getMlsBenchmarks({ source, region } = {}) {
   const all = await memoized('benchmarks', async () => {
-    const rows = await sql.pageAll('mlsBenchmarks', 'benchmarkId', BENCH_SELECTION);
+    const rows = await store.scan('MlsBenchmark');
     const list = rows.map((r) => ({ id: r.benchmarkId, ...r, benchmarkId: undefined }));
     list.sort((a, b) => (b.periodDate || '').localeCompare(a.periodDate || ''));
     return list;
@@ -377,7 +402,7 @@ async function upsertMlsBenchmarks(benchmarks = []) {
   const byId = new Map();
 
   for (const b of benchmarks) {
-    const periodDate = sql.dateOnly(b.periodDate || b.period_date);
+    const periodDate = store.dateOnly(b.periodDate || b.period_date);
     if (!periodDate) continue;
     const benchmarkId = `bm_${b.source || 'NVAR'}_${periodDate}_${(b.region || 'NOVA').replace(/\s+/g, '_')}`;
     byId.set(benchmarkId, {
@@ -399,7 +424,7 @@ async function upsertMlsBenchmarks(benchmarks = []) {
     });
   }
   const rows = [...byId.values()];
-  await sql.upsertMany('MlsBenchmark', 'mlsBenchmark_upsertMany', rows);
+  await store.upsertMany('MlsBenchmark', rows);
   return { count: rows.length };
 }
 

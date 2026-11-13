@@ -8,6 +8,8 @@
     "mock": "node mock-smartmoving-server.js",
     "test-webhook": "node test-webhook.js",
     "create-admin": "node create-admin.js",
+    "test-aws-store": "node test-aws-store.js",
+    "migrate-sql-to-dynamodb": "node scripts/migrate-sql-to-dynamodb.js",
     "gmail-auth": "node gmail-oauth-setup.js",
     "cleanup-stale-smart-insights-jobs": "node cleanup-stale-smart-insights-jobs.js"
   },
@@ -17,11 +19,16 @@
   "license": "UNLICENSED",
   "private": true,
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1168.0",
+    "@aws-sdk/lib-dynamodb": "^3.1168.0",
     "firebase-admin": "^14.2.0",
     "firebase-functions": "^7.3.2",
     "googleapis": "^144.0.0",
     "nodemailer": "^9.0.5",
     "xlsx": "^0.18.5",
     "zipcodes": "^8.0.0"
+  },
+  "devDependencies": {
+    "dynalite": "^4.0.0"
   }
 }

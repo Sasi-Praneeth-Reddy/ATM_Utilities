@@ -85,16 +85,22 @@ const SMARTMOVING_ICAL_URL = defineSecret('SMARTMOVING_ICAL_URL');
 const GMAIL_OAUTH_CLIENT_ID = defineSecret('GMAIL_OAUTH_CLIENT_ID');
 const GMAIL_OAUTH_CLIENT_SECRET = defineSecret('GMAIL_OAUTH_CLIENT_SECRET');
 const GMAIL_OAUTH_REFRESH_TOKEN = defineSecret('GMAIL_OAUTH_REFRESH_TOKEN');
+// Leads + storage data live in AWS DynamoDB (server/awsStore.js). These are the keys of the
+// least-privilege IAM user "atm-data-writer" created by aws/atm-data.template.json.
+const ATM_AWS_ACCESS_KEY_ID = defineSecret('ATM_AWS_ACCESS_KEY_ID');
+const ATM_AWS_SECRET_ACCESS_KEY = defineSecret('ATM_AWS_SECRET_ACCESS_KEY');
 const ALL_SECRETS = [
   SESSION_SECRET, SMTP_PASS, SMARTMOVING_API_KEY, WEBHOOK_SECRET, SCRAPER_API_KEY, GITHUB_DISPATCH_TOKEN, SMARTMOVING_ICAL_URL,
   GMAIL_OAUTH_CLIENT_ID, GMAIL_OAUTH_CLIENT_SECRET, GMAIL_OAUTH_REFRESH_TOKEN,
+  ATM_AWS_ACCESS_KEY_ID, ATM_AWS_SECRET_ACCESS_KEY,
 ];
 
 // No FIREBASE_PROJECT_ID / FIREBASE_SERVICE_ACCOUNT_JSON needed here, unlike the AWS deployment —
 // Cloud Functions has its own built-in GCP identity and sets GCLOUD_PROJECT automatically, both of
 // which server/firestore.js already checks for and prefers when present (see its header comment).
 
-const { handleRequest, pollSweep, pollIcalFeed, pollGoogleCalendarFeed, syncSmartInsights, initOnce } = require('./server');
+const { syncMaterials } = require('./materialsSync');
+const { handleRequest, pollSweep, pollIcalFeed, pollGoogleCalendarFeed, syncSmartInsights, initOnce, runTaskingRefresh } = require('./server');
 
 // initOnce() (db.initDb() seeding + bootstrapAdmin()) needs to run before the first real request
 // on a fresh instance, but Cloud Functions has no single "startup" moment the way server.js's own
@@ -147,11 +153,17 @@ exports.pollSweepScheduled = onSchedule(
     secrets: ALL_SECRETS,
     region: 'us-central1',
     memory: '512MiB',
+    timeoutSeconds: 540, // the Tasking refresh below runs after the sweep, so allow more than the 180s default
   },
   async () => {
     await ensureInit();
     await pollSweep().catch((err) => {
       console.error('Scheduled poll sweep failed:', err);
+    });
+    // Tasking module (docs/TASKING.md): refresh estimate/deposit/payment status and claims for the
+    // opportunities the sweep just saw. Budget-capped and error-swallowing, so it can't hurt the sweep.
+    await runTaskingRefresh().catch((err) => {
+      console.error('Scheduled Tasking refresh failed:', err);
     });
   }
 );
@@ -283,6 +295,25 @@ async function runCalendarSweep(label) {
 // comment) instead of missing it. 4:00 PM/4:03 PM stays a 3-minute stagger, not aligned — the odd
 // :03 offset exists purely for the cron-expressiveness reason above, not to deliberately avoid
 // overlapping Smart Insights; revisit if the two ever need to line up exactly at 4pm too.
+// Tasking: Job Materials report from Gmail (materialsSync.js). Two checks a day - 6:30 AM ET (before loading) and
+// 5:00 PM ET (jobs added during the day). Two functions because cron cannot express two times with different minutes.
+async function runMaterialsSync(label) {
+  await ensureInit();
+  const result = await syncMaterials().catch((err) => { console.error(`Materials sync (${label}) failed:`, err); return null; });
+  if (result) {
+    console.log(`Materials sync (${label}): ${result.filesProcessed} file(s), ${result.skipped.length} skipped, ${result.errors.length} error(s).`);
+    result.errors.forEach((e) => console.error('Materials sync error:', e));
+  }
+}
+exports.materialsSyncScheduled = onSchedule(
+  { schedule: '30 6 * * *', timeZone: 'America/New_York', secrets: ALL_SECRETS, region: 'us-central1', memory: '512MiB', timeoutSeconds: 300 },
+  async () => { await runMaterialsSync('6:30 AM'); }
+);
+exports.materialsSyncScheduled5pm = onSchedule(
+  { schedule: '0 17 * * *', timeZone: 'America/New_York', secrets: ALL_SECRETS, region: 'us-central1', memory: '512MiB', timeoutSeconds: 300 },
+  async () => { await runMaterialsSync('5:00 PM'); }
+);
+
 exports.calendarSweepScheduled = onSchedule(
   {
     schedule: '0 8,12,13 * * *', // 8:00 AM, 12:00 PM, and 1:00 PM ET, daily

@@ -300,7 +300,26 @@ async function getOpportunityDetails(opportunityId) {
   });
 }
 
+/**
+ * Tasking module (2026-11-05): the same opportunity endpoint, asking for payments, documents and
+ * tasks — one call per opportunity, only ever made by tasking.js's budget-capped refresh (never by
+ * the board sync, whose getOpportunityDetails above is left exactly as it was).
+ */
+async function getOpportunityFinance(opportunityId) {
+  return smartMovingGet(`/api/opportunities/${encodeURIComponent(opportunityId)}`, {
+    IncludePayments: true,
+    IncludeDocuments: true,
+    IncludeTasks: true,
+  });
+}
+
+/** GET /api/premium/customers/{customerId}/service-tickets — Premium tier. Claims are tickets of type Claim. */
+async function getCustomerServiceTickets(customerId) {
+  return smartMovingGet(`/api/premium/customers/${encodeURIComponent(customerId)}/service-tickets`, { Page: 1, PageSize: 100 });
+}
+
 module.exports = {
+  getOpportunityFinance, getCustomerServiceTickets,
   getLeadsPage, getAllLeads, getJobsByOpportunityId, getJobDetails, getOpportunityDetails,
   getCrewMembersPage, getAllCrewMembers, getJobsByCrewMemberIdPage, getAllJobsByCrewMemberId,
   getCustomersPage, getAllCustomersWithOpportunities,

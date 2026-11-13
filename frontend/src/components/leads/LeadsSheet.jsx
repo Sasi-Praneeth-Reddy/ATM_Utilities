@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { usePageSearch } from '../../hooks/usePageSearch';
 import { fetchListings, fetchMatchedLeads, fetchLegacyCustomers, downloadListingsCsv, saveBlob } from './leadsApi';
 import { monthLabel } from './LeadsCharts';
 
@@ -24,6 +25,8 @@ function csvEscape(v) {
 export default function LeadsSheet({ backendUrl, months = [] }) {
   const [sheet, setSheet] = useState('listings');
   const [search, setSearch] = useState('');
+  // The title-bar search box drives this sheet's search; its hint follows the sheet you are on.
+  usePageSearch({ id: 'leads-sheet', placeholder: `Search ${SHEETS[sheet].label.toLowerCase()}…`, value: search, onChange: setSearch });
   const [status, setStatus] = useState('all');
   const [month, setMonth] = useState('all');
   const [page, setPage] = useState(1);
@@ -232,14 +235,13 @@ export default function LeadsSheet({ backendUrl, months = [] }) {
   const sheetCount = (k) => (k === 'listings' ? listings.total : k === 'matches' ? matches?.length : customers?.length);
   const sel = selected && shownRows[selected.r] ? { col: columns[selected.c], row: shownRows[selected.r] } : null;
 
-  const border = '1px solid var(--border-color, #d0d7de)';
-  const ctl = { padding: '6px 10px', borderRadius: '4px', border: '1px solid #cbd5e0', fontSize: '12px' };
+  const border = '1px solid var(--border-color, var(--m-border-strong))';
+  const ctl = { padding: '6px 10px', borderRadius: '4px', border: '1px solid var(--m-border-strong)', fontSize: '12px' };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
       {/* toolbar */}
       <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center', backgroundColor: 'var(--bg-card, #fff)', border, borderRadius: '8px', padding: '10px 14px' }}>
-        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={`🔍 Search ${SHEETS[sheet].label.toLowerCase()}…`} style={{ ...ctl, flex: 1, minWidth: '220px' }} />
         {(sheet === 'listings' || sheet === 'matches') && (
           <select value={status} onChange={(e) => setStatus(e.target.value)} style={ctl} aria-label="Status">
             <option value="all">All statuses</option>
@@ -261,14 +263,14 @@ export default function LeadsSheet({ backendUrl, months = [] }) {
 
       {/* formula bar */}
       <div style={{ display: 'flex', alignItems: 'stretch', border, borderRadius: '6px', backgroundColor: 'var(--bg-card, #fff)', fontSize: '12px', overflow: 'hidden' }}>
-        <div style={{ width: '120px', flex: 'none', padding: '6px 10px', borderRight: border, backgroundColor: '#f3f4f6', fontWeight: 700, color: '#374151' }}>
+        <div style={{ width: '120px', flex: 'none', padding: '6px 10px', borderRight: border, backgroundColor: 'var(--m-surface-2)', fontWeight: 700, color: '#374151' }}>
           {sel ? `R${(sheet === 'listings' ? (page - 1) * PAGE : (page - 1) * PAGE) + selected.r + 1} · ${sel.col.label.replace(' ↗', '')}` : 'Select a cell'}
         </div>
         <div style={{ flex: 1, padding: '6px 10px', overflowX: 'auto', whiteSpace: 'nowrap' }}>{sel ? cellText(sel.col, sel.row) : ''}</div>
       </div>
 
-      {error && <div style={{ color: '#c53030', fontSize: '12px' }}>⚠ {error}</div>}
-      {note && <div style={{ color: '#276749', fontSize: '12px' }}>{note}</div>}
+      {error && <div style={{ color: 'var(--m-red)', fontSize: '12px' }}>⚠ {error}</div>}
+      {note && <div style={{ color: 'var(--tint-green-text)', fontSize: '12px' }}>{note}</div>}
 
       {/* grid */}
       <div style={{ border, borderRadius: '6px', backgroundColor: 'var(--bg-card, #fff)', overflow: 'auto', maxHeight: '64vh', position: 'relative', opacity: loading ? 0.6 : 1, transition: 'opacity .15s' }}>
@@ -279,13 +281,13 @@ export default function LeadsSheet({ backendUrl, months = [] }) {
           </colgroup>
           <thead>
             <tr>
-              <th style={{ position: 'sticky', top: 0, left: 0, zIndex: 3, backgroundColor: '#e5e7eb', borderRight: border, borderBottom: border }} />
+              <th style={{ position: 'sticky', top: 0, left: 0, zIndex: 3, backgroundColor: 'var(--m-border)', borderRight: border, borderBottom: border }} />
               {columns.map((c) => (
                 <th
                   key={c.key}
                   onClick={() => toggleSort(c.key)}
                   title="Click to sort"
-                  style={{ position: 'sticky', top: 0, zIndex: 2, backgroundColor: '#f3f4f6', color: '#111827', textAlign: c.num ? 'right' : 'left', padding: '7px 8px', borderRight: border, borderBottom: border, cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                  style={{ position: 'sticky', top: 0, zIndex: 2, backgroundColor: 'var(--m-surface-2)', color: '#111827', textAlign: c.num ? 'right' : 'left', padding: '7px 8px', borderRight: border, borderBottom: border, cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
                 >
                   {c.label}{sort?.key === c.key ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
                 </th>
@@ -295,7 +297,7 @@ export default function LeadsSheet({ backendUrl, months = [] }) {
           <tbody>
             {shownRows.map((row, r) => (
               <tr key={row.id || r}>
-                <td style={{ position: 'sticky', left: 0, zIndex: 1, backgroundColor: '#f3f4f6', color: '#6b7280', textAlign: 'center', borderRight: border, borderBottom: border, fontSize: '11px' }}>
+                <td style={{ position: 'sticky', left: 0, zIndex: 1, backgroundColor: 'var(--m-surface-2)', color: '#6b7280', textAlign: 'center', borderRight: border, borderBottom: border, fontSize: '11px' }}>
                   {(page - 1) * PAGE + r + 1}
                 </td>
                 {columns.map((c, ci) => {
@@ -313,7 +315,7 @@ export default function LeadsSheet({ backendUrl, months = [] }) {
                       }}
                     >
                       {linkable ? (
-                        <a href="#sheet" onClick={(e) => { e.preventDefault(); e.stopPropagation(); c.link(row); }} style={{ color: '#2b6cb0', textDecoration: 'underline' }}>{text}</a>
+                        <a href="#sheet" onClick={(e) => { e.preventDefault(); e.stopPropagation(); c.link(row); }} style={{ color: 'var(--m-blue)', textDecoration: 'underline' }}>{text}</a>
                       ) : text}
                     </td>
                   );
@@ -321,7 +323,7 @@ export default function LeadsSheet({ backendUrl, months = [] }) {
               </tr>
             ))}
             {!shownRows.length && (
-              <tr><td colSpan={columns.length + 1} style={{ padding: '30px', textAlign: 'center', color: '#718096' }}>
+              <tr><td colSpan={columns.length + 1} style={{ padding: '30px', textAlign: 'center', color: 'var(--m-muted)' }}>
                 {loading || (sheet === 'matches' && matches === null) || (sheet === 'customers' && customers === null) ? 'Loading…' : 'No rows match.'}
               </td></tr>
             )}
@@ -340,14 +342,14 @@ export default function LeadsSheet({ backendUrl, months = [] }) {
               style={{
                 padding: '7px 16px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', borderRadius: '0 0 6px 6px',
                 border, borderTop: sheet === k ? '3px solid #217346' : border,
-                backgroundColor: sheet === k ? 'var(--bg-card, #fff)' : '#f3f4f6', color: sheet === k ? '#217346' : '#4b5563',
+                backgroundColor: sheet === k ? 'var(--bg-card, #fff)' : 'var(--m-surface-2)', color: sheet === k ? '#217346' : '#4b5563',
               }}
             >
               {s.label}{sheetCount(k) !== undefined && sheetCount(k) !== null ? ` (${sheetCount(k).toLocaleString()})` : ''}
             </button>
           ))}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: '#4a5568' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: 'var(--m-text-2)' }}>
           {sheet === 'listings' && sort && <span>Sorted within this page only</span>}
           <span>{total ? `${((page - 1) * PAGE + 1).toLocaleString()}–${Math.min(page * PAGE, total).toLocaleString()} of ${total.toLocaleString()}` : '0 rows'}</span>
           <button type="button" disabled={page <= 1} onClick={() => setPage((p) => p - 1)} style={{ ...ctl, cursor: page <= 1 ? 'default' : 'pointer' }}>‹ Prev</button>

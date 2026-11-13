@@ -147,22 +147,22 @@ export default function CountyMap({ stats = [], collected = [], onSelect, select
   return (
     <div className="county-map" style={{ position: 'relative' }}>
       <svg ref={svgRef} viewBox={`${cur.x} ${cur.y} ${cur.w} ${cur.h}`} role="img" aria-label="Map of the counties we collect listings from"
-        style={{ width: '100%', height: '460px', display: 'block', background: 'linear-gradient(180deg,#f6f8f7,#e8eeec)', borderRadius: '6px', border: '1px solid #e2e8f0', cursor: view.zoom > 1 ? 'grab' : 'default', touchAction: 'none', userSelect: 'none' }}
+        style={{ width: '100%', height: '460px', display: 'block', background: 'linear-gradient(180deg,var(--m-map-bg-1),var(--m-map-bg-2))', borderRadius: '6px', border: '1px solid var(--m-border)', cursor: view.zoom > 1 ? 'grab' : 'default', touchAction: 'none', userSelect: 'none' }}
         preserveAspectRatio="xMidYMid meet"
         onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={endDrag} onPointerLeave={endDrag}>
         <g>
-          {base.map((i) => <path key={i} d={shapes.f[i].d} fill="#e6ebf2" stroke="#fff" strokeWidth={cur.w / 900} />)}
+          {base.map((i) => <path key={i} d={shapes.f[i].d} fill="var(--m-map-base)" stroke="var(--m-map-line)" strokeWidth={cur.w / 900} />)}
         </g>
         <g>
           {live.map((i) => {
             const f = shapes.f[i];
             const d = byFeature.get(i);
             const v = valueOf(d);
-            const fill = v > 0 ? mix(M.from, M.to, Math.min(1, Math.max(0.04, tOf(v)))) : '#dfe5ee';
+            const fill = v > 0 ? mix(M.from, M.to, Math.min(1, Math.max(0.04, tOf(v)))) : 'var(--m-map-nodata)';
             const active = hover === i || isSelected(d);
             return (
               <path key={i} d={f.d} fill={fill} className="county-shape"
-                stroke={active ? '#0f172a' : '#fff'} strokeWidth={active ? cur.w / 330 : cur.w / 700} strokeLinejoin="round"
+                stroke={active ? 'var(--m-map-active)' : 'var(--m-map-line)'} strokeWidth={active ? cur.w / 330 : cur.w / 700} strokeLinejoin="round"
                 style={{ cursor: d && onSelect ? 'pointer' : 'inherit' }}
                 onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}
                 onClick={d && onSelect ? () => { if (!movedRef.current) onSelect(d.state, d.county); } : undefined}>
@@ -182,7 +182,7 @@ export default function CountyMap({ stats = [], collected = [], onSelect, select
             const dark = v > 0 && tOf(v) > 0.5;
             return (
               <text key={i} x={f.c[0]} y={f.c[1]} textAnchor="middle" fontSize={fontSize} fontWeight="700"
-                fill={dark ? '#fff' : '#1a202c'} stroke={dark ? 'rgba(15,23,42,.35)' : 'rgba(255,255,255,.85)'} strokeWidth={fontSize / 7} paintOrder="stroke">
+                fill={dark ? '#fff' : 'var(--m-heading)'} stroke={dark ? 'rgba(15,23,42,.35)' : 'var(--m-halo)'} strokeWidth={fontSize / 7} paintOrder="stroke">
                 {shortName(f)}
                 {d && <tspan x={f.c[0]} dy={fontSize * 1.05} fontWeight="600" fontSize={fontSize * 0.9}>{M.fmt(v)}</tspan>}
               </text>
@@ -192,33 +192,33 @@ export default function CountyMap({ stats = [], collected = [], onSelect, select
       </svg>
 
       {/* Zoom controls */}
-      <div style={{ position: 'absolute', right: '12px', top: '12px', display: 'flex', flexDirection: 'column', background: 'rgba(255,255,255,.96)', border: '1px solid #e2e8f0', borderRadius: '8px', boxShadow: '0 4px 14px rgba(16,28,56,.12)', overflow: 'hidden' }}>
+      <div style={{ position: 'absolute', right: '12px', top: '12px', display: 'flex', flexDirection: 'column', background: 'var(--m-overlay)', border: '1px solid var(--m-border)', borderRadius: '8px', boxShadow: '0 4px 14px rgba(16,28,56,.12)', overflow: 'hidden' }}>
         {[['+', 'Zoom in', () => zoomAt(1.5)], ['-', 'Zoom out', () => zoomAt(1 / 1.5)], ['Reset', 'Reset the view', () => setView({ zoom: 1, cx: null, cy: null })]].map(([label, title, fn]) => (
           <button key={label} type="button" title={title} aria-label={title} onClick={fn}
-            style={{ width: label === 'Reset' ? 'auto' : '34px', height: '32px', padding: label === 'Reset' ? '0 8px' : 0, border: 'none', borderBottom: '1px solid #edf2f7', background: 'transparent', fontSize: label === 'Reset' ? '10px' : '18px', fontWeight: 700, color: '#2d3748', cursor: 'pointer' }}>
+            style={{ width: label === 'Reset' ? 'auto' : '34px', height: '32px', padding: label === 'Reset' ? '0 8px' : 0, border: 'none', borderBottom: '1px solid var(--m-surface-3)', background: 'transparent', fontSize: label === 'Reset' ? '10px' : '18px', fontWeight: 700, color: '#2d3748', cursor: 'pointer' }}>
             {label}
           </button>
         ))}
       </div>
 
       {/* Info panel (bottom-left), like a results card */}
-      <div style={{ position: 'absolute', left: '12px', bottom: '58px', width: '210px', background: 'rgba(255,255,255,.96)', border: '1px solid #e2e8f0', borderRadius: '8px', boxShadow: '0 4px 14px rgba(16,28,56,.12)', padding: '10px 12px', fontSize: '12px' }}>
+      <div style={{ position: 'absolute', left: '12px', bottom: '58px', width: '210px', background: 'var(--m-overlay)', border: '1px solid var(--m-border)', borderRadius: '8px', boxShadow: '0 4px 14px rgba(16,28,56,.12)', padding: '10px 12px', fontSize: '12px' }}>
         {hovered ? (
           <>
-            <div style={{ fontWeight: 800, fontSize: '14px', color: '#1a202c' }}>{hovered.county.replace(/ County$/, '')}, {hovered.state}</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '2px 10px', marginTop: '6px', color: '#4a5568' }}>
+            <div style={{ fontWeight: 800, fontSize: '14px', color: 'var(--m-heading)' }}>{hovered.county.replace(/ County$/, '')}, {hovered.state}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '2px 10px', marginTop: '6px', color: 'var(--m-text-2)' }}>
               <span>Listings</span><b style={{ color: '#0f766e' }}>{hovered.count.toLocaleString()}</b>
               <span>Under contract</span><b style={{ color: '#c2410c' }}>{hovered.under_contract.toLocaleString()}</b>
               <span>Average price</span><b style={{ color: '#5b21b6' }}>{hovered.priceCount ? METRICS.avgPrice.fmt(hovered.priceSum / hovered.priceCount) : '-'}</b>
               <span>Share of all</span><b>{total ? `${((hovered.count / total) * 100).toFixed(1)}%` : '-'}</b>
             </div>
-            {onSelect && <div style={{ marginTop: '6px', color: '#718096', fontSize: '11px' }}>Click to see these listings</div>}
+            {onSelect && <div style={{ marginTop: '6px', color: 'var(--m-muted)', fontSize: '11px' }}>Click to see these listings</div>}
           </>
         ) : (
           <>
-            <div style={{ fontWeight: 800, fontSize: '13px', color: '#1a202c' }}>Counties we collect</div>
-            <div style={{ color: '#4a5568', marginTop: '4px' }}><b style={{ color: '#0f766e' }}>{total.toLocaleString()}</b> listings across {collectedSet.size} counties</div>
-            <div style={{ color: '#718096', fontSize: '11px', marginTop: '4px' }}>Hover a county for details. Scroll or use + / - to zoom, drag to move. Grey areas are not collected.</div>
+            <div style={{ fontWeight: 800, fontSize: '13px', color: 'var(--m-heading)' }}>Counties we collect</div>
+            <div style={{ color: 'var(--m-text-2)', marginTop: '4px' }}><b style={{ color: '#0f766e' }}>{total.toLocaleString()}</b> listings across {collectedSet.size} counties</div>
+            <div style={{ color: 'var(--m-muted)', fontSize: '11px', marginTop: '4px' }}>Hover a county for details. Scroll or use + / - to zoom, drag to move. Grey areas are not collected.</div>
             {filtered && <div style={{ color: '#0f766e', fontSize: '11px', marginTop: '4px', fontWeight: 600 }}>Showing only listings that match your filters.</div>}
           </>
         )}
@@ -226,7 +226,7 @@ export default function CountyMap({ stats = [], collected = [], onSelect, select
 
       {/* Metric switch + legend (bottom) */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginTop: '10px' }}>
-        <div style={{ display: 'flex', backgroundColor: '#edf2f7', padding: '2px', borderRadius: '6px' }}>
+        <div style={{ display: 'flex', backgroundColor: 'var(--m-surface-3)', padding: '2px', borderRadius: '6px' }}>
           {Object.entries(METRICS).map(([id, m]) => (
             <button key={id} type="button" onClick={() => setMetric(id)}
               style={{ padding: '4px 10px', borderRadius: '4px', border: 'none', fontSize: '11px', fontWeight: 700, cursor: 'pointer', backgroundColor: metric === id ? '#0f766e' : 'transparent', color: metric === id ? '#fff' : '#4a5568' }}>
@@ -234,9 +234,9 @@ export default function CountyMap({ stats = [], collected = [], onSelect, select
             </button>
           ))}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', color: '#718096' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', color: 'var(--m-muted)' }}>
           <span>{metric === 'avgPrice' ? M.fmt(vMin) : '0'}</span>
-          <span style={{ width: '140px', height: '10px', borderRadius: '5px', background: `linear-gradient(90deg, ${mix(M.from, M.to, 0)}, ${mix(M.from, M.to, 0.5)}, ${mix(M.from, M.to, 1)})`, border: '1px solid #e2e8f0' }} />
+          <span style={{ width: '140px', height: '10px', borderRadius: '5px', background: `linear-gradient(90deg, ${mix(M.from, M.to, 0)}, ${mix(M.from, M.to, 0.5)}, ${mix(M.from, M.to, 1)})`, border: '1px solid var(--m-border)' }} />
           <span>{M.fmt(vMax)}</span>
         </div>
       </div>

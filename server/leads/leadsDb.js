@@ -1,24 +1,24 @@
 /**
  * server/leads/leadsDb.js
  *
- * Data access layer for Pre-Mover Leads and Address Matching, backed by Firebase SQL Connect
- * (Cloud SQL for PostgreSQL) since 2026-10-28. Previously Firestore.
+ * Data access layer for Pre-Mover Leads and Address Matching, backed by AWS DynamoDB (see ../awsStore.js
+ * and docs/AWS-DATA.md). Before that: Firebase SQL Connect / Cloud SQL (2026-10-28 to 2026-11), and Firestore.
  *
- * Tables (see /dataconnect/schema/schema.gql): Lead, MatchedLead, LegacyCustomer, AppState.
+ * Tables (defined in ../awsStore.js): Lead, MatchedLead, LegacyCustomer, AppState.
  *
  * NOTE: Reads from the existing Firestore `jobs` collection strictly in READ-ONLY mode.
  * Does not mutate or modify any existing scheduler job, truck, or driver records.
  */
 
 const { db: fs } = require('../firestore');
-const sql = require('../sqlconnect');
+const store = require('../awsStore');
 const { findMatchesForListing, buildAddressKeys } = require('./addressMatcher');
 const zipcodes = require('zipcodes');
 
 const jobsCol = fs.collection('jobs'); // READ-ONLY reference (scheduler data stays in Firestore)
 
 /* ---------------------------------------------------------------------------------------------
- * Caching. Listings (~27K rows) are loaded from SQL into memory once (LEADS_CACHE_TTL_MS) and
+ * Caching. Listings (~27K rows) are loaded from DynamoDB into memory once (LEADS_CACHE_TTL_MS) and
  * filtering / search / stats / export run against that snapshot, so every request after the first
  * is instant. Ingest invalidates it. Analytics are computed from the snapshot and stored in the
  * AppState table (daily).
@@ -34,7 +34,6 @@ const LEAD_FIELDS = [
   'isVacant', 'listedDate', 'scrapedAt', 'firstName', 'lastName', 'ownerFullName', 'phone', 'email', 'realtorName',
   'realtorPhone', 'realtorEmail', 'brokerName', 'source', 'previousStatus',
 ];
-const LEAD_SELECTION = LEAD_FIELDS.join(' ');
 // Text columns come back as null from SQL; the rest of the app (and the UI) expects '' like before.
 const LEAD_TEXT_FIELDS = new Set([
   'address', 'city', 'state', 'zipCode', 'county', 'status', 'firstName', 'lastName', 'ownerFullName', 'phone', 'email',
@@ -61,7 +60,7 @@ async function getLeadsSnapshot() {
   if (leadsCacheWarm()) return leadsSnapshot.rows;
   if (leadsSnapshot.loading) return leadsSnapshot.loading;
   const loading = (async () => {
-    const raw = await sql.pageAll('leads', 'leadId', LEAD_SELECTION);
+    const raw = await store.scan('Lead');
     const rows = raw.map((r) => ({ id: r.leadId, d: rowToLead(r) }));
     leadsSnapshot = { rows, loadedAt: Date.now(), loading: null };
     return rows;
@@ -118,7 +117,7 @@ async function upsertPreMoverLeads(leads = []) {
       bathrooms: Number(lead.bathrooms || 0) || null,
       sqft: Math.round(Number(lead.sqft || 0)) || null,
       isVacant: Boolean(lead.is_vacant || lead.isVacant),
-      listedDate: sql.dateOnly(lead.listed_date || lead.listedDate) || null, // blank = "not supplied"; resolved below
+      listedDate: store.dateOnly(lead.listed_date || lead.listedDate) || null, // blank = "not supplied"; resolved below
       realtorName: lead.realtor_name || lead.realtorName || '',
       realtorEmail: lead.realtor_email || lead.realtorEmail || '',
       realtorPhone: lead.realtor_phone || lead.realtorPhone || '',
@@ -133,12 +132,7 @@ async function upsertPreMoverLeads(leads = []) {
   // Listing dates: the portal CSV has no listing date, so a re-upload must never stamp "today" onto leads we
   // already know. Existing leads keep their stored listedDate/scrapedAt; only brand-new leads get today (first seen).
   const existing = new Map();
-  for (let i = 0; i < rows.length; i += 500) {
-    const ids = rows.slice(i, i + 500).map((r) => r.leadId);
-    const data = await sql.read(
-      'query E($ids: [String!]!) { leads(where: {leadId: {in: $ids}}) { leadId listedDate scrapedAt status previousStatus } }', { ids });
-    for (const e of data.leads || []) existing.set(e.leadId, e);
-  }
+  for (const e of await store.getMany('Lead', rows.map((r) => r.leadId))) existing.set(e.leadId, e);
   for (const r of rows) {
     const prev = existing.get(r.leadId);
     if (prev) {
@@ -153,7 +147,7 @@ async function upsertPreMoverLeads(leads = []) {
       r.scrapedAt = now.slice(0, 19).replace('T', ' ');
     }
   }
-  await sql.upsertMany('Lead', 'lead_upsertMany', rows);
+  await store.upsertMany('Lead', rows);
   invalidateLeadsCache();
   filteredAnalyticsCache.clear();
 
@@ -170,7 +164,9 @@ async function upsertPreMoverLeads(leads = []) {
   // Analytics are NOT recomputed per chunk (the scraper sends ~40 chunks); it calls
   // POST /api/leads/analytics/refresh once at the end. Just mark the stored copy as stale here.
   try {
-    await sql.mergeState('leadsAnalytics', { stale: true });
+    await store.mergeState('leadsAnalytics', { stale: true });
+    // Newest write time, so leadsChangedSince() never has to scan the table.
+    await store.mergeState('leadsMeta', { newestUpdatedAt: now });
   } catch (err) {
     console.error('[leadsDb] Could not flag analytics as stale:', err.message);
   }
@@ -410,7 +406,6 @@ async function listPreMoverLeads({
 // LEGACY CUSTOMERS
 // ================================================================
 
-const LEGACY_SELECTION = 'customerId name email phone originAddress destinationAddress city state zipCode moveDate notes importedAt';
 function rowToLegacy(r) {
   return {
     id: r.customerId,
@@ -457,7 +452,7 @@ async function importLegacyCustomers(customers = []) {
     });
   }
   const rows = [...byId.values()];
-  await sql.upsertMany('LegacyCustomer', 'legacyCustomer_upsertMany', rows);
+  await store.upsertMany('LegacyCustomer', rows);
   pastMovesCache = { index: null, loadedAt: 0 };
 
   // Run matching after import
@@ -471,8 +466,8 @@ async function importLegacyCustomers(customers = []) {
  */
 async function listLegacyCustomers(limit = 100) {
   const n = Math.min(Math.max(Number(limit) || 100, 1), 5000);
-  const data = await sql.read(`query L { legacyCustomers(limit: ${n}, orderBy: {customerId: ASC}) { ${LEGACY_SELECTION} } }`);
-  return (data.legacyCustomers || []).map(rowToLegacy);
+  const rows = await store.scan('LegacyCustomer');
+  return rows.slice(0, n).map(rowToLegacy);
 }
 
 // ================================================================
@@ -489,7 +484,7 @@ async function getPastMoveIndex() {
   }
   const [jobsSnap, legacyRows] = await Promise.all([
     jobsCol.get(),
-    sql.pageAll('legacyCustomers', 'customerId', LEGACY_SELECTION),
+    store.scan('LegacyCustomer'),
   ]);
   const jobs = jobsSnap.docs.map((d) => d.data()).filter((j) => j && (j.origin || j.destination));
   const legacyCustomers = legacyRows.map(rowToLegacy);
@@ -521,9 +516,8 @@ const MATCH_FIELDS = [
   'realtorName', 'realtorPhone', 'realtorEmail', 'status', 'notes', 'outreachHistory', 'detectedAt', 'lastChecked',
   'updatedAt', 'lastOutreachAt',
 ];
-const MATCH_SELECTION = `${MATCH_FIELDS.join(' ')} lead { leadId }`;
 function rowToMatch(r) {
-  const m = { id: r.matchId, leadId: r.lead ? r.lead.leadId : null };
+  const m = { id: r.matchId, leadId: r.leadId ?? null };
   for (const k of MATCH_FIELDS) {
     if (k === 'matchId') continue;
     m[k] = r[k];
@@ -547,25 +541,21 @@ async function reconcileMatches({ listings: given, full = false, dryRun = false 
   let mode = 'ingest';
 
   if (!listings) {
-    const state = (await sql.getState('leadsReconcile')) || {};
+    const state = (await store.getState('leadsReconcile')) || {};
     const lastRunAt = state.lastRunAt || null;
     if (full || !lastRunAt) {
       mode = 'full';
       listings = (await getLeadsSnapshot()).map((r) => r.d);
     } else {
       mode = 'incremental';
-      const raw = await sql.pageAll('leads', 'leadId', LEAD_SELECTION, {
-        where: 'updatedAt: {gt: $since}',
-        varDefs: ', $since: Timestamp!',
-        vars: { since: lastRunAt },
-      });
+      const raw = await store.scan('Lead', { filter: store.gt('updatedAt', lastRunAt) });
       listings = raw.map(rowToLead);
     }
   }
 
   if (!listings.length) {
     if (mode !== 'ingest' && !dryRun) {
-      await sql.mergeState('leadsReconcile', { lastRunAt: startedAt, lastMode: mode, listingsChecked: 0 });
+      await store.mergeState('leadsReconcile', { lastRunAt: startedAt, lastMode: mode, listingsChecked: 0 });
     }
     return { newMatchesCount: 0, listingsChecked: 0, mode };
   }
@@ -595,14 +585,7 @@ async function reconcileMatches({ listings: given, full = false, dryRun = false 
   // Pass 2: load only the candidate matches that already exist (keeps staff-set status/notes)
   const existingMap = new Map();
   const uniqueIds = [...new Set(candidates.map((c) => c.matchDocId))];
-  for (let i = 0; i < uniqueIds.length; i += 200) {
-    const ids = uniqueIds.slice(i, i + 200);
-    const data = await sql.read(
-      `query E($ids: [String!]!) { matchedLeads(limit: 1000, where: {matchId: {in: $ids}}) { ${MATCH_SELECTION} } }`,
-      { ids }
-    );
-    (data.matchedLeads || []).forEach((r) => existingMap.set(r.matchId, rowToMatch(r)));
-  }
+  for (const r of await store.getMany('MatchedLead', uniqueIds)) existingMap.set(r.matchId, rowToMatch(r));
 
   // Pass 3: write
   let newMatchesCount = 0;
@@ -612,7 +595,7 @@ async function reconcileMatches({ listings: given, full = false, dryRun = false 
     const existing = existingMap.get(matchDocId);
     const row = {
       matchId: matchDocId,
-      leadLeadId: listing.id,
+      leadId: listing.id,
       sourceType: isLegacy ? 'legacy_customer' : 'smartmoving_job',
       sourceId: job.id ? String(job.id) : null,
       customerName: isLegacy ? (job.name || 'Legacy Customer') : (job.customer || 'Customer'),
@@ -630,7 +613,7 @@ async function reconcileMatches({ listings: given, full = false, dryRun = false 
       matchReason: comp.matchReason,
       listingStatus: listing.status,
       listingPrice: listing.listPrice ? Math.round(listing.listPrice) : null,
-      listedDate: sql.dateOnly(listing.listedDate),
+      listedDate: store.dateOnly(listing.listedDate),
       realtorName: listing.realtorName || '',
       realtorPhone: listing.realtorPhone || '',
       realtorEmail: listing.realtorEmail || '',
@@ -646,10 +629,10 @@ async function reconcileMatches({ listings: given, full = false, dryRun = false 
     }
     toWrite.set(matchDocId, row);
   }
-  if (!dryRun && toWrite.size) await sql.upsertMany('MatchedLead', 'matchedLead_upsertMany', [...toWrite.values()]);
+  if (!dryRun && toWrite.size) await store.upsertMany('MatchedLead', [...toWrite.values()]);
 
   if (mode !== 'ingest' && !dryRun) {
-    await sql.mergeState('leadsReconcile', { lastRunAt: startedAt, lastMode: mode, listingsChecked: listings.length, newMatchesCount });
+    await store.mergeState('leadsReconcile', { lastRunAt: startedAt, lastMode: mode, listingsChecked: listings.length, newMatchesCount });
   }
   console.log(`[leadsDb] Reconcile (${mode}${dryRun ? ', dry run' : ''}): ${listings.length} listings checked, ${candidates.length} candidates, ${newMatchesCount} new matches.`);
   return { newMatchesCount, listingsChecked: listings.length, candidates: candidates.length, mode };
@@ -657,13 +640,13 @@ async function reconcileMatches({ listings: given, full = false, dryRun = false 
 
 /** Manual reconcile throttle: ms until another manual run is allowed (0 = allowed now). */
 async function getReconcileCooldownMs() {
-  const state = (await sql.getState('leadsReconcile')) || {};
+  const state = (await store.getState('leadsReconcile')) || {};
   const last = Date.parse(state.lastManualAt || '');
   if (Number.isNaN(last)) return 0;
   return Math.max(0, last + RECONCILE_COOLDOWN_MS - Date.now());
 }
 async function markManualReconcile() {
-  await sql.mergeState('leadsReconcile', { lastManualAt: new Date().toISOString() });
+  await store.mergeState('leadsReconcile', { lastManualAt: new Date().toISOString() });
 }
 
 /**
@@ -671,9 +654,7 @@ async function markManualReconcile() {
  */
 async function listMatchedLeads(statusFilter) {
   const filtered = statusFilter && statusFilter !== 'all';
-  const rows = await sql.pageAll('matchedLeads', 'matchId', MATCH_SELECTION, filtered
-    ? { where: 'status: {eq: $status}', varDefs: ', $status: String!', vars: { status: statusFilter } }
-    : {});
+  const rows = await store.scan('MatchedLead', filtered ? { filter: store.eq('status', statusFilter) } : {});
   const matches = rows.map(rowToMatch);
 
   // Sort pending first, then by listedDate descending
@@ -687,8 +668,8 @@ async function listMatchedLeads(statusFilter) {
 }
 
 async function getMatch(matchId) {
-  const data = await sql.read(`query M($id: String!) { matchedLead(key: {matchId: $id}) { ${MATCH_SELECTION} } }`, { id: matchId });
-  return data.matchedLead ? rowToMatch(data.matchedLead) : null;
+  const row = await store.getItem('MatchedLead', matchId);
+  return row ? rowToMatch(row) : null;
 }
 
 /**
@@ -706,10 +687,7 @@ async function updateMatchedLeadStatus(matchId, status, notes = '') {
   };
   if (notes) updates.notes = notes;
 
-  await sql.write('mutation U($id: String!, $d: MatchedLead_Data!) { matchedLead_update(key: {matchId: $id}, data: $d) }', {
-    id: matchId,
-    d: updates,
-  });
+  await store.update('MatchedLead', matchId, updates);
   return { id: matchId, status, ...updates };
 }
 
@@ -729,10 +707,7 @@ async function recordOutreach(matchId, outreachRecord) {
   });
 
   const now = new Date().toISOString();
-  await sql.write('mutation O($id: String!, $d: MatchedLead_Data!) { matchedLead_update(key: {matchId: $id}, data: $d) }', {
-    id: matchId,
-    d: { status: 'contacted', outreachHistory: history, lastOutreachAt: now },
-  });
+  await store.update('MatchedLead', matchId, { status: 'contacted', outreachHistory: history, lastOutreachAt: now });
 
   return { id: matchId, status: 'contacted', outreachHistory: history };
 }
@@ -741,9 +716,9 @@ let listingCountMemo = { n: 0, at: 0 };
 async function countListings() {
   if (leadsCacheWarm()) return leadsSnapshot.rows.length;
   if (Date.now() - listingCountMemo.at < 5 * 60 * 1000) return listingCountMemo.n;
-  const keys = await sql.pageAll('leads', 'leadId', 'leadId', { pageSize: 5000 });
-  listingCountMemo = { n: keys.length, at: Date.now() };
-  return keys.length;
+  const n = await store.count('Lead');
+  listingCountMemo = { n, at: Date.now() };
+  return n;
 }
 
 /**
@@ -752,7 +727,7 @@ async function countListings() {
 async function getLeadsSummary() {
   const [totalListings, matchRows] = await Promise.all([
     countListings(),
-    sql.pageAll('matchedLeads', 'matchId', 'matchId status', { pageSize: 5000 }),
+    store.scan('MatchedLead', { project: ['matchId', 'status'] }),
   ]);
   const pendingCount = matchRows.filter((m) => m.status === 'pending').length;
   const contactedCount = matchRows.filter((m) => m.status === 'contacted').length;
@@ -1052,7 +1027,7 @@ async function refreshLeadsAnalytics({ reload = false } = {}) {
     const leads = (await getLeadsSnapshot()).map((r) => r.d);
     const result = computeLeadsAnalytics(leads);
     const computedAt = new Date().toISOString();
-    await sql.setState('leadsAnalytics', { computedAt, totalListings: leads.length, result });
+    await store.setState('leadsAnalytics', { computedAt, totalListings: leads.length, result });
     filteredAnalyticsCache.clear();
     return { ...result, computedAt };
   })().finally(() => { analyticsRefreshing = null; });
@@ -1060,7 +1035,7 @@ async function refreshLeadsAnalytics({ reload = false } = {}) {
 }
 
 async function readStoredAnalytics() {
-  const stored = await sql.getState('leadsAnalytics');
+  const stored = await store.getState('leadsAnalytics');
   if (!stored || !stored.result) return null;
   return { computedAt: stored.computedAt, stale: Boolean(stored.stale), result: { ...stored.result, computedAt: stored.computedAt } };
 }
@@ -1069,8 +1044,9 @@ async function readStoredAnalytics() {
 /** True when any listing was written after the stored analytics were computed (e.g. an upload whose chart refresh never ran). */
 async function leadsChangedSince(computedAt) {
   try {
-    const d = await sql.read('query N { leads(limit: 1, orderBy: {updatedAt: DESC}) { updatedAt } }');
-    const newest = d.leads && d.leads[0] ? d.leads[0].updatedAt : null;
+    // Newest write time lives in a tiny state entry (set on every ingest), so this check never scans the table.
+    const meta = (await store.getState('leadsMeta')) || {};
+    const newest = meta.newestUpdatedAt || null;
     return Boolean(newest && computedAt && Date.parse(newest) > Date.parse(computedAt));
   } catch (e) {
     return false;
@@ -1127,7 +1103,7 @@ async function getFilteredStats(filters = {}) {
   const avgPrice = prices.length ? Math.round(prices.reduce((s, p) => s + p, 0) / prices.length) : 0;
   const medianPrice = prices.length ? prices[Math.floor(prices.length / 2)] : 0;
 
-  const matchRows = await sql.pageAll('matchedLeads', 'matchId', 'matchId matchedAddress status', { pageSize: 5000 });
+  const matchRows = await store.scan('MatchedLead', { project: ['matchId', 'matchedAddress', 'status'] });
   let matchTotal = 0;
   let matchPending = 0;
   matchRows.forEach((m) => {

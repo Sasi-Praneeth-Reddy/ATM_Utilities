@@ -507,7 +507,7 @@ secrets:
 | `WEBHOOK_SECRET`                             | `atm-scheduler/webhook-secret`                  | secret                                                                    |
 | `ADMIN_EMAIL`                                | your email                                      | plain env var — grants the first admin, see "Login & accounts"            |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER`      | `smtp.gmail.com` / `465` / your sending address | plain env vars                                                            |
-| `POLL_LOOKBACK_DAYS` / `POLL_LOOKAHEAD_DAYS` | `7` / `30`                                      | plain env vars                                                            |
+| `POLL_LOOKBACK_DAYS` / `POLL_LOOKAHEAD_DAYS` | `30` / `30`                                      | plain env vars                                                            |
 | `COOKIE_SECURE`                              | `true`                                          | plain env var — App Runner is HTTPS-only, so this should always be `true` |
 
 Under "Auto scaling," set **minimum size to 1** — App Runner can otherwise scale a service to zero

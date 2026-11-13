@@ -1,5 +1,7 @@
 import { visibleModules } from './modules';
 import logo from '../../assets/atm-logo.png';
+import CreditMark from '../CreditMark';
+import { APP_VERSION, SUPPORT_EMAIL, CREDIT } from '../../version';
 
 const P = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.75, strokeLinecap: 'round', strokeLinejoin: 'round' };
 
@@ -15,6 +17,8 @@ const ICONS = {
   market: <><path d="M3 3v18h18" /><path d="M7 16V11" /><path d="M12 16V7" /><path d="M17 16v-3" /></>,
   map: <><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" /><circle cx="12" cy="10" r="3" /></>,
   kpis: <><path d="M3 3v18h18" /><path d="m19 9-5 5-4-4-3 3" /></>,
+  settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></>,
+  sparkle: <><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" /><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z" /></>,
 };
 
 export function Icon({ name, size = 20 }) {
@@ -25,8 +29,8 @@ export function Icon({ name, size = 20 }) {
   );
 }
 
-export default function Sidebar({ role, activeModuleId, onSelectModule, collapsed, onToggle, alertModules = {} }) {
-  const mods = visibleModules(role);
+export default function Sidebar({ role, isTopRole, activeModuleId, onSelectModule, collapsed, onToggle, alertModules = {} }) {
+  const mods = visibleModules(role, isTopRole);
 
   return (
     <>
@@ -51,6 +55,7 @@ export default function Sidebar({ role, activeModuleId, onSelectModule, collapse
                 <Icon name={m.icon} />
                 <span className="shell-label">{m.label}</span>
                 {m.soon && <span className="shell-soon">Soon</span>}
+                {m.badge && <span className="shell-new">{m.badge}</span>}
                 {alertModules[m.id] && <span className="nav-alert-dot" title={alertModules[m.id]} aria-label={alertModules[m.id]} />}
               </button>
             );
@@ -58,6 +63,11 @@ export default function Sidebar({ role, activeModuleId, onSelectModule, collapse
         </div>
         {/* Collapse control lives at the bottom as a regular full-size row (same look as the module
             rows), so it can't get clipped in the narrow icon rail the way a small title-row button did. */}
+        <div className="shell-version" title={`ATM Hub version ${APP_VERSION}. ${CREDIT}.`}>
+          <CreditMark className="shell-mark" />
+          v{APP_VERSION}
+          <a className="shell-support" href={`mailto:${SUPPORT_EMAIL}?subject=ATM%20Hub%20issue`} title={`${CREDIT}. Something buggy? ${SUPPORT_EMAIL}`}>Report a bug</a>
+        </div>
         <button type="button" className="shell-item shell-collapse" onClick={onToggle} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
           <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" style={{ flex: 'none', transform: collapsed ? 'scaleX(-1)' : 'none' }} {...P}>
             <rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /><path d="m15 10-2 2 2 2" />

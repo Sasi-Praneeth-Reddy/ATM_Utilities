@@ -1,7 +1,11 @@
 import { useMemo, useState } from 'react';
+import { usePageSearch } from '../../hooks/usePageSearch';
 
 const EMAIL_DOMAIN = 'aroundtownmovers.com';
 const ROLES = ['admin', 'dispatcher', 'crew'];
+// Only an owner or developer may hand out (or touch) those roles, so they are offered only to them.
+const TOP_ROLES = ['owner', 'developer'];
+const rolesFor = (isTopRole) => (isTopRole ? [...TOP_ROLES, ...ROLES] : ROLES);
 
 function isCompanyEmail(email) {
   return /\S+@\S+/.test(email) && email.trim().toLowerCase().endsWith('@' + EMAIL_DOMAIN);
@@ -25,7 +29,7 @@ function isAllowedEmail(email, allowedExternalEmails) {
   return allowedExternalEmails.some((e) => e.email === trimmed);
 }
 
-function AddUserForm({ onSave, onCancel, allowedExternalEmails }) {
+function AddUserForm({ onSave, onCancel, allowedExternalEmails, isTopRole }) {
   const [email, setEmail] = useState('');
   const [role, setRole] = useState('dispatcher');
   const [error, setError] = useState('');
@@ -55,7 +59,7 @@ function AddUserForm({ onSave, onCancel, allowedExternalEmails }) {
       <div className="row">
         <span className="field-label">Role</span>
         <select value={role} onChange={(e) => setRole(e.target.value)}>
-          {ROLES.map((r) => <option value={r} key={r}>{r}</option>)}
+          {rolesFor(isTopRole).map((r) => <option value={r} key={r}>{r}</option>)}
         </select>
       </div>
       <div style={{ fontSize: 11, color: 'var(--muted)' }}>No password to set here — they'll use "Forgot password?" on the sign-in screen to set one themselves via an emailed code.</div>
@@ -145,7 +149,9 @@ function ExternalAccessPanel({ allowedExternalEmails, onAdd, onRemove }) {
   );
 }
 
-function UserRow({ user, isSelf, onChangeRole, onDelete }) {
+function UserRow({ user, isSelf, isTopRole, onChangeRole, onDelete }) {
+  // Only an owner/developer can edit or remove another owner/developer.
+  const locked = TOP_ROLES.includes(user.role) && !isTopRole;
   async function handleRoleChange(newRole) {
     try {
       await onChangeRole(user.id, newRole);
@@ -175,11 +181,11 @@ function UserRow({ user, isSelf, onChangeRole, onDelete }) {
       </h3>
       <div className="row">
         <span className="field-label">Role</span>
-        <select value={user.role} onChange={(e) => handleRoleChange(e.target.value)} disabled={isSelf}>
-          {ROLES.map((r) => <option value={r} key={r}>{r}</option>)}
+        <select value={user.role} onChange={(e) => handleRoleChange(e.target.value)} disabled={isSelf || locked}>
+          {(locked ? [user.role] : rolesFor(isTopRole)).map((r) => <option value={r} key={r}>{r}</option>)}
         </select>
       </div>
-      {!isSelf && (
+      {!isSelf && !locked && (
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <button className="btn secondary" style={{ color: 'var(--red)' }} onClick={handleDelete}>Remove access</button>
         </div>
@@ -189,11 +195,13 @@ function UserRow({ user, isSelf, onChangeRole, onDelete }) {
 }
 
 export default function UsersAdmin({
-  users, currentUserId, onCreateUser, onChangeRole, onDeleteUser,
+  users, currentUserId, isTopRole, onCreateUser, onChangeRole, onDeleteUser,
   allowedExternalEmails, onAddAllowedExternalEmail, onRemoveAllowedExternalEmail,
 }) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [query, setQuery] = useState('');
+  // The title-bar search box drives this list's filter (it used to be a second box in this toolbar).
+  usePageSearch({ id: 'users', placeholder: 'Search users (email, role)…', value: query, onChange: setQuery });
 
   async function handleSave(fields) {
     await onCreateUser(fields);
@@ -213,26 +221,17 @@ export default function UsersAdmin({
     <div>
       <div className="toolbar">
         <h2 className="section-title">Users — who can access ATM Hub</h2>
-        <div className="list-filter">
-          <input
-            type="text"
-            className="job-search-input"
-            placeholder="Search users (email, role)…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-        </div>
         <button className="btn" onClick={() => setShowAddForm((v) => !v)}>+ Grant Access</button>
       </div>
       <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
         Everyone signs in with an email + password — only @{EMAIL_DOMAIN} addresses can be granted
         access, unless the email's been added under "External Access" below. New accounts start
         with no password; the person sets their own via "Forgot password?" on the sign-in screen (a
-        6-digit code is emailed to them). <b>Admin</b> has full access including this panel.
+        6-digit code is emailed to them). <b>Owner</b> and <b>Developer</b> are above Admin: everything an admin can do, plus seeing every task and granting those two roles. <b>Admin</b> has full access except managing users (this panel).
         <b>Dispatcher</b> can assign/move jobs but not edit truck/driver records or users.
         <b>Crew</b> is read-only.
       </div>
-      {showAddForm && <AddUserForm onSave={handleSave} onCancel={() => setShowAddForm(false)} allowedExternalEmails={allowedExternalEmails} />}
+      {showAddForm && <AddUserForm onSave={handleSave} onCancel={() => setShowAddForm(false)} allowedExternalEmails={allowedExternalEmails} isTopRole={isTopRole} />}
       {query.trim() && !filteredUsers.length ? (
         <div className="empty">No users match "{query}".</div>
       ) : (
@@ -241,6 +240,7 @@ export default function UsersAdmin({
             key={u.id}
             user={u}
             isSelf={u.id === currentUserId}
+            isTopRole={isTopRole}
             onChangeRole={onChangeRole}
             onDelete={onDeleteUser}
           />
