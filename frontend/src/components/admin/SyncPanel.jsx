@@ -35,6 +35,13 @@ function GmailAuthStatusLine({ status }) {
       </div>
     );
   }
+  if (status.neverExpires) {
+    return (
+      <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+        Gmail authorization has no expiry timer (last renewed {fmtDay(status.refreshedAt)}).
+      </div>
+    );
+  }
   if (status.expired) {
     const daysAgo = Math.abs(status.daysRemaining);
     return (

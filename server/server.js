@@ -210,11 +210,11 @@ const ICAL_BRANCH_FILTER = process.env.SMARTMOVING_ICAL_BRANCH || 'Around Town M
 const POLL_LOOKAHEAD_DAYS = Number(process.env.POLL_LOOKAHEAD_DAYS) || 60;
 const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true';
 // Google's OAuth "Testing" publishing status auto-expires a refresh token exactly 7 days after
-// it's issued, no matter how often it's used — see smartInsightsGmail.js's file header. Used by
-// GET /api/gmail-auth-status to estimate when the next re-auth is due from when
-// gmail-oauth-setup.js last recorded one; not configurable via env because it's Google's rule, not
-// this app's, so there's nothing meaningful to override it with.
-const GMAIL_AUTH_EXPIRY_DAYS = 7;
+// it's issued — see smartInsightsGmail.js's file header. The app was moved to "In production"
+// on 2026-11-23, so tokens issued since then don't expire on a timer and the default is 0
+// (= no countdown). Set GMAIL_AUTH_EXPIRY_DAYS=7 if the consent screen is ever put back in
+// Testing. Used by GET /api/gmail-auth-status.
+const GMAIL_AUTH_EXPIRY_DAYS = Number(process.env.GMAIL_AUTH_EXPIRY_DAYS ?? 0) || 0;
 // Only used by the dev-login bypass below, which is a full-page browser navigation (like an old
 // OAuth redirect) rather than a fetch call, so it needs somewhere to send the browser back to.
 const FRONTEND_URL = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
@@ -316,7 +316,7 @@ function sendJson(req, res, status, body, extraHeaders) {
     // don't send an Origin header at all, where this distinction doesn't matter.
     'Access-Control-Allow-Origin': origin || '*',
     'Access-Control-Allow-Credentials': 'true',
-    'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-session-mode, x-webhook-secret, x-api-key',
     ...(extraHeaders || {}),
   });
@@ -1561,6 +1561,11 @@ async function handleRequest(req, res) {
       const status = await db.getGmailAuthStatus();
       if (!status || !status.refreshedAt) {
         sendJson(req, res, 200, { tracked: false });
+        return;
+      }
+      if (!GMAIL_AUTH_EXPIRY_DAYS) {
+        // Published app: the token has no timer, so there's no countdown or expiry alert.
+        sendJson(req, res, 200, { tracked: true, neverExpires: true, refreshedAt: status.refreshedAt, expired: false });
         return;
       }
       const refreshedAt = new Date(status.refreshedAt);

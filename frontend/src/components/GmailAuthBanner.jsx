@@ -16,7 +16,7 @@ const GMAIL_AUTH_BANNER_WARNING_DAYS = 1;
  * (App.jsx / Nav.jsx). Since 2026-09-30 the banner itself only renders on that tab, at the user's
  * request (it was obstructing every other page), so the dot is what alerts from elsewhere. */
 export function isGmailAuthAlert(status) {
-  if (!status || !status.tracked) return false;
+  if (!status || !status.tracked || status.neverExpires) return false;
   return Boolean(status.expired) || status.daysRemaining <= GMAIL_AUTH_BANNER_WARNING_DAYS;
 }
 
