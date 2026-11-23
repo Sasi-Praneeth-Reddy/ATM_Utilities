@@ -77,6 +77,21 @@ function estimatedTotalNumber(e) {
 
 /* ---------- opportunity capture (SmartMoving -> tasking_opps) ---------- */
 
+/** Sales person's display name from an opportunity. SmartMoving's field name/shape is not documented in our notes,
+ *  so accept the likely ones (string, or object with name / first+last). `node check-tasking-data.js` prints what is really there. */
+function salesPersonName(o) {
+  for (const k of ['salesPerson', 'salesAssignee', 'salesPersonName', 'salesRep']) {
+    const v = o[k];
+    if (!v) continue;
+    if (typeof v === 'string') return v.trim() || null;
+    if (typeof v === 'object') {
+      const n = v.name || v.fullName || [v.firstName, v.lastName].filter(Boolean).join(' ');
+      if (n && String(n).trim()) return String(n).trim();
+    }
+  }
+  return null;
+}
+
 /** Reduces a full SmartMoving opportunity (fetched with IncludePayments etc.) to what Tasking needs. */
 function summarizeOpportunity(o) {
   const out = {
@@ -91,6 +106,7 @@ function summarizeOpportunity(o) {
     referralSource: o.referralSource || null,
     estimatedTotal: estimatedTotalNumber(o.estimatedTotal),
   };
+  out.salesPerson = salesPersonName(o);
   const jobDates = (Array.isArray(o.jobs) ? o.jobs : []).map(j => toIsoDate(j.jobDate)).filter(Boolean).sort();
   out.serviceDate = toIsoDate(o.serviceDate) || jobDates[0] || null;
   out.jobDates = jobDates;
@@ -112,7 +128,7 @@ function summarizeOpportunity(o) {
         if (cat === 'deposit' && net > 0) depositPaid = true;
       }
     }
-    Object.assign(out, { paidTotal, balanceDue, depositPaid, depositPending, financeAt: new Date().toISOString(), financeStatus: out.status });
+    Object.assign(out, { paidTotal, balanceDue, depositPaid, depositPending, financeAt: new Date().toISOString(), financeStatus: out.status, salesChecked: true });
   }
   if (Array.isArray(o.opportunityDocuments)) {
     const kinds = o.opportunityDocuments.map(d => ({ kind: lookup(DOC_KIND, d.type), done: Boolean(d.isComplete) }));
@@ -187,12 +203,13 @@ async function pickRefreshTargets({ max = 60 } = {}) {
     // Also stale when the status moved since finance was read (e.g. Opportunity -> Booked after the customer
     // signs and pays): the old "unsigned / no deposit" flags are wrong then, so don't wait out the 20 h gate.
     const statusMoved = Boolean(o.financeAt) && o.financeStatus !== o.status;
-    const stale = !o.financeAt || statusMoved || Date.parse(o.financeAt) < staleBefore;
+    const needsSales = Boolean(o.financeAt) && !o.salesChecked; // one-time backfill of the sales person
+    const stale = !o.financeAt || statusMoved || needsSales || Date.parse(o.financeAt) < staleBefore;
     if (!stale) return;
     const ahead = daysBetween(today, o.serviceDate);
     if (o.status === 4 && ahead >= -1 && ahead <= 60) cands.push({ id: o.id, p: 0, d: ahead });
     else if (o.status === 10 && ahead >= -90 && ahead <= 0) cands.push({ id: o.id, p: 1, d: -ahead });
-    else if (o.status === 3 && ahead >= 0 && ahead <= 90 && (!o.financeAt || statusMoved)) cands.push({ id: o.id, p: 2, d: ahead });
+    else if (o.status === 3 && ahead >= 0 && ahead <= 90 && (!o.financeAt || statusMoved || needsSales)) cands.push({ id: o.id, p: 2, d: ahead });
   });
   cands.sort((a, b) => a.p - b.p || a.d - b.d);
   return { total: cands.length, ids: cands.slice(0, max).map(c => c.id) };
@@ -656,6 +673,14 @@ async function buildSummary(db, dateIso) {
     claimsCol.get(),
   ]);
 
+  // Sales person fallback: board jobs imported from the Smart Insights report carry smartInsightsSalesPerson, keyed by
+  // the SmartMoving opportunity id. Used until SmartMoving's own salesAssignee has been read into tasking_opps.
+  const salesByOpp = new Map();
+  try {
+    const aheadJobs = await db.listJobsInRange(today, addDays(today, 90));
+    aheadJobs.forEach(j => { if (j.smartMovingOpportunityId && j.smartInsightsSalesPerson) salesByOpp.set(j.smartMovingOpportunityId, j.smartInsightsSalesPerson); });
+  } catch (err) { console.warn('tasking: sales person fallback skipped:', err.message); }
+
   const notSecured = [];
   aheadSnap.forEach(d => {
     const o = d.data();
@@ -669,13 +694,14 @@ async function buildSummary(db, dateIso) {
       else if (o.estimateSigned === false) reasons.push(o.estimateSent === false ? 'Estimate not sent' : 'Estimate not signed');
       else if (o.status === 3) reasons.push('Not checked yet'); // documents not read yet: don't claim unsigned
       // financeStatus !== status means finance was read before the last status change: not trustworthy until re-read.
-      if (o.financeAt && o.financeStatus === o.status && !o.depositPaid && num(o.paidTotal) <= 0) reasons.push('No deposit paid');
+      // Records read before financeStatus existed have it undefined: treat as fresh (same rule as financeFresh above).
+      if (o.financeAt && financeFresh && !o.depositPaid && num(o.paidTotal) <= 0) reasons.push('No deposit paid');
     }
     if (!reasons.length) return;
     notSecured.push({
       oppId: o.id, customer: o.customerName || 'Unknown', quote: o.quoteNumber || null, phone: o.phone || null,
       serviceDate: o.serviceDate, daysLeft: daysBetween(today, o.serviceDate), status: o.statusLabel || '',
-      estimatedTotal: o.estimatedTotal ?? null, reasons,
+      estimatedTotal: o.estimatedTotal ?? null, reasons, salesPerson: o.salesPerson || salesByOpp.get(o.id) || null,
     });
   });
   notSecured.sort((a, b) => a.daysLeft - b.daysLeft);
