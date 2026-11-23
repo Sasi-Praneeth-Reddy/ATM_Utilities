@@ -61,6 +61,7 @@ export default function TaskingSummary({ backendUrl }) {
       const r = await refreshFromSmartMoving(backendUrl);
       const f = r.finance || {}; const c = r.claims || {}; const jb = r.jobs || {};
       setRefreshMsg(`Updated ${f.refreshed ?? 0} opportunities, checked ${c.customersChecked ?? 0} customers for claims and imported job notes for ${jb.imported ?? 0} jobs.`
+        + (f.remaining > 0 ? ` ${f.remaining} more still waiting${f.stoppedForTime ? ' (stopped at the time limit — press again)' : ''}.` : '')
         + (f.stoppedForBudget || c.stoppedForBudget ? ' Stopped early to protect the daily SmartMoving API budget.' : '')
         + (f.failed || c.failed || jb.failed ? ` ${(f.failed || 0) + (c.failed || 0) + (jb.failed || 0)} lookups failed.` : ''));
       await load();

@@ -211,16 +211,20 @@ async function pickRefreshTargets({ max = 60 } = {}) {
     else if (o.status === 10 && ahead >= -90 && ahead <= 0) cands.push({ id: o.id, p: 1, d: -ahead });
     else if (o.status === 3 && ahead >= 0 && ahead <= 90 && (!o.financeAt || statusMoved || needsSales)) cands.push({ id: o.id, p: 2, d: ahead });
   });
-  cands.sort((a, b) => a.p - b.p || a.d - b.d);
+  // Soonest service date first, whatever the status (today's unsigned estimate before next month's booked job);
+  // completed jobs (p 1) come after all upcoming ones (p 0 and 2) so unpaid-completed never starves the job board.
+  cands.sort((a, b) => (a.p === 1) - (b.p === 1) || a.d - b.d || a.p - b.p);
   return { total: cands.length, ids: cands.slice(0, max).map(c => c.id) };
 }
 
-async function refreshFinance({ max = 60, minBudgetLeft = 25 } = {}) {
+async function refreshFinance({ max = 60, minBudgetLeft = 25, maxMs = 420000 } = {}) {
   return apiUsage.withApiSource('tasking', async () => {
     const { total, ids } = await pickRefreshTargets({ max });
-    let refreshed = 0; let failed = 0; let stoppedForBudget = false;
+    let refreshed = 0; let failed = 0; let stoppedForBudget = false; let stoppedForTime = false;
     const errors = [];
+    const startedAt = Date.now();
     for (let i = 0; i < ids.length; i++) {
+      if (Date.now() - startedAt > maxMs) { stoppedForTime = true; break; } // stay inside the Lambda's time limit
       if (i % 10 === 0) {
         const b = await apiUsage.getBudgetStatus().catch(() => null);
         if (b && typeof b.remaining === 'number' && b.remaining < minBudgetLeft) { stoppedForBudget = true; break; }
@@ -234,7 +238,7 @@ async function refreshFinance({ max = 60, minBudgetLeft = 25 } = {}) {
         if (errors.length < 5) errors.push(`${ids[i]}: ${err.message}`);
       }
     }
-    return { candidates: total, attempted: ids.length, refreshed, failed, stoppedForBudget, errors };
+    return { candidates: total, attempted: ids.length, refreshed, failed, stoppedForBudget, stoppedForTime, remaining: Math.max(total - refreshed, 0), errors };
   });
 }
 
@@ -305,7 +309,7 @@ async function refreshClaims({ max = 30, minBudgetLeft = 25 } = {}) {
 
 /** Daily job (chained after the 6 AM poll sweep) and the admin "Refresh" button. */
 async function runRefresh(opts = {}) {
-  const finance = await refreshFinance({ max: opts.maxOpps || 120 }).catch(err => ({ error: err.message }));
+  const finance = await refreshFinance({ max: opts.maxOpps || 400, maxMs: opts.maxMs || 360000 }).catch(err => ({ error: err.message }));
   const claims = await refreshClaims({ max: opts.maxCustomers || 40 }).catch(err => ({ error: err.message }));
   // Dispatch notes + materials for the next two days (today included), when the caller gave us the board db.
   const today = todayIso();

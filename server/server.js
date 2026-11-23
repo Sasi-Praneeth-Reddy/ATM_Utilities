@@ -1387,8 +1387,9 @@ async function handleRequest(req, res) {
         return;
       }
       if (p === '/api/tasking/refresh' && req.method === 'POST') {
-        // Manual "Refresh from SmartMoving": capped lower than the daily run to stay inside the API budget.
-        sendJson(req, res, 200, await tasking.runRefresh({ db, maxOpps: 60, maxCustomers: 20, maxJobs: 20 }));
+        // Manual "Refresh from SmartMoving": works through the whole backlog in one press, soonest service date first.
+        // Still stops early if the daily SmartMoving API budget runs low (refreshFinance's minBudgetLeft) or after ~8 min.
+        sendJson(req, res, 200, await tasking.runRefresh({ db, maxOpps: 400, maxMs: 480000, maxCustomers: 20, maxJobs: 20 }));
         return;
       }
       if (p === '/api/tasking/materials-sync' && req.method === 'POST') {
