@@ -985,6 +985,9 @@ async function handleWebhook(req, res, url) {
     // Tagged 'webhook' so these calls show up separately in the daily API usage (apiUsage.js).
     const jobs = await apiUsage.withApiSource('webhook', () => hydrateOpportunity(opportunityId));
     recordEvent({ type: 'webhook-ingested', eventType, opportunityId, jobCount: jobs.length });
+    // Tasking: signing/booking changes the opportunity, so re-read its documents + payments now (1 call) instead of
+    // waiting for the daily refresh; otherwise a signed, paid job stays in "Upcoming not secured" until tomorrow.
+    if (eventType === 'opportunity-status-changed' || eventType === 'opportunity-changed') await tasking.refreshOne(opportunityId);
   } catch (err) {
     recordEvent({ type: 'webhook-ingest-failed', eventType, opportunityId, message: err.message });
   }

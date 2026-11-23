@@ -108,13 +108,17 @@ All require admin/dispatcher/owner/developer.
 ## Testing and deploying
 
 - Logic: `cd server; node test-tasking.js` (fake database, no credentials).
-- Preview deploy (the preview site talks to the **live** backend function, so deploy functions first):
+- The backend runs on AWS Lambda `atm-api` (since 2026-11-13); Google Cloud Functions are retired. Redeploy it (PowerShell, repo root, region us-east-1):
   ```
-  cd frontend ; npm run build ; cd ..
-  firebase deploy --only functions --project atm-scheduler
-  firebase hosting:channel:deploy tasking --expires 14d --project atm-scheduler
+  cd server ; npm run test-lambda ; npm run build-lambda ; cd ..
+  aws cloudformation package --template-file aws/atm-compute.template.yaml --s3-bucket atm-deploy-<account-id> --output-template-file build/atm-compute.packaged.yaml --region us-east-1
+  aws cloudformation deploy --template-file build/atm-compute.packaged.yaml --stack-name atm-compute --capabilities CAPABILITY_IAM --region us-east-1 --parameter-overrides SchedulesState=ENABLED AlertEmail=<alert email>
   ```
-  Open the URL it prints. To go live later: `firebase deploy --only hosting --project atm-scheduler`.
+  `SchedulesState=ENABLED` must be passed every time, or the schedules go back to DISABLED. Frontend changes: `cd frontend ; npm run build ; cd .. ; firebase deploy --only hosting --project atm-scheduler`.
+
+## Freshness of "Upcoming not secured" (fixed 2026-11-23)
+
+Signed/deposit flags come from the saved copy in `tasking_opps` (`financeAt`, `financeStatus`). A job that is signed and paid after the last refresh used to stay listed until the next daily refresh. Now: (1) the webhook events `opportunity-status-changed` / `opportunity-changed` re-read that one opportunity (`tasking.refreshOne`, 1 API call); (2) a status change since the last read makes the job refresh-eligible immediately and hides the stale flags; (3) a Booked job is never listed as "Estimate not signed". A deposit paid while the status stays Booked still waits for the daily refresh (payment events are not in `RELEVANT_EVENTS`).
 
 ## Checking real data before going live
 

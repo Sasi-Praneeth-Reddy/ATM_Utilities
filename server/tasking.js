@@ -112,7 +112,7 @@ function summarizeOpportunity(o) {
         if (cat === 'deposit' && net > 0) depositPaid = true;
       }
     }
-    Object.assign(out, { paidTotal, balanceDue, depositPaid, depositPending, financeAt: new Date().toISOString() });
+    Object.assign(out, { paidTotal, balanceDue, depositPaid, depositPending, financeAt: new Date().toISOString(), financeStatus: out.status });
   }
   if (Array.isArray(o.opportunityDocuments)) {
     const kinds = o.opportunityDocuments.map(d => ({ kind: lookup(DOC_KIND, d.type), done: Boolean(d.isComplete) }));
@@ -184,12 +184,15 @@ async function pickRefreshTargets({ max = 60 } = {}) {
   snap.forEach(d => {
     const o = d.data();
     if (!o.serviceDate) return;
-    const stale = !o.financeAt || Date.parse(o.financeAt) < staleBefore;
+    // Also stale when the status moved since finance was read (e.g. Opportunity -> Booked after the customer
+    // signs and pays): the old "unsigned / no deposit" flags are wrong then, so don't wait out the 20 h gate.
+    const statusMoved = Boolean(o.financeAt) && o.financeStatus !== o.status;
+    const stale = !o.financeAt || statusMoved || Date.parse(o.financeAt) < staleBefore;
     if (!stale) return;
     const ahead = daysBetween(today, o.serviceDate);
     if (o.status === 4 && ahead >= -1 && ahead <= 60) cands.push({ id: o.id, p: 0, d: ahead });
     else if (o.status === 10 && ahead >= -90 && ahead <= 0) cands.push({ id: o.id, p: 1, d: -ahead });
-    else if (o.status === 3 && ahead >= 0 && ahead <= 90 && !o.financeAt) cands.push({ id: o.id, p: 2, d: ahead });
+    else if (o.status === 3 && ahead >= 0 && ahead <= 90 && (!o.financeAt || statusMoved)) cands.push({ id: o.id, p: 2, d: ahead });
   });
   cands.sort((a, b) => a.p - b.p || a.d - b.d);
   return { total: cands.length, ids: cands.slice(0, max).map(c => c.id) };
@@ -216,6 +219,19 @@ async function refreshFinance({ max = 60, minBudgetLeft = 25 } = {}) {
     }
     return { candidates: total, attempted: ids.length, refreshed, failed, stoppedForBudget, errors };
   });
+}
+
+/** Re-reads ONE opportunity's documents + payments right now (1 API call). Used by the webhook on status/changed
+ *  events so a just-signed, just-paid job leaves "Upcoming not secured" immediately. Never throws. */
+async function refreshOne(opportunityId) {
+  try {
+    const details = await apiUsage.withApiSource('tasking', () => smartmoving.getOpportunityFinance(opportunityId));
+    await recordOpportunityDetails(details);
+    return true;
+  } catch (err) {
+    console.warn('tasking.refreshOne failed:', err.message);
+    return false;
+  }
 }
 
 function unwrapList(r) {
@@ -648,10 +664,12 @@ async function buildSummary(db, dateIso) {
     // Two independent checks for an unbooked (3) or booked (4) opportunity, both from the documents/payments read
     // by "Refresh from SmartMoving" (financeAt). A quote can be signed but unpaid, so status alone says nothing.
     if (o.status === 3 || o.status === 4) {
-      if (o.estimateSigned === true) { /* signed - nothing to chase */ }
+      const financeFresh = o.financeStatus === undefined || o.financeStatus === o.status;
+      if (o.estimateSigned === true || (o.status === 4 && !financeFresh)) { /* signed (or Booked, which means signed) - nothing to chase */ }
       else if (o.estimateSigned === false) reasons.push(o.estimateSent === false ? 'Estimate not sent' : 'Estimate not signed');
       else if (o.status === 3) reasons.push('Not checked yet'); // documents not read yet: don't claim unsigned
-      if (o.financeAt && !o.depositPaid && num(o.paidTotal) <= 0) reasons.push('No deposit paid');
+      // financeStatus !== status means finance was read before the last status change: not trustworthy until re-read.
+      if (o.financeAt && o.financeStatus === o.status && !o.depositPaid && num(o.paidTotal) <= 0) reasons.push('No deposit paid');
     }
     if (!reasons.length) return;
     notSecured.push({
@@ -745,7 +763,7 @@ function renderAssignmentsEmail(dispatch) {
 
 module.exports = {
   todayIso, isIsoDate, summarizeOpportunity, recordOpportunityDetails, noteOpportunities,
-  refreshFinance, refreshClaims, refreshJobDetails, parseJobDetails, applyJobImport, parseCalendarNotes, recordCalendarNotes, getCalendarRun, applyMaterialsReport, runRefresh, pickRefreshTargets,
+  refreshFinance, refreshOne, refreshClaims, refreshJobDetails, parseJobDetails, applyJobImport, parseCalendarNotes, recordCalendarNotes, getCalendarRun, applyMaterialsReport, runRefresh, pickRefreshTargets,
   getJobStates, getDayState, updateJobState, setDayState,
   buildSummary, buildDispatch, renderAssignmentsEmail, isPbo,
 };
