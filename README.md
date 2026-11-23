@@ -74,6 +74,7 @@ firebase emulators:start --only firestore
 # in another terminal:
 FIRESTORE_EMULATOR_HOST=localhost:8080 npm start
 ```
+
 This seeds sample trucks/drivers/jobs into the emulator on first run, and grants the first admin
 account from `ADMIN_EMAIL`. Full backend details, including email delivery setup, login/account
 management, webhook setup for real-time SmartMoving sync, and deployment (Firestore + AWS App
@@ -85,6 +86,7 @@ cd frontend
 npm install
 npm run dev
 ```
+
 This prints a local dev URL (usually `http://localhost:5173`) — open it in a browser. It connects
 to `http://localhost:8787` by default. More in [`frontend/README.md`](frontend/README.md).
 
@@ -125,7 +127,7 @@ actual dispatch.
 
 ## License
 
-Internal project for Around Town Movers — not published/licensed for external use.
+Copyright (c) 2026 Sasi Praneeth Reddy Sadhu. All rights reserved. See [LICENSE](LICENSE).
 
 ## Docs
 
