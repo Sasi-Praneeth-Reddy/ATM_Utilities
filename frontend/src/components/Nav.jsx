@@ -1,36 +1,16 @@
-const TABS_BY_ROLE = {
-  crew: [
-    { id: 'crew', label: 'My Jobs' },
-    { id: 'board', label: 'Truck Board' },
-  ],
-  dispatcher: [
-    { id: 'board', label: 'Truck Board' },
-    { id: 'ld', label: 'Long Distance Planner' },
-  ],
-  admin: [
-    { id: 'board', label: 'Truck Board' },
-    { id: 'ld', label: 'Long Distance Planner' },
-    { id: 'admin', label: 'Trucks & Drivers' },
-    { id: 'assignments', label: 'Job Assignments' },
-    { id: 'users', label: 'Users' },
-  ],
-};
+import { TAB_LABELS } from './shell/modules';
 
-/** `alertTabs` (added 2026-09-30): { [tabId]: 'tooltip text' } — shows a small red dot on that tab,
- * e.g. the Job Assignments tab when the Gmail authorization is expiring (see App.jsx). */
-export default function Nav({ role, activeTab, onTabChange, alertTabs = {} }) {
-  const tabs = TABS_BY_ROLE[role] || TABS_BY_ROLE.dispatcher;
+/** Page-level tab strip for the active module. `alertTabs`: { [tabId]: 'tooltip' } shows a red dot.
+    Kept as the page's single <nav> element — DayBoard.jsx measures document.querySelector('nav')
+    to size its sticky tray, so the sidebar deliberately does NOT use a <nav> tag. */
+export default function Nav({ tabIds, activeTab, onTabChange, alertTabs = {} }) {
   return (
-    <nav>
-      {tabs.map((tab) => (
-        <button
-          key={tab.id}
-          className={activeTab === tab.id ? 'active' : ''}
-          onClick={() => onTabChange(tab.id)}
-        >
-          {tab.label}
-          {alertTabs[tab.id] && (
-            <span className="nav-alert-dot" title={alertTabs[tab.id]} aria-label={alertTabs[tab.id]} />
+    <nav className="tabstrip">
+      {tabIds.map((id) => (
+        <button key={id} className={activeTab === id ? 'active' : ''} onClick={() => onTabChange(id)}>
+          {TAB_LABELS[id] || id}
+          {alertTabs[id] && (
+            <span className="nav-alert-dot" title={alertTabs[id]} aria-label={alertTabs[id]} />
           )}
         </button>
       ))}

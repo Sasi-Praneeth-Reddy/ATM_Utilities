@@ -10,7 +10,7 @@ export default function BackendBanner({ backendConnected, backendErrorMsg, backe
     if (!backendUrl) {
       return (
         <div className="conflict-banner">
-          <div className="cb-title">⚠ Can't connect to the scheduler server</div>
+          <div className="cb-title">⚠ Can't connect to the ATM Hub server</div>
           Check your internet connection. The board will reconnect automatically, or you can try again now.
           <div className="sync-row" style={{ marginTop: 8 }}>
             <button className="btn secondary" onClick={() => window.location.reload()}>Try again</button>

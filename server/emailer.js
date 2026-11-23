@@ -72,4 +72,12 @@ async function sendOtpEmail(toEmail, code) {
   });
 }
 
-module.exports = { sendOtpEmail, otpEmailConfigured };
+/** Generic send (Tasking: email assigned jobs). Same mailbox/config as the OTP emails; throws if unconfigured. */
+async function sendMail({ to, subject, text, html }) {
+  if (!otpEmailConfigured()) {
+    throw new Error('Email sending is not configured — set SMTP_HOST, SMTP_USER, and SMTP_PASS in server/.env.');
+  }
+  return getTransporter().sendMail({ from: SMTP_FROM, to, subject, text, html });
+}
+
+module.exports = { sendOtpEmail, otpEmailConfigured, sendMail };

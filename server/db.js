@@ -1183,8 +1183,15 @@ async function deleteUser(id) {
   await usersCol.doc(id).delete();
 }
 
+// Admin-level = admin, owner or developer (owner/developer are supersets of admin), so the "last
+// admin" guards still hold.
 async function countAdmins() {
-  const snap = await usersCol.where('role', '==', 'admin').get();
+  const snap = await usersCol.where('role', 'in', ['admin', 'owner', 'developer']).get();
+  return snap.size;
+}
+
+async function countTopLevel() {
+  const snap = await usersCol.where('role', 'in', ['owner', 'developer']).get();
   return snap.size;
 }
 
@@ -1457,6 +1464,18 @@ async function listSmartMovingJobsInRange(fromIso, toIso) {
   return snap.docs.map(docToJob).filter(j => j && j.smartMovingOpportunityId);
 }
 
+/** All board jobs (SmartMoving-linked or manual) with a start date in [fromIso, toIso]. Added for Tasking. */
+async function listJobsInRange(fromIso, toIso) {
+  const snap = await jobsCol.where('date', '>=', fromIso).where('date', '<=', toIso).get();
+  return snap.docs.map(docToJob).filter(Boolean);
+}
+
+/** Trucks and drivers only (no jobs) — cheaper than getState() when the job list isn't needed. */
+async function getTrucksAndDrivers() {
+  const [truckSnap, driverSnap] = await Promise.all([trucksCol.get(), driversCol.get()]);
+  return { trucks: truckSnap.docs.map(docToTruck).filter(Boolean), drivers: driverSnap.docs.map(docToDriver).filter(Boolean) };
+}
+
 /* Every function below changes board data (trucks/drivers/jobs), so each is wrapped to bump the
  * change-version after it runs (in `finally`, so a partially-applied write still invalidates).
  * Deliberately NOT wrapped: initDb (runs every cold start), history/audit logging, users, the
@@ -1478,7 +1497,7 @@ function withVersionBump(fn) {
 
 const exported = {
   initDb,
-  getState, getStateIfChanged, getDataVersion, getCounts, getJob,
+  getState, getStateIfChanged, getDataVersion, getCounts, getJob, listJobsInRange, getTrucksAndDrivers,
   createTruck, updateTruck, deleteTruck, reorderTrucks,
   findTruckIdBySmartMovingLabel, findDriverIdBySmartMovingLabel,
   createDriver, updateDriver, deleteDriver,
@@ -1487,7 +1506,7 @@ const exported = {
   logJobChange, markJobManuallyEdited, markTruckAssignmentManual, clearJobManualEdit,
   MANUAL_EDIT_LOCK_FIELDS, TRUCK_LOCK_FIELDS,
   resetToSampleData, clearJobs,
-  createUser, listUsers, getUserByEmail, getUserById, updateUserRole, deleteUser, countAdmins,
+  createUser, listUsers, getUserByEmail, getUserById, updateUserRole, deleteUser, countAdmins, countTopLevel,
   setUserPassword, setUserOtp, clearUserOtp,
   addAllowedExternalEmail, listAllowedExternalEmails, isEmailAllowedExternally, removeAllowedExternalEmail,
   getGmailAuthStatus, setGmailAuthRefreshed,

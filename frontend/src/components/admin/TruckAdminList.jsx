@@ -152,9 +152,9 @@ function truckMatches(t, q) {
 /* 2026-09-30: searchable + 10 per page. Drag-to-reorder on these cards was removed — it can't work
  * across pages/search results — and replaced by the "Arrange truck order" dialog
  * (TruckOrderDialog.jsx, opened from AdminTab). */
-export default function TruckAdminList({ trucks, jobs, showAddForm, onSaveNewTruck, onCancelAddTruck, onUpdateField, onUpdateStatus, onDeleteTruck }) {
+export default function TruckAdminList({ query, trucks, jobs, showAddForm, onSaveNewTruck, onCancelAddTruck, onUpdateField, onUpdateStatus, onDeleteTruck }) {
   const matchFn = useCallback(truckMatches, []);
-  const paged = usePagedSearch(trucks, matchFn, 10);
+  const paged = usePagedSearch(trucks, matchFn, 10, query);
   // The cards scroll inside their own box (2026-09-30) instead of the whole page — jump back to the
   // top of that box whenever the page or search changes.
   const scrollRef = useRef(null);
@@ -162,7 +162,7 @@ export default function TruckAdminList({ trucks, jobs, showAddForm, onSaveNewTru
 
   return (
     <div>
-      <ListSearch value={paged.query} onChange={paged.setQuery} placeholder="Search trucks (name, label, home base)…" />
+      {query === undefined && <ListSearch value={paged.query} onChange={paged.setQuery} placeholder="Search trucks (name, label, home base)…" />}
       <SimplePager paged={paged} noun="trucks" />
       {paged.query.trim() && !paged.filtered.length && <div className="empty">No trucks match "{paged.query}".</div>}
       <div className="admin-scroll" ref={scrollRef}>

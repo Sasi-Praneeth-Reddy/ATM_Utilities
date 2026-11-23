@@ -67,8 +67,41 @@ export default function DayGridView({ date, trucks, drivers, jobs, conflicts, hi
 
   const hours = hourLabelList();
 
+  // Unassigned jobs starting today (no truck yet) - same rule the interactive board's tray uses, so a
+  // dispatcher on the grid can still see what needs a truck without switching views.
+  const unassigned = jobs.filter((j) => jobTruckIds(j).length === 0 && j.date === date);
+
   return (
     <div className="dg-grid">
+      <div className={`dg-unassigned ${unassigned.length ? 'has-jobs' : ''}`}>
+        <div className="dg-un-title">
+          <span>Unassigned</span>
+          <b>{unassigned.length}</b>
+        </div>
+        {unassigned.length === 0 ? (
+          <span className="dg-un-empty">All jobs assigned</span>
+        ) : (
+          <div className="dg-un-list">
+            {unassigned.map((j) => {
+              const isLd = j.type === 'long_distance';
+              const military = isMilitaryJob(j);
+              const catClass = serviceCategoryClass(j);
+              const cls = ['dg-un-chip', isLd ? 'ld' : '', catClass ? `cat-${catClass}` : '', isStorageJob(j) ? 'storage' : '', military ? 'military' : '', jobColorOverrideClass(j)].filter(Boolean).join(' ');
+              const name = military ? militaryCleanName(j) : j.customer;
+              const t = j.startTime ? hourToLabel(timeToHour(j.startTime)) : null;
+              const route = (j.origin || j.destination) ? `${mainCity(j.origin) || '?'} \u2192 ${mainCity(j.destination) || '?'}` : null;
+              const bits = [isLd ? 'LD' : 'LCL', t, route, `${jobTrucksNeeded(j)}T | ${j.crewSize ?? '?'}M`].filter(Boolean);
+              return (
+                <div className={cls} key={j.id} title={`${name} \u2014 ${bits.join(' | ')} | ${j.id}`}>
+                  <b>{name}</b>
+                  <span>{bits.join(' | ')}</span>
+                  <small>{j.id}</small>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
       <div className="dg-table">
         <div className="dg-header-row">
           <div className="dg-header-spacer" />

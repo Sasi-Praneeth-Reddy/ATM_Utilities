@@ -7,7 +7,7 @@
  * Usage:
  *   node create-admin.js <email> [role] [password]
  *
- * role defaults to "admin" (hence the filename) but accepts admin | dispatcher | crew. password is
+ * role defaults to "admin" (hence the filename) but accepts owner | developer | admin | dispatcher | crew. password is
  * optional — if omitted, the account is created (or left) with no password, and whoever owns that
  * email needs to use "Forgot password?" on the login screen to set one (requires email sending to
  * be configured — see server/README.md). If the email already has an account, this updates its
@@ -17,6 +17,8 @@
  *   node create-admin.js csr4@aroundtownmovers.com
  *   node create-admin.js jsmith@aroundtownmovers.com dispatcher
  *   node create-admin.js csr4@aroundtownmovers.com admin "a strong temp password"
+ *   node create-admin.js someone@aroundtownmovers.com owner
+ *   node create-admin.js someone@aroundtownmovers.com developer
  */
 
 require('./load-env');
@@ -33,12 +35,12 @@ async function main() {
   const [, , rawEmail, rawRole, rawPassword] = process.argv;
 
   if (!rawEmail) {
-    console.error('Usage: node create-admin.js <email> [admin|dispatcher|crew] [password]');
+    console.error('Usage: node create-admin.js <email> [owner|developer|admin|dispatcher|crew] [password]');
     process.exit(1);
   }
 
   const email = auth.normalizeEmail(rawEmail);
-  const role = ['admin', 'dispatcher', 'crew'].includes(rawRole) ? rawRole : 'admin';
+  const role = ['owner', 'developer', 'admin', 'dispatcher', 'crew'].includes(rawRole) ? rawRole : 'admin';
 
   if (!auth.isCompanyEmail(email)) {
     console.error(`"${rawEmail}" is not a @${auth.EMAIL_DOMAIN} address — refusing to grant it access.`);

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import TruckAdminList from './TruckAdminList';
 import DriverAdminList from './DriverAdminList';
 import TruckOrderDialog from './TruckOrderDialog';
+import { usePageSearch } from '../../hooks/usePageSearch';
 
 export default function AdminTab({
   trucks, drivers, jobs,
@@ -12,6 +13,9 @@ export default function AdminTab({
   const [showAddTruckForm, setShowAddTruckForm] = useState(false);
   const [showAddDriverForm, setShowAddDriverForm] = useState(false);
   const [showTruckOrder, setShowTruckOrder] = useState(false);
+  // One title-bar search for the whole page: it filters both the Trucks and the Drivers lists.
+  const [query, setQuery] = useState('');
+  usePageSearch({ id: 'admin', placeholder: 'Search trucks and drivers (name, phone, label, home base)…', value: query, onChange: setQuery });
 
   async function saveNewTruck(fields) {
     try {
@@ -66,6 +70,7 @@ export default function AdminTab({
             )}
           </div>
           <TruckAdminList
+            query={query}
             trucks={trucks} jobs={jobs}
             showAddForm={showAddTruckForm}
             onSaveNewTruck={saveNewTruck}
@@ -80,6 +85,7 @@ export default function AdminTab({
             <h2 className="section-title">Drivers</h2>
           </div>
           <DriverAdminList
+            query={query}
             drivers={drivers}
             showAddForm={showAddDriverForm}
             onSaveNewDriver={saveNewDriver}

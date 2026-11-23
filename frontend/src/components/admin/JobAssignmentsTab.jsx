@@ -4,6 +4,7 @@ import SyncPanel from './SyncPanel';
 import { jobTrucks, jobTruckLabel } from '../../utils/jobs';
 import { todayStr } from '../../utils/dates';
 import LoadingScreen from '../LoadingScreen';
+import { usePageSearch } from '../../hooks/usePageSearch';
 
 /** Matches a job against a lowercased search term across every field a dispatcher would plausibly
  * filter this list by — customer name, either SmartMoving id, both addresses, and whichever
@@ -45,6 +46,7 @@ export default function JobAssignmentsTab({
   syncStatus, onSyncNow, lastSyncedAt,
   calendarSyncStatus, onSyncCalendarNow,
   smartInsightsSyncStatus, onSyncSmartInsightsNow, gmailAuthStatus,
+  onOpenDeletedJobs,
 }) {
   const [query, setQuery] = useState('');
   // Pagination (added 2026-09-30) — rendering every job at once (each row with truck + driver
@@ -94,6 +96,8 @@ export default function JobAssignmentsTab({
 
   const goToPage = (n) => startTransition(() => setPage(Math.min(Math.max(n, 1), totalPages)));
   const onQueryChange = (value) => { setQuery(value); setPage(value.trim() ? 1 : null); };
+  // The title-bar search box drives this page's job filter (it used to be a second box down here).
+  usePageSearch({ id: 'assignments', placeholder: 'Search jobs (customer, address, job ID, truck, driver)…', value: query, onChange: onQueryChange });
   const onPageSizeChange = (size) => startTransition(() => { setPageSize(size); setPage(null); });
   const onSortByChange = (value) => startTransition(() => { setSortBy(value); setPage(query.trim() ? 1 : null); });
   const onToggleSortDir = () => startTransition(() => { setSortDir((d) => (d === 'asc' ? 'desc' : 'asc')); setPage(query.trim() ? 1 : null); });
@@ -145,13 +149,11 @@ export default function JobAssignmentsTab({
       <div className="toolbar">
         <h2 className="section-title">Job Assignments — assign a truck &amp; driver to each job</h2>
         <div className="list-filter">
-          <input
-            type="text"
-            className="job-search-input"
-            placeholder="Search jobs (customer, address, job ID, truck, driver)…"
-            value={query}
-            onChange={(e) => onQueryChange(e.target.value)}
-          />
+          {onOpenDeletedJobs && (
+            <button type="button" className="btn secondary" onClick={onOpenDeletedJobs} title="View and restore deleted jobs">
+              Deleted jobs
+            </button>
+          )}
         </div>
       </div>
       {query.trim() && !filteredJobs.length ? (

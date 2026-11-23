@@ -1,3 +1,4 @@
+import { ViewMenu, PrintMenu } from './ToolbarMenus';
 import { useMemo, useRef, useState } from 'react';
 import DuplicateAlertBanner from '../DuplicateAlertBanner';
 import DriverLegend from '../DriverLegend';
@@ -98,7 +99,14 @@ const SHEET_PADDING_PX = 20;
 // printout stays on one page whether or not any given user's browser/settings happen to add one —
 // worst case it shrinks text slightly more than strictly necessary when the setting is off.
 const BROWSER_HEADER_FOOTER_BUFFER_PX = 48;
-const CONTENT_HEIGHT_PX = (PAGE_HEIGHT_IN - MARGIN_IN * 2) * PX_PER_IN - SHEET_PADDING_PX * 2 - BROWSER_HEADER_FOOTER_BUFFER_PX;
+// Usable content height per orientation (landscape = 8.5in tall page / 10mm margin, portrait = 11in /
+// 14mm, matching setPrintOrientation's @page margins). Portrait is taller, so the same day prints at a
+// larger scale there (still capped by MAX_TRUCK_PRINT_SCALE).
+function contentHeightFor(orientation) {
+  const pageIn = orientation === 'portrait' ? 11 : PAGE_HEIGHT_IN;
+  const marginIn = (orientation === 'portrait' ? 14 : 10) / 25.4;
+  return (pageIn - marginIn * 2) * PX_PER_IN - SHEET_PADDING_PX * 2 - BROWSER_HEADER_FOOTER_BUFFER_PX;
+}
 // .print-header + .print-footer + the hours <thead> row, at scale 1 — small relative to the page,
 // so (unlike the truck rows) not worth also shrinking via --pt-scale just to claw back a few more
 // px of headroom.
@@ -146,11 +154,11 @@ const MAX_TRUCK_PRINT_SCALE = 0.85;
 // budget and legibility floor — see HEADER_FOOTER_THEAD_PX_ALL_TRUCKS and
 // MIN_TRUCK_PRINT_SCALE_ALL_TRUCKS above for why those need to differ from "Print Board"'s. Default
 // (false) keeps "Print Board" byte-for-byte identical to its prior behavior.
-function truckPrintScale(contentHeightPx, forAllTrucks = false) {
+function truckPrintScale(contentHeightPx, forAllTrucks = false, orientation = 'landscape') {
   if (!contentHeightPx) return MAX_TRUCK_PRINT_SCALE;
   const headerFooterTheadPx = forAllTrucks ? HEADER_FOOTER_THEAD_PX_ALL_TRUCKS : HEADER_FOOTER_THEAD_PX;
   const minScale = forAllTrucks ? MIN_TRUCK_PRINT_SCALE_ALL_TRUCKS : MIN_TRUCK_PRINT_SCALE;
-  const availableForRows = CONTENT_HEIGHT_PX - headerFooterTheadPx - SAFETY_BUFFER_PX;
+  const availableForRows = contentHeightFor(orientation) - headerFooterTheadPx - SAFETY_BUFFER_PX;
   const scale = availableForRows / contentHeightPx;
   return Math.max(minScale, Math.min(MAX_TRUCK_PRINT_SCALE, scale));
 }
@@ -180,7 +188,7 @@ function printSheet(id, orientation = 'portrait', contentHeightPx) {
     el.classList.add('print-active');
     // Only "Print Board" passes contentHeightPx — "Print List" (the plain manifest) doesn't use
     // --pt-scale at all, so setting it to 1 there is harmless, just unused.
-    el.style.setProperty('--pt-scale', String(contentHeightPx != null ? truckPrintScale(contentHeightPx) : 1));
+    el.style.setProperty('--pt-scale', String(contentHeightPx != null ? truckPrintScale(contentHeightPx, false, orientation) : 1));
   }
   setPrintOrientation(orientation);
   window.print();
@@ -243,8 +251,8 @@ function printSheet(id, orientation = 'portrait', contentHeightPx) {
 // how many jobs there are") — `forAllTrucks` below is derived straight from `id` rather than being a
 // separate parameter, since the two already have a fixed 1:1 mapping (see the id doc comment above)
 // and deriving it here means a caller can never pass a mismatched pair.
-function measureAndPrintBoard(id = 'day-print-timeline') {
-  document.querySelectorAll('.print-sheet').forEach((el) => el.classList.remove('print-active', 'print-measuring'));
+function measureAndPrintBoard(id = 'day-print-timeline', orientation = 'landscape') {
+  document.querySelectorAll('.print-sheet').forEach((el) => el.classList.remove('print-active', 'print-measuring', 'print-portrait'));
   const el = document.getElementById(id);
   if (!el) return;
   const forAllTrucks = id === 'day-print-timeline-all';
@@ -279,7 +287,7 @@ function measureAndPrintBoard(id = 'day-print-timeline') {
   const unassignedSection = el.querySelector('.pt-unassigned-section');
   if (unassignedSection) total += unassignedSection.scrollHeight;
 
-  const finalScale = truckPrintScale(total || null, forAllTrucks);
+  const finalScale = truckPrintScale(total || null, forAllTrucks, orientation);
   measuredTracks.forEach(({ track, laneHeightsPx, laneOffsetsPx, trackHeightPx }) => {
     track.style.height = `calc(${trackHeightPx}px * var(--pt-scale, 1))`;
     track.querySelectorAll('[data-lane]').forEach((node) => {
@@ -291,8 +299,9 @@ function measureAndPrintBoard(id = 'day-print-timeline') {
 
   el.classList.remove('print-measuring');
   el.classList.add('print-active');
+  el.classList.toggle('print-portrait', orientation === 'portrait');
   el.style.setProperty('--pt-scale', String(finalScale));
-  setPrintOrientation('landscape');
+  setPrintOrientation(orientation);
   window.print();
 }
 
@@ -380,7 +389,10 @@ export default function BoardTab({
   // plain useState, not persisted, not scoped per-date — a dispatcher who turns it on stays in
   // grid view while flipping through dates until they turn it off again. Not available in month
   // mode (DayGridView is a day-only layout, same as DayBoard's own timeline).
-  const [showGridView, setShowGridView] = useState(false);
+  // Phones open on the compact grid (it reads far better on a small screen); the drag-and-drop timeline
+  // is one tap away in the View menu. Desktop still opens on the timeline.
+  const isPhone = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(max-width: 720px)').matches;
+  const [showGridView, setShowGridView] = useState(isPhone);
 
   // includeTransitPrint/setIncludeTransitPrint ("Print Board" only — separate from hideInTransit
   // above, which controls the interactive on-screen board) arrive as props from App.jsx now — see
@@ -469,85 +481,28 @@ export default function BoardTab({
               <input type="date" value={boardDate} onChange={(e) => setBoardDate(e.target.value)} />
               <button className="btn secondary" onClick={() => setBoardDate(addDays(boardDate, 1))} title="Next day">›</button>
               <button className="btn secondary" onClick={() => setBoardDate(todayStr())} title="Jump to today — the same date the now-line marks on the timeline">Today</button>
-              <button
-                className={`btn secondary ${hideInTransit ? 'active' : ''}`}
-                onClick={() => setHideInTransit((v) => !v)}
-                title="Hide long-distance jobs on days they're only in transit (not the pickup or delivery day) — reduces conflict clutter from a move that's just passing through a truck's schedule."
-              >
-                {hideInTransit ? 'In-transit hidden' : 'Hide in-transit'}
-                {hideInTransit && transitHiddenCount > 0 && <span className="oa-count-badge">{transitHiddenCount}</span>}
-              </button>
-              <button className="btn secondary" onClick={() => printSheet('day-print-list')} title="Print a plain text list of the day's jobs">🖨 Print List</button>
-              <label
-                className="btn secondary"
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
-                title="Print a long-distance job that's only in transit today (not picking up or delivering) too, as a plain gray bar showing which truck it's tied up on — instead of leaving it off the printout entirely."
-              >
-                <input type="checkbox" checked={includeTransitPrint} onChange={(e) => setIncludeTransitPrint(e.target.checked)} />
-                Include in-transit
-              </label>
-              <button
-                className="btn secondary"
-                onClick={() => {
-                  // A long-distance job "in transit" on this specific date (not starting or ending
-                  // today) is left off this printout unless "Include in-transit" (above) is checked
-                  // — confirm first so a dispatcher printing for a crew isn't surprised later that
-                  // one of those jobs isn't on the page.
+              <ViewMenu
+                hideInTransit={hideInTransit} setHideInTransit={setHideInTransit} transitHiddenCount={transitHiddenCount}
+                showGridView={showGridView} setShowGridView={setShowGridView} isPhone={isPhone}
+              />
+              {/* One Print menu replaces the old Print List / Include in-transit / Print Board / Print All
+                  Trucks row. Each kind still targets its own always-rendered print sheet by DOM id, so the
+                  "no shared state between print buttons" design described above is unchanged. */}
+              <PrintMenu
+                includeTransitPrint={includeTransitPrint} setIncludeTransitPrint={setIncludeTransitPrint}
+                onPrint={(what, orientation) => {
+                  if (what === 'list') { printSheet('day-print-list', orientation); return; }
                   const skipped = transitOnlyJobCount(jobs, boardDate);
                   if (skipped > 0 && !includeTransitPrint) {
                     const ok = window.confirm(
                       `${skipped} long-distance job${skipped === 1 ? ' is' : 's are'} in transit today (not starting or ending) and won't appear on this printed board. ` +
-                      `Print the rest anyway? (Check "Include in-transit" above to print it instead.)`
+                      `Print the rest anyway? (Tick "Include in-transit jobs" in the Print menu to print it instead.)`
                     );
                     if (!ok) return;
                   }
-                  // Unassigned Jobs now prints as a full-width section below the grid and shares its
-                  // real-height measurement with the truck rows — see measureAndPrintBoard's own
-                  // comment and DayPrintTimeline.jsx's restructure comment for the full story.
-                  measureAndPrintBoard();
+                  measureAndPrintBoard(what === 'all' ? 'day-print-timeline-all' : 'day-print-timeline', orientation);
                 }}
-                title="Print the truck board as it looks on screen — colors, bars, trucks on the left, 6am-6pm — with Unassigned Jobs listed in a section below the calendar. Only trucks working that day get a row, and two jobs overlapping on the same truck each print in full on their own stacked line. Everything is fit onto one page, shrinking text only as much as that day's actual workload requires. Long-distance jobs print on their start and end day; days in between (in transit) are left off unless 'Include in-transit' is checked, and you'll be asked to confirm first if any would be skipped today."
-              >
-                🖨 Print Board
-              </button>
-              {/* "Print All Trucks" — added 2026-09-15 at the user's request ("a new button beside
-                  print full day, which will print all the truck board, like that will includes the
-                  trucks that are not been assigned with jobs"), then reworked the same day once the
-                  first version (a shared state flag toggling the SAME print-sheet "Print Board"
-                  uses) turned out to break under real use — see measureAndPrintBoard's own comment
-                  for the full story, and the user's own report: "print board and print all trucks
-                  are working only when refreshed seperately, or else they are printing the same
-                  thing" / "i want them to be two different seperate mechanisms even when we don't
-                  do the refresh". Now genuinely independent: this targets its OWN always-rendered
-                  DayPrintTimeline instance (id="day-print-timeline-all", App.jsx) that always shows
-                  every truck and never the Unassigned Jobs section, so this button and "Print Board"
-                  never share any state, DOM node, or timing dependency — each one measures and
-                  prints its own sheet directly, synchronously, right here, exactly like every other
-                  print button in this file. */}
-              <button
-                className="btn secondary"
-                onClick={() => {
-                  const skipped = transitOnlyJobCount(jobs, boardDate);
-                  if (skipped > 0 && !includeTransitPrint) {
-                    const ok = window.confirm(
-                      `${skipped} long-distance job${skipped === 1 ? ' is' : 's are'} in transit today (not starting or ending) and won't appear on this printed board. ` +
-                      `Print the rest anyway? (Check "Include in-transit" above to print it instead.)`
-                    );
-                    if (!ok) return;
-                  }
-                  measureAndPrintBoard('day-print-timeline-all');
-                }}
-                title="Print the truck board with EVERY truck in the fleet, including ones with nothing assigned today (just an empty row) — everything else is identical to Print Board except no Unassigned Jobs section: colors, bars, one page, shrinking text only as much as the (now larger) fleet needs."
-              >
-                🖨 Print All Trucks
-              </button>
-              <button
-                className={`btn secondary ${showGridView ? 'active' : ''}`}
-                onClick={() => setShowGridView((v) => !v)}
-                title="Switch the board below to a compact grid view, styled after the old scheduler — one dense row per truck, read-only (switch back to move jobs)."
-              >
-                ▦ Grid View
-              </button>
+              />
             </div>
           )}
           {boardMode === 'month' && (

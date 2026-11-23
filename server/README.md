@@ -507,7 +507,7 @@ secrets:
 | `WEBHOOK_SECRET`                             | `atm-scheduler/webhook-secret`                  | secret                                                                    |
 | `ADMIN_EMAIL`                                | your email                                      | plain env var — grants the first admin, see "Login & accounts"            |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER`      | `smtp.gmail.com` / `465` / your sending address | plain env vars                                                            |
-| `POLL_LOOKBACK_DAYS` / `POLL_LOOKAHEAD_DAYS` | `7` / `30`                                      | plain env vars                                                            |
+| `POLL_LOOKBACK_DAYS` / `POLL_LOOKAHEAD_DAYS` | `30` / `30`                                      | plain env vars                                                            |
 | `COOKIE_SECURE`                              | `true`                                          | plain env var — App Runner is HTTPS-only, so this should always be `true` |
 
 Under "Auto scaling," set **minimum size to 1** — App Runner can otherwise scale a service to zero
@@ -583,6 +583,17 @@ deployments" on the service so a new image push redeploys on its own.
 - ~~Jobs booked directly (not via a lead) were invisible to the sync~~ — fixed by the webhook path
   described above.
 
-### Weekly Google Authorization
+### Google (Gmail) authorization
 
-- Every week google should be authorised using this command: "$env:GOOGLE_APPLICATION_CREDENTIALS="../atm-scheduler-firebase-adminsdk-fbsvc-5a61cc7d23.json"; npm run gmail-auth" followed by "firebase deploy --only functions --project atm-scheduler" to make the atm-scheduler running without any disturbances as we are using the google test mode for this project.
+The Google OAuth consent screen was published to **In production** on 2026-11-23, so the Gmail refresh token no longer expires after 7 days. Re-authorization is only needed if the token is revoked (access removed in the Google account, password change) or the app is put back in Testing. To renew it:
+
+```powershell
+cd server
+$env:GOOGLE_APPLICATION_CREDENTIALS="../atm-scheduler-firebase-adminsdk-fbsvc-5a61cc7d23.json"; npm run gmail-auth
+$t = ((Get-Content local.secrets | Where-Object { $_ -match '^GMAIL_OAUTH_REFRESH_TOKEN=' }) -replace '^GMAIL_OAUTH_REFRESH_TOKEN=','').Trim()
+aws ssm put-parameter --name /atm/prod/GMAIL_OAUTH_REFRESH_TOKEN --value $t --overwrite --region us-east-1
+aws lambda update-function-configuration --function-name atm-api --description "reload config" --region us-east-1
+Remove-Variable t
+```
+
+Sign in as `atm.sspr@gmail.com` and click Advanced > Go to ATM Hub (unsafe) on the unverified-app screen. The expiry countdown in the app is off by default (`GMAIL_AUTH_EXPIRY_DAYS=0`); set it to `7` only if the consent screen goes back to Testing mode.
